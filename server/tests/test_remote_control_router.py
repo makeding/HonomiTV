@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from app import schemas
 from app.constants import JST
@@ -27,6 +27,43 @@ class RemoteControlRouterTest(unittest.TestCase):
         for command_type in ('VolumeUp', 'VolumeDown', 'VolumeMute'):
             command = remote_command_adapter.validate_python({'type': command_type})
             self.assertEqual(command.type, command_type)
+
+    def test_progress_bar_and_chapter_commands_are_accepted_by_remote_command_schema(self) -> None:
+        """進捗バー操作・チャプター送り・CM スキップのコマンドを識別子付き Union として受け付ける。"""
+
+        remote_command_adapter = TypeAdapter(schemas.RemoteCommand)
+
+        seek_to = remote_command_adapter.validate_python({'type': 'SeekTo', 'position_seconds': 930.5})
+        self.assertEqual(seek_to.type, 'SeekTo')
+        self.assertEqual(seek_to.position_seconds, 930.5)
+
+        for direction in ('Next', 'Previous'):
+            skip_chapter = remote_command_adapter.validate_python({'type': 'SkipChapter', 'direction': direction})
+            self.assertEqual(skip_chapter.type, 'SkipChapter')
+            self.assertEqual(skip_chapter.direction, direction)
+
+        self.assertEqual(remote_command_adapter.validate_python({'type': 'SkipCM'}).type, 'SkipCM')
+
+        for mode in ('Off', 'Manual', 'Auto'):
+            set_mode = remote_command_adapter.validate_python({'type': 'SetCMSkipMode', 'mode': mode})
+            self.assertEqual(set_mode.type, 'SetCMSkipMode')
+            self.assertEqual(set_mode.mode, mode)
+
+    def test_invalid_seek_and_chapter_commands_are_rejected(self) -> None:
+        """壊れた値のまま転送してテレビ側で意図しないシークを起こさないよう、検証段階で弾く。"""
+
+        remote_command_adapter = TypeAdapter(schemas.RemoteCommand)
+        # 負の再生位置は存在しない
+        with self.assertRaises(ValidationError):
+            remote_command_adapter.validate_python({'type': 'SeekTo', 'position_seconds': -1})
+        # position_seconds は省略できない
+        with self.assertRaises(ValidationError):
+            remote_command_adapter.validate_python({'type': 'SeekTo'})
+        # direction / mode は決められた値以外を受け付けない
+        with self.assertRaises(ValidationError):
+            remote_command_adapter.validate_python({'type': 'SkipChapter', 'direction': 'Sideways'})
+        with self.assertRaises(ValidationError):
+            remote_command_adapter.validate_python({'type': 'SetCMSkipMode', 'mode': 'Sometimes'})
 
     def test_bearer_token_is_parsed_case_insensitively(self) -> None:
         """正しい Bearer ヘッダーだけからトークンを取得する。"""
@@ -171,4 +208,24 @@ class RemoteControlRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
             'type': 'Command',
             'command_id': response.command_id,
             'command': {'type': 'VolumeUp'},
+        })
+
+    async def test_seek_to_command_is_forwarded_with_its_payload(self) -> None:
+        """進捗バーから送られた絶対シーク位置を、値を落とさずテレビへ転送する。"""
+
+        websocket = AsyncMock()
+        REMOTE_DEVICE_CONNECTIONS[(1, 'living-room')] = RemoteDeviceConnection(
+            device_id='living-room',
+            device_name='リビング',
+            user_id=1,
+            websocket=websocket,
+        )
+        command = TypeAdapter(schemas.RemoteCommand).validate_python({'type': 'SeekTo', 'position_seconds': 930.5})
+
+        response = await RemoteCommandAPI(command, MagicMock(id=1), 'living-room')
+
+        websocket.send_json.assert_awaited_once_with({
+            'type': 'Command',
+            'command_id': response.command_id,
+            'command': {'type': 'SeekTo', 'position_seconds': 930.5},
         })

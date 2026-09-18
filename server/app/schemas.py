@@ -457,11 +457,32 @@ class RemoteCommandSeekRelative(BaseModel):
     type: Literal['SeekRelative']
     delta_seconds: float
 
+# 進捗バーのドラッグ・クリックによる任意位置への移動に使う絶対シーク。
+# SeekRelative と違い受信側の現在位置に依存しないため、往復遅延で位置がずれない。
+class RemoteCommandSeekTo(BaseModel):
+    type: Literal['SeekTo']
+    position_seconds: Annotated[float, Field(ge=0)]
+
+# CM 判定から導かれたチャプター境界へのジャンプ。境界の算出は実際に再生している受信側が行う。
+class RemoteCommandSkipChapter(BaseModel):
+    type: Literal['SkipChapter']
+    direction: Literal['Next', 'Previous']
+
+# 再生位置が CM 区間内にあるときだけ、その CM の終端 (本編の頭) へ移動する。
+class RemoteCommandSkipCM(BaseModel):
+    type: Literal['SkipCM']
+
+# 受信側の CM 自動スキップ設定そのものを切り替える。
+class RemoteCommandSetCMSkipMode(BaseModel):
+    type: Literal['SetCMSkipMode']
+    mode: Literal['Off', 'Manual', 'Auto']
+
 class RemoteCommandVolume(BaseModel):
     type: Literal['VolumeUp', 'VolumeDown', 'VolumeMute']
 
 RemoteCommand = Annotated[
-    RemoteCommandOpenLive | RemoteCommandOpenRecording | RemoteCommandPlayback | RemoteCommandSeekRelative | RemoteCommandVolume,
+    RemoteCommandOpenLive | RemoteCommandOpenRecording | RemoteCommandPlayback | RemoteCommandSeekRelative |
+    RemoteCommandSeekTo | RemoteCommandSkipChapter | RemoteCommandSkipCM | RemoteCommandSetCMSkipMode | RemoteCommandVolume,
     Field(discriminator='type'),
 ]
 

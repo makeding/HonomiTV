@@ -14,7 +14,47 @@ export type RemoteCommand =
     | {type: 'OpenRecording'; recorded_program_id: number; position_seconds: number;}
     | {type: 'Play' | 'Pause' | 'Stop';}
     | {type: 'SeekRelative'; delta_seconds: number;}
+    | {type: 'SeekTo'; position_seconds: number;}
+    | {type: 'SkipChapter'; direction: 'Next' | 'Previous';}
+    | {type: 'SkipCM';}
+    | {type: 'SetCMSkipMode'; mode: RemoteCMSkipMode;}
     | {type: 'VolumeUp' | 'VolumeDown' | 'VolumeMute';};
+
+export type RemoteCMSkipMode = 'Off' | 'Manual' | 'Auto';
+
+/** 受信側 (Komorebi) が CM 判定から導いたチャプター区間。CM 区間は is_cm で区別される */
+export interface IRemoteChapter {
+    start_seconds: number;
+    end_seconds: number;
+    is_cm: boolean;
+    label: string;
+}
+
+/**
+ * 受信側が State メッセージで通知する再生状態。
+ * サーバーは state を不透明な dict として中継するだけなので、この型がクライアント間の唯一の契約になる。
+ */
+export interface IRemotePlaybackState {
+    content_type: 'Idle' | 'Live' | 'Recorded';
+    title?: string;
+    subtitle?: string;
+    artwork_url?: string;
+    is_playing?: boolean;
+    is_buffering?: boolean;
+    can_seek?: boolean;
+    can_adjust_volume?: boolean;
+    position_seconds?: number;
+    duration_seconds?: number;
+    // 再生位置をブラウザ側で補間するために使う。受信側の State 送信は 5 秒周期なので、この値がないと進捗バーがカクつく
+    playback_rate?: number;
+    // State を受け取るたびに単調増加する。値が変わったときだけ補間の基点を取り直し、
+    // 他デバイスの接続などで同じ state が再ブロードキャストされたときに進捗バーが巻き戻るのを防ぐ
+    state_sequence?: number;
+    // 追いかけ再生中は duration_seconds が録画の進行に合わせて伸び続ける
+    is_chase_playback?: boolean;
+    chapters?: IRemoteChapter[];
+    cm_skip_mode?: RemoteCMSkipMode;
+}
 
 class RemoteControl {
     static subscribeDevices(

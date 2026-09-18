@@ -130,6 +130,7 @@ Windows では Windows サービス、Linux では pm2 サービスとして動�
     - `NiconicoRouter.py`: ニコニコ実況連携 API
     - `UsersRouter.py`: ユーザーアカウント管理 API
     - `SettingsRouter.py`: クライアント・サーバー設定管理 API
+    - `RemoteControlRouter.py`: Komorebi (Honorebi) を Web UI からリモート操作するための API (受信側テレビと購読側ブラウザの WebSocket 中継 + コマンド転送)
     - `MaintenanceRouter.py`: サーバーメンテナンス用 API
     - `VersionRouter.py`: バージョン情報 API
   - `models/`: データベースモデルとスキーマ
