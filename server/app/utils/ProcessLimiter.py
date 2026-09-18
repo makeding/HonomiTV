@@ -35,5 +35,7 @@ class ProcessLimiter:
             if cpu_count is None:
                 cpu_count = 4  # 取得できない場合は4コアと仮定
             # 同時実行数を CPU コア数の 50% に制限
-            cls._semaphores[process_key] = asyncio.Semaphore(cpu_count // 2)
+            ## 1コア環境では cpu_count // 2 が 0 になり、asyncio.Semaphore(0) は誰も release() しない限り
+            ## 永久にブロックしてしまうため、最低でも1つは同時実行できるようにする
+            cls._semaphores[process_key] = asyncio.Semaphore(max(1, cpu_count // 2))
         return cls._semaphores[process_key]

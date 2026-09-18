@@ -25,7 +25,9 @@ from app.schemas import Genre
 from app.utils import (
     GetBackendForChannelAndProgram,
     GetMirakurunAPIEndpointURL,
+    LimitWorkerProcessResourcePriority,
     ShutdownProcessPoolExecutor,
+    SubmitToProcessPoolExecutor,
 )
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
@@ -79,22 +81,23 @@ class Program(TortoiseModel):
         # 番組情報をマルチプロセスで更新する
         if multiprocess is True:
 
-            # 動作中のイベントループを取得
-            loop = asyncio.get_running_loop()
-
             # マルチプロセス実行用の Executor を初期化
             ## ProcessPoolExecutor のコンテキストマネージャーは、キャンセル時にも __exit__() で子プロセスの終了を同期的に待つ
             ## 番組情報更新中に API リクエストやバックグラウンドタスクがキャンセルされても、イベントループ全体を止めないように明示的に閉じる
-            executor = concurrent.futures.ProcessPoolExecutor(max_workers=1)
+            executor = concurrent.futures.ProcessPoolExecutor(
+                max_workers = 1,
+                # 子プロセス側で CPU / ディスク I/O 優先度を下げ、ライブ視聴や録画の処理を妨げないようにする
+                initializer = LimitWorkerProcessResourcePriority,
+            )
             should_wait_executor = True
             try:
                 # Mirakurun / EPGStation バックエンド
                 if GetBackendForChannelAndProgram() == 'Mirakurun':
-                    await loop.run_in_executor(executor, cls.updateFromMirakurunForMultiProcess)
+                    await SubmitToProcessPoolExecutor(executor, cls.updateFromMirakurunForMultiProcess)
 
                 # EDCB バックエンド
                 elif GetBackendForChannelAndProgram() == 'EDCB':
-                    await loop.run_in_executor(executor, cls.updateFromEDCBForMultiProcess)
+                    await SubmitToProcessPoolExecutor(executor, cls.updateFromEDCBForMultiProcess)
 
             # タスクキャンセル時は子プロセスの終了を待たず、イベントループを即座に呼び出し元へ返す
             ## Python 3.11 の ProcessPoolExecutor は実行中の処理を即時終了できないため、子プロセス自体は完了まで残る可能性がある

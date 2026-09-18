@@ -39,6 +39,7 @@ from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.JikkyoClient import JikkyoClient
+from app.utils.ProcessLimiter import ProcessLimiter
 from app.utils.TSInformation import TSInformation
 
 
@@ -1642,12 +1643,16 @@ async def VideoThumbnailRegenerateAPI(
         # RecordedProgram モデルを schemas.RecordedProgram に変換
         recorded_program_schema = schemas.RecordedProgram.model_validate(recorded_program, from_attributes=True)
 
-        # DriveIOLimiter で同一 HDD に対してのバックグラウンドタスクの同時実行数を原則1セッションに制限
+        # ProcessLimiter で稼働中のバックグラウンドタスクの同時実行数を CPU コア数の 50% に制限
+        ## この API は同時に何度でも呼び出せてしまうため、制限がないと呼ばれた数だけサムネイル生成プロセスが fork されてしまう
+        ## RecordedScanTask の録画完了後のバックグラウンド解析と処理内容が同じなので、セマフォのキーと取得順序も揃えている
         file_path = anyio.Path(recorded_program.recorded_video.file_path)
-        async with DriveIOLimiter.getSemaphore(file_path):
-            # サムネイル画像の再生成を実行
-            generator = ThumbnailGenerator.fromRecordedProgram(recorded_program_schema)
-            await generator.generateAndSave()
+        async with ProcessLimiter.getSemaphore('RecordedScanTask'):
+            # DriveIOLimiter で同一 HDD に対してのバックグラウンドタスクの同時実行数を原則1セッションに制限
+            async with DriveIOLimiter.getSemaphore(file_path):
+                # サムネイル画像の再生成を実行
+                generator = ThumbnailGenerator.fromRecordedProgram(recorded_program_schema)
+                await generator.generateAndSave()
 
     except Exception as ex:
         logging.error(f'[VideoThumbnailRegenerateAPI] Failed to regenerate thumbnails for video_id {recorded_program.id}:', exc_info=ex)

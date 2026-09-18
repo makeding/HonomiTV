@@ -26,7 +26,11 @@ from app.models.Channel import Channel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
 from app.streams.VideoSegmentPlanner import VideoSegmentPlanner
-from app.utils import ShutdownProcessPoolExecutor
+from app.utils import (
+    LimitWorkerProcessResourcePriority,
+    ShutdownProcessPoolExecutor,
+    SubmitToProcessPoolExecutor,
+)
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.NotificationService import NotificationManager
 from app.utils.ProcessLimiter import ProcessLimiter
@@ -1086,27 +1090,36 @@ class RecordedScanTask:
                 ## メタデータ解析処理は実装上同期 I/O で実装されており、また CPU-bound な処理のため、別プロセスで実行している
                 ## コンテキストマネージャーはキャンセル時にも子プロセス終了を同期的に待つため、イベントループ上では使わない
                 ## 正常完了時は明示的に待ってクリーンアップし、リクエスト切断時だけ待機なしで解放処理へ進める
-                loop = asyncio.get_running_loop()
+                ## メタデータ解析は一括スキャン・ファイル監視・録画完了チェック・API 経由の単体スキャンの4経路から呼ばれ、
+                ## それぞれが独立したループのため同時に複数の解析プロセスが fork され得る。ProcessLimiter で同時実行数を CPU コア数の 50% に制限する
+                ## なお __runBackgroundAnalysis() とは意図的に別のキーを使っている。同じキーを共有すると、
+                ## 数十秒〜数分掛かるサムネイル生成タスクがセマフォを占有し続け、一括スキャンによる DB への録画番組の反映が
+                ## サムネイル生成の速度に律速されてしまうため
                 analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)), selected_service_id)  # anyio.Path -> pathlib.Path に変換
-                executor = concurrent.futures.ProcessPoolExecutor(max_workers=1)
-                should_wait_executor = True
-                try:
-                    recorded_program = await loop.run_in_executor(executor, analyzer.analyze)
-                except asyncio.CancelledError:
-                    should_wait_executor = False
-                    await ShutdownProcessPoolExecutor(executor, is_cancelled=True)
-                    raise
-                except Exception as ex:
-                    logging.error(f'{file_path}: Error analyzing metadata:', exc_info=ex)
-                    # メタデータ解析中に例外が発生した場合も、この時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する
-                    if existing_recorded_video_summary is not None:
-                        await RecordedVideo.filter(id=existing_recorded_video_summary.id).update(status='AnalysisFailed')
-                        existing_recorded_video_summary.status = 'AnalysisFailed'
-                    self._recording_files.pop(file_path, None)  # もし録画中扱いであればここで削除
-                    return
-                finally:
-                    if should_wait_executor is True:
-                        await ShutdownProcessPoolExecutor(executor, is_cancelled=False)
+                async with ProcessLimiter.getSemaphore('RecordedScanTask.MetadataAnalyzer'):
+                    executor = concurrent.futures.ProcessPoolExecutor(
+                        max_workers = 1,
+                        # 子プロセス側で CPU / ディスク I/O 優先度を下げ、ライブ視聴や録画の処理を妨げないようにする
+                        initializer = LimitWorkerProcessResourcePriority,
+                    )
+                    should_wait_executor = True
+                    try:
+                        recorded_program = await SubmitToProcessPoolExecutor(executor, analyzer.analyze)
+                    except asyncio.CancelledError:
+                        should_wait_executor = False
+                        await ShutdownProcessPoolExecutor(executor, is_cancelled=True)
+                        raise
+                    except Exception as ex:
+                        logging.error(f'{file_path}: Error analyzing metadata:', exc_info=ex)
+                        # メタデータ解析中に例外が発生した場合も、この時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する
+                        if existing_recorded_video_summary is not None:
+                            await RecordedVideo.filter(id=existing_recorded_video_summary.id).update(status='AnalysisFailed')
+                            existing_recorded_video_summary.status = 'AnalysisFailed'
+                        self._recording_files.pop(file_path, None)  # もし録画中扱いであればここで削除
+                        return
+                    finally:
+                        if should_wait_executor is True:
+                            await ShutdownProcessPoolExecutor(executor, is_cancelled=False)
                 if recorded_program is None:
                     logging.error(f'{file_path}: Failed to analyze metadata.')
                     # メタデータ解析に失敗したがこの時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する

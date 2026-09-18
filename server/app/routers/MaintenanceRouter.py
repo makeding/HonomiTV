@@ -5,9 +5,8 @@ import os
 import signal
 import sys
 import threading
-import time
-from collections.abc import Coroutine
-from typing import Annotated, Any, Literal, cast
+from collections.abc import AsyncGenerator, Coroutine
+from typing import Annotated, Any, Literal, TextIO, cast
 
 import anyio
 import psutil
@@ -84,7 +83,7 @@ async def GetCurrentAdminUserOrLocal(
         }
     }
 )
-def LogStreamAPI(
+async def LogStreamAPI(
     log_type: Annotated[Literal['server', 'access'], Path(description='ログの種類。server: サーバーログ、access: アクセスログ')],
     current_user: Annotated[User, Depends(GetCurrentAdminUser)],
 ):
@@ -99,7 +98,6 @@ def LogStreamAPI(
     初回接続時にはログファイルの先頭から現在の最新行までのすべての行が initial_log_update イベントで一括送信され、<br>
     その後ログに更新があれば log_update イベントで1行ずつ送信される。
 
-    ファイル I/O を伴うため敢えて同期関数として実装している。<br>
     JWT エンコードされたアクセストークンがリクエストの Authorization: Bearer に設定されていて、かつ管理者アカウントでないとアクセスできない。
     """
 
@@ -114,48 +112,75 @@ def LogStreamAPI(
             detail = f'Log file not found: {log_path}',
         )
 
-    # ログの変更を監視し、変更があればログ行をイベントストリームとして出力する
-    def generator():
-        """イベントストリームを出力するジェネレーター"""
+    def OpenLogFile() -> TextIO:
+        """
+        ログファイルを開く
 
-        # ファイルを開く
-        ## ログファイルは基本 UTF-8 だが、稀に外部プロセス由来の文字化けや別エンコーディングが混入し、
-        ## UTF-8 としてデコードできないバイト列が含まれることがある
-        ## その場合でもログストリームの配信を継続できるよう、errors='replace' でデコード不能なバイトは
-        ## 置換文字 (U+FFFD) に置き換えて読み取る
-        with open(log_path, encoding='utf-8', errors='replace') as f:
+        ログファイルは基本 UTF-8 だが、稀に外部プロセス由来の文字化けや別エンコーディングが混入し、
+        UTF-8 としてデコードできないバイト列が含まれることがある。
+        その場合でもログストリームの配信を継続できるよう、errors='replace' でデコード不能なバイトは
+        置換文字 (U+FFFD) に置き換えて読み取る。
+
+        Returns:
+            TextIO: 開いたログファイルのファイルオブジェクト
+        """
+
+        return open(log_path, encoding='utf-8', errors='replace')
+
+    # ログの変更を監視し、変更があればログ行をイベントストリームとして出力する
+    ## 同期ジェネレーターとして実装すると sse-starlette が iterate_in_threadpool() でラップするが、
+    ## 下記の通り新しいログ行が書き込まれるまで次の要素を yield しないため、接続1本につき anyio のスレッドプール
+    ## (既定で 40 スレッド) を無期限に1つ占有してしまう。ログ画面を開いたままの端末が増えると、同じスレッドプールを
+    ## 使う他の同期エンドポイントが待たされるため、非同期ジェネレーターとして実装した上でファイル I/O のみスレッドへ逃がす
+    async def generator() -> AsyncGenerator[dict[str, str], None]:
+        """イベントストリームを出力する非同期ジェネレーター"""
+
+        log_file = await asyncio.to_thread(OpenLogFile)
+        try:
+            def ReadAllLines() -> tuple[list[str], int]:
+                """ログファイルを先頭から最後まで読み込み、読み込んだ行と読み込み後のファイル位置を返す"""
+                all_lines = [line.rstrip('\n') for line in log_file.readlines() if line.strip()]  # 空行は除外
+                return all_lines, log_file.tell()
+
+            def ReadNewLines(position: int) -> tuple[list[str], int]:
+                """前回の読み込み位置以降に追記された行と、読み込み後のファイル位置を返す"""
+                # ファイルが更新されたかチェック
+                log_file.seek(0, os.SEEK_END)
+                if log_file.tell() <= position:
+                    return [], position
+                # ファイルが更新された場合、前回の位置に戻って新しい行を読み込む
+                log_file.seek(position)
+                new_lines: list[str] = []
+                for new_line in log_file:
+                    new_line = new_line.rstrip('\n')
+                    if new_line:  # 空行は送信しない
+                        new_lines.append(new_line)
+                return new_lines, log_file.tell()
+
             # 初回接続時に全ての行を送信
-            all_lines = [line.rstrip('\n') for line in f.readlines() if line.strip()]  # 空行は除外
+            all_lines, current_position = await asyncio.to_thread(ReadAllLines)
             yield {
                 'event': 'initial_log_update',
                 'data': json.dumps(all_lines, ensure_ascii=False),
             }
 
-            # ファイルの現在位置を記録
-            current_position = f.tell()
-
             # 継続的に新しい行を監視
             while True:
-                # ファイルが更新されたかチェック
-                f.seek(0, os.SEEK_END)
-                if f.tell() > current_position:
-                    # ファイルが更新された場合、前回の位置に戻る
-                    f.seek(current_position)
-
-                    # 新しい行を読み込む
-                    for line in f:
-                        line = line.rstrip('\n')
-                        if line:  # 空行は送信しない
-                            yield {
-                                'event': 'log_update',
-                                'data': json.dumps(line, ensure_ascii=False),
-                            }
-
-                    # 現在位置を更新
-                    current_position = f.tell()
+                new_lines, current_position = await asyncio.to_thread(ReadNewLines, current_position)
+                for line in new_lines:
+                    yield {
+                        'event': 'log_update',
+                        'data': json.dumps(line, ensure_ascii=False),
+                    }
 
                 # 少し待機
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
+        finally:
+            # クライアント切断時にジェネレーターが閉じられた場合も、ファイルディスクリプタを確実に解放する
+            ## 非同期ジェネレーターの終了時は GeneratorExit が送出されるため、ここで await するとイベントループへ制御が戻り
+            ## 「async generator ignored GeneratorExit」となってしまう。読み取り専用で開いたファイルの close() は
+            ## ディスクへの書き戻しを伴わず即座に完了するため、同期のまま閉じる
+            log_file.close()
 
     # EventSourceResponse でイベントストリームを配信する
     return EventSourceResponse(generator())

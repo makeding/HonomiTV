@@ -1,14 +1,20 @@
 
 import asyncio
 import concurrent.futures
+import os
 import platform
 import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
+
+import psutil
 
 from app.constants import JST
+
+
+T = TypeVar('T')
 
 
 def NormalizeToJSTDatetime(value: datetime) -> datetime:
@@ -196,6 +202,107 @@ def SetTimeout(callback: Callable[[], Any], delay: float) -> Callable[[], None]:
     background_tasks.add(task)
     task.add_done_callback(lambda _: background_tasks.discard(task))
     return cancel
+
+
+def LimitWorkerProcessResourcePriority() -> None:
+    """
+    ProcessPoolExecutor のワーカープロセス側で、自身の CPU / ディスク I/O 優先度を下げる
+    ProcessPoolExecutor の initializer として指定し、ワーカープロセスの起動直後に一度だけ実行することを想定している
+
+    メタデータ解析・サムネイル生成・CM 検出はいずれもバックグラウンド処理であり、
+    ライブ視聴中のエンコーダーや API 応答より優先度が低くて構わない。
+    ProcessPoolExecutor 自体には子プロセスの CPU / メモリ使用量を制限する仕組みがないため、
+    子プロセス側から自身の優先度を下げることで、実質的なリソース消費の制限とする。
+
+    なお resource.setrlimit(RLIMIT_AS) によるメモリ上限も理屈上は設定できるが、
+    PyAV / OpenCV / FFmpeg のようなネイティブライブラリは確保失敗時に MemoryError ではなく
+    プロセスごとクラッシュすることがあるため、あえて優先度の変更のみに留めている。
+
+    Returns:
+        None
+    """
+
+    # initializer 内で例外を送出すると Executor 全体が BrokenProcessPool として壊れてしまうため、
+    # 優先度の変更に失敗しても解析処理自体は続行できるよう、処理全体を try/except で保護する
+    ## 特に Linux の ionice は環境や権限次第で PermissionError となることがある
+    try:
+        worker_process = psutil.Process()
+
+        # CPU 優先度を下げる
+        ## Windows では優先度クラスを「通常以下」に、それ以外の OS では nice 値を +10 する
+        ## os.nice() は現在の nice 値からの相対指定で、非 root では優先度を上げる方向には変更できない
+        if sys.platform == 'win32':
+            worker_process.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+        else:
+            os.nice(10)
+
+        # ディスク I/O 優先度を下げる
+        ## ionice() は Windows と Linux でのみ利用できるため、それ以外の OS では何もしない
+        ## 録画ファイルの読み込みで HDD を占有し、ライブ視聴や録画そのものの I/O を妨げないようにする
+        if sys.platform == 'win32':
+            worker_process.ionice(psutil.IOPRIO_VERYLOW)
+        elif sys.platform == 'linux':
+            worker_process.ionice(psutil.IOPRIO_CLASS_IDLE)
+
+    except Exception:
+        pass
+
+
+async def SubmitToProcessPoolExecutor(
+    executor: concurrent.futures.ProcessPoolExecutor,
+    fn: Callable[..., T],
+    *args: Any,
+) -> T:
+    """
+    ProcessPoolExecutor へのタスク投入を、イベントループを塞がずに行う
+
+    loop.run_in_executor() は内部で executor.submit() を同期的に呼び出すが、
+    ProcessPoolExecutor は fork をスタートメソッドとする環境ではワーカープロセスの起動 (= os.fork()) を
+    submit() の呼び出しスレッド上で同期的に実行する
+    (CPython の ProcessPoolExecutor.submit() -> _start_executor_manager_thread() -> _launch_processes() の経路) 。
+    KonomiTV サーバーのプロセスは録画メタデータのキャッシュなどで RSS が大きくなりがちで、
+    その分だけ os.fork() でのページテーブル複製に時間が掛かるため、
+    イベントループスレッド上で submit() を呼ぶと録画ファイル1件ごとにイベントループが停止してしまう。
+    これを避けるため、submit() 自体を必ずワーカースレッドへ逃がした上で結果を待機する。
+    なお spawn をスタートメソッドとする環境 (Windows / macOS) でも、submit() -> _adjust_process_count() の経路で
+    同様にワーカープロセスの起動が呼び出しスレッド上で行われ、そちらは fork よりさらに時間が掛かる。
+
+    Args:
+        executor (concurrent.futures.ProcessPoolExecutor): タスクを投入する Executor
+        fn (Callable[..., T]): ワーカープロセス上で実行する関数
+        *args (Any): fn に渡す引数
+
+    Returns:
+        T: fn の戻り値
+    """
+
+    def Submit() -> concurrent.futures.Future[T]:
+        """
+        ワーカースレッド上で executor.submit() を実行する
+        """
+
+        return executor.submit(fn, *args)
+
+    # ワーカープロセスの起動を伴う submit() をワーカースレッドへ逃がす
+    ## asyncio.shield() で包んでいるのは、この await がキャンセルされてもワーカースレッド上の submit() 自体は止まらず、
+    ## そのまま放置するとワーカープロセスだけが起動した状態で参照を失い、孤児プロセスになりかねないため
+    submit_task = asyncio.ensure_future(asyncio.to_thread(Submit))
+    try:
+        worker_future = await asyncio.shield(submit_task)
+    except asyncio.CancelledError:
+        # submit() の完了だけは待ち、確実に Future の参照を得た上で取り消してから、キャンセルを呼び出し元へ伝播する
+        ## Python 3.11 では CancelledError を捕捉した時点でキャンセルカウンターがデクリメントされるため、ここでの await は正常に動作する
+        ## 取り消しに失敗した (= すでにワーカープロセス上で処理が始まっている) 場合は、
+        ## 呼び出し元の ShutdownProcessPoolExecutor(is_cancelled=True) がワーカープロセスを強制終了する
+        try:
+            (await submit_task).cancel()
+        except Exception:
+            pass
+        raise
+
+    # concurrent.futures.Future を実行中のイベントループに紐づく asyncio.Future へ変換して待機する
+    ## loop.run_in_executor() が内部で行っている処理と同一のため、キャンセル伝播の挙動も変わらない
+    return await asyncio.wrap_future(worker_future)
 
 
 async def ShutdownProcessPoolExecutor(
