@@ -149,6 +149,7 @@ class TSInformation:
     # formatString() で使用する変換マップ
     __format_string_translation_map: dict[int, str] | None = None
     __format_string_regex: re.Pattern[str] | None = None
+    __c0_control_regex: ClassVar[re.Pattern[str]] = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
     __format_string_regex_table: dict[str, str] | None = None
 
 
@@ -313,6 +314,12 @@ class TSInformation:
         # 置換を実行
         result = result.translate(cls.__format_string_translation_map)
         result = cls.__format_string_regex.sub(lambda match: cast(dict[str, str], cls.__format_string_regex_table)[match.group(0)], result)
+
+        # EPG テキストに ARIB 由来の制御符号 (0x0E/0x0F のシフト符号や 0x1A など) が残ると、
+        # JSON では生の C0 制御文字がエスケープされないまま出力され、ブラウザの JSON.parse が
+        # 失敗してクライアント全体が「予期しないネットワークエラー」になる。
+        # 改行・タブ以外の C0 制御文字は表示上意味を持たないため取り除く。
+        result = cls.__c0_control_regex.sub('', result)
 
         # 置換した文字列を返す
         return result
