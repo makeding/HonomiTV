@@ -213,25 +213,31 @@ class Program(TortoiseModel):
 
         try:
 
-            # このトランザクションはパフォーマンス向上と、取得失敗時のロールバックのためのもの
-            async with transactions.in_transaction():
+            # 上流 API の待機中に SQLite の書き込みトランザクションを保持しない。
+            # 取得失敗時は既存 EPG を一切変更せず、そのまま残す。
+            try:
+                mirakurun_programs_api_url = GetMirakurunAPIEndpointURL('/api/programs')
+                async with HTTPX_CLIENT() as client:
+                    mirakurun_programs_api_response = await client.get(mirakurun_programs_api_url, timeout=10)
+                if mirakurun_programs_api_response.status_code != 200:
+                    logging.error(f'Failed to get programs from Mirakurun / mirakc. (HTTP Error {mirakurun_programs_api_response.status_code})')
+                    raise Exception(f'Failed to get programs from Mirakurun / mirakc. (HTTP Error {mirakurun_programs_api_response.status_code})')
+                programs: list[dict[str, Any]] = mirakurun_programs_api_response.json()
+            except httpx.ConnectTimeout as ex:
+                logging.error('Failed to get programs from Mirakurun / mirakc. (Connect Timeout)')
+                raise ex
+            except httpx.ReadTimeout as ex:
+                logging.error('Failed to get programs from Mirakurun / mirakc. (Read Timeout)')
+                raise ex
+            except httpx.TimeoutException as ex:
+                logging.error('Failed to get programs from Mirakurun / mirakc. (Timeout)')
+                raise ex
+            except httpx.NetworkError as ex:
+                logging.error('Failed to get programs from Mirakurun / mirakc. (Network Error)')
+                raise ex
 
-                # Mirakurun / mirakc の API から番組情報を取得する
-                try:
-                    mirakurun_programs_api_url = GetMirakurunAPIEndpointURL('/api/programs')
-                    async with HTTPX_CLIENT() as client:
-                        # 10秒後にタイムアウト (SPHD や CATV も映る環境だと時間がかかるので、少し伸ばす)
-                        mirakurun_programs_api_response = await client.get(mirakurun_programs_api_url, timeout=10)
-                    if mirakurun_programs_api_response.status_code != 200:  # Mirakurun / mirakc からエラーが返ってきた
-                        logging.error(f'Failed to get programs from Mirakurun / mirakc. (HTTP Error {mirakurun_programs_api_response.status_code})')
-                        raise Exception(f'Failed to get programs from Mirakurun / mirakc. (HTTP Error {mirakurun_programs_api_response.status_code})')
-                    programs: list[dict[str, Any]] = mirakurun_programs_api_response.json()
-                except httpx.NetworkError as ex:
-                    logging.error('Failed to get programs from Mirakurun / mirakc. (Network Error)')
-                    raise ex
-                except httpx.TimeoutException as ex:
-                    logging.error('Failed to get programs from Mirakurun / mirakc. (Connection Timeout)')
-                    raise ex
+            # このトランザクションは DB 更新の原子性のためだけに使う。
+            async with transactions.in_transaction():
 
                 # この変数から更新or更新不要な番組情報を削除していき、残った古い番組情報を最後にまとめて削除する
                 duplicate_programs = {temp.id:temp for temp in await Program.all()}

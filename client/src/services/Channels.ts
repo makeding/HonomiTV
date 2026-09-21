@@ -123,10 +123,11 @@ class Channels {
      * すべてのチャンネルの情報を取得する
      * @return すべてのチャンネルの情報
      */
-    static async fetchAllChannels(): Promise<ILiveChannelsResponse | null> {
+    static async fetchAllChannels(source?: 'Broadcast' | 'Jellyfin'): Promise<ILiveChannelsResponse | null> {
 
         // API リクエストを実行
-        const response = await APIClient.get<ILiveChannelsResponse>('/channels');
+        const query = source === undefined ? '' : `?source=${source}`;
+        const response = await APIClient.get<ILiveChannelsResponse>(`/channels${query}`);
 
         // エラー処理
         if (response.type === 'error') {

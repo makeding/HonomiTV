@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
 import ariblib.constants
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import TypeAdapter
 from tortoise import connections
 
@@ -42,9 +42,10 @@ async def GetIPTVTimeTable(
     end_time: datetime,
     channel_type: str | None,
     pinned_channel_ids: list[str] | None,
+    source: str | None = None,
 ) -> tuple[list[schemas.TimeTableChannel], str | None]:
     """IPTV 番組表を取得する。Jellyfin 障害はローカル番組表を空にしない。"""
-    should_include = channel_type in (None, 'IPTV')
+    should_include = source != 'Broadcast' and channel_type in (None, 'IPTV')
     if pinned_channel_ids is not None:
         should_include = any(channel_id.startswith('jellyfin-') for channel_id in pinned_channel_ids)
     if should_include is False or JellyfinClient.is_configured() is False:
@@ -407,12 +408,20 @@ async def TimeTableAPI(
     end_time: Annotated[datetime | None, Query(description='取得終了日時 (ISO8601 形式)。省略時は DB に存在する最終日時。')] = None,
     channel_type: Annotated[Literal['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K', 'IPTV'] | None, Query(description='チャンネル種別。省略時は全種別。')] = None,
     pinned_channel_ids: Annotated[str | None, Query(description='チャンネル ID のカンマ区切りリスト (ピン留めチャンネル用)。指定時は channel_type より優先される。')] = None,
+    source: Annotated[Literal['Broadcast', 'Jellyfin', 'IPTV'] | None, Query()] = None,
 ):
     """
     番組表データを取得する。<br>
     チャンネルごとの番組リストと、番組データの有効日付範囲を含む。<br>
     EDCB バックエンド時は各番組の予約情報も含む。
     """
+
+    if source == 'Broadcast' and channel_type == 'IPTV':
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Broadcast source does not have IPTV channels')
+    if source in ('Jellyfin', 'IPTV') and channel_type not in (None, 'IPTV'):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Jellyfin source only has IPTV channels')
+    if source in ('Jellyfin', 'IPTV'):
+        channel_type = 'IPTV'
 
     # 現在時刻
     now = datetime.now(JST)
@@ -458,7 +467,7 @@ async def TimeTableAPI(
         target_channel_ids = [cid.strip() for cid in pinned_channel_ids.split(',') if cid.strip()]
 
     # ネットワークテレビは永続化せず、同じ時刻範囲で上流から取得する
-    iptv_task = GetIPTVTimeTable(start_time, end_time, channel_type, target_channel_ids)
+    iptv_task = GetIPTVTimeTable(start_time, end_time, channel_type, target_channel_ids, source)
 
     # チャンネル情報を raw SQL で取得 (Tortoise ORM のオーバーヘッドを回避)
     if target_channel_ids is not None:

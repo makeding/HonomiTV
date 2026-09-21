@@ -3,11 +3,11 @@ import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import anyio
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import FileResponse, Response
 from fastapi.security.utils import get_authorization_scheme_param
 from tortoise import connections
@@ -61,8 +61,14 @@ async def GetIPTVChannels() -> tuple[list[schemas.IPTVChannel], str | None]:
     if JellyfinClient.is_configured() is False:
         return ([], None)
     try:
-        channels = [channel for item in await JellyfinClient.get_channels() if (channel := ToIPTVChannel(item)) is not None]
+        channels = [
+            channel for item in await asyncio.wait_for(JellyfinClient.get_channels(), timeout=3)
+            if (channel := ToIPTVChannel(item)) is not None
+        ]
         return (channels, None)
+    except TimeoutError:
+        logging.warning('[ChannelsRouter][GetIPTVChannels] Jellyfin channel request timed out')
+        return ([], 'ネットテレビのチャンネル取得がタイムアウトしました。')
     except JellyfinError as error:
         logging.warning(f'[ChannelsRouter][GetIPTVChannels] {error}')
         return ([], str(error))
@@ -74,10 +80,21 @@ async def GetIPTVChannels() -> tuple[list[schemas.IPTVChannel], str | None]:
     response_description = 'チャンネル情報。',
     response_model = schemas.LiveChannels,
 )
-async def ChannelsAPI():
+async def ChannelsAPI(
+    channel_type: Annotated[Literal['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K', 'IPTV'] | None, Query(alias='type')] = None,
+    source: Annotated[Literal['Broadcast', 'Jellyfin', 'IPTV'] | None, Query()] = None,
+):
     """
     地デジ (GR)・BS・CS・CATV・SKY (SPHD)・BS4K それぞれ全てのチャンネルの情報を取得する。
     """
+
+    if source == 'Broadcast' and channel_type == 'IPTV':
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Broadcast source does not have IPTV channels')
+    if source in ('Jellyfin', 'IPTV') and channel_type not in (None, 'IPTV'):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Jellyfin source only has IPTV channels')
+
+    include_broadcast = source not in ('Jellyfin', 'IPTV') and channel_type != 'IPTV'
+    include_iptv = source != 'Broadcast' and channel_type in (None, 'IPTV')
 
     # 現在時刻
     now = datetime.now(JST)
@@ -89,8 +106,12 @@ async def ChannelsAPI():
     # remocon_id (リモコン番号) を第一ソートキー、channel_number (チャンネル番号) を第二ソートキーとしてソート
     # Tortoise ORM では order_by() を複数回チェーンすると最後の order_by() だけが有効になるため、
     # 必ず order_by('remocon_id', 'channel_number') のように引数で指定する必要がある
-    channels: list[Channel]
-    tasks.append(Channel.filter(is_watchable=True).order_by('remocon_id', 'channel_number'))
+    channels: list[Channel] = []
+    if include_broadcast is True:
+        channel_query = Channel.filter(is_watchable=True)
+        if channel_type is not None:
+            channel_query = channel_query.filter(type=channel_type)
+        tasks.append(channel_query.order_by('remocon_id', 'channel_number'))
 
     # データベースの生のコネクションを取得
     # 地デジ・BS・CS を合わせると 18000 件近くになる番組情報を SQLite かつ ORM で絞り込んで素早く取得するのは無理があるらしい
@@ -101,8 +122,9 @@ async def ChannelsAPI():
     ## 一度に取得した方がパフォーマンスが向上するため敢えてそうしている
     ## SQL 文の時間比較は、左にいくほど時刻が小さく、右にいくほど時刻が大きくなるように統一している
     ## 番組時間は EPG の仕様上必ず24時間以下に収まるので、パフォーマンスを考慮して24時間以内に放送開始予定の番組のみに絞り込む
-    pf_programs: list[dict[str, Any]]
-    tasks.append(connection.execute_query_dict(
+    pf_programs: list[dict[str, Any]] = []
+    if include_broadcast is True:
+        tasks.append(connection.execute_query_dict(
         """
         SELECT *
         FROM (
@@ -129,13 +151,17 @@ async def ChannelsAPI():
             now, now,  # 現在放送中の番組
             now, now + timedelta(hours=24),  # 24時間以内に放送開始予定の番組
         ],
-    ))
+        ))
 
     # Jellyfin への接続失敗はネットワークテレビの領域にだけ明示し、ローカル放送局を返し続ける
-    local_results, iptv_result = await asyncio.gather(asyncio.gather(*tasks), GetIPTVChannels())
-    channels = cast(list[Channel], local_results[0])
-    pf_programs = cast(list[dict[str, Any]], local_results[1])
-    iptv_channels, iptv_error = iptv_result
+    if include_broadcast is True:
+        local_results = await asyncio.gather(*tasks)
+        channels = cast(list[Channel], local_results[0])
+        pf_programs = cast(list[dict[str, Any]], local_results[1])
+    if include_iptv is True:
+        iptv_channels, iptv_error = await GetIPTVChannels()
+    else:
+        iptv_channels, iptv_error = ([], None)
 
     # レスポンスの雛形
     result: dict[str, Any] = {

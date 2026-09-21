@@ -16,6 +16,8 @@ import Utils, { dayjs } from '@/utils';
 // PlayerController のインスタンス
 // data() 内に記述すると再帰的にリアクティブ化され重くなる上リアクティブにする必要自体がないので、グローバル変数にしている
 let player_controller: PlayerController | null = null;
+// 連続切り替えでも旧プレイヤーの破棄完了を共有し、新しい DOM を旧処理が消さない。
+let player_destruction: Promise<void> = Promise.resolve();
 
 export default defineComponent({
     name: 'TV-Watch',
@@ -107,14 +109,18 @@ export default defineComponent({
             if (this.playerStore.live_playback_error === null) return;
             this.playerStore.live_playback_recovering = true;
             this.playerStore.live_playback_error = null;
-            await this.destroy();
-            if (this.is_leaving === false) await this.init(true);
+            const destruction = this.destroy();
+            const generation = this.playback_generation;
+            await destruction;
+            if (this.is_leaving === false && generation === this.playback_generation) await this.init(true);
         },
 
         // 再生セッションを初期化する
         async init(force = false) {
             const generation = ++this.playback_generation;
             const channel_id = this.channelsStore.display_channel_id;
+            await player_destruction;
+            if (generation !== this.playback_generation || this.is_leaving) return;
             if (force === false) this.playerStore.live_playback_recovering = false;
             this.playerStore.live_playback_error = null;
             this.playerStore.is_loading = true;
@@ -155,7 +161,8 @@ export default defineComponent({
             if (this.channelsStore.channel.current.name === 'チャンネル情報取得エラー') {
                 // 一時的な供給元の障害を 404 として扱わず、同じ視聴枠に復旧手段を残す。
                 if (channel_id.startsWith('jellyfin-')) {
-                    this.playerStore.live_playback_error = 'チャンネル情報を取得できませんでした。接続を確認して再試行してください。 [LIVE_CHANNEL_UNAVAILABLE]';
+                    const reason = this.channelsStore.source_errors.IPTV ?? '接続を確認してください。';
+                    this.playerStore.live_playback_error = `チャンネル情報を取得できませんでした。${reason} 再試行してください。 [LIVE_CHANNEL_UNAVAILABLE]`;
                     this.playerStore.live_playback_recovering = false;
                     this.playerStore.is_loading = false;
                     this.playerStore.is_video_buffering = false;
@@ -191,8 +198,9 @@ export default defineComponent({
             if (player_controller !== null) {
                 const controller = player_controller;
                 player_controller = null;
-                await controller.dispose();
+                player_destruction = player_destruction.then(() => controller.dispose());
             }
+            await player_destruction;
         }
     }
 });

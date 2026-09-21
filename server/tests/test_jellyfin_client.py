@@ -2,7 +2,7 @@ import time
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.constants import JST
 from app.routers.ChannelsRouter import GetIPTVChannels
@@ -24,6 +24,24 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
 
     def _config(self, enabled: bool = True) -> SimpleNamespace:
         return SimpleNamespace(enabled=enabled, url='http://jellyfin.example:8096/', username='user', password='password')
+
+    async def test_empty_password_is_sent_to_jellyfin_for_authentication(self) -> None:
+        config = self._config()
+        config.password = ''
+        response = Mock(status_code=200)
+        response.json.return_value = {'AccessToken': 'test-token', 'User': {'Id': 'test-user'}}
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = response
+        with (
+            patch('app.utils.JellyfinClient.GetJellyfinConfig', return_value=config),
+            patch('app.utils.JellyfinClient.HTTPX_CLIENT', return_value=client),
+            patch.object(JellyfinClient, '_access_token', None),
+            patch.object(JellyfinClient, '_user_id', None),
+        ):
+            await JellyfinClient._authenticate()  # pyright: ignore[reportPrivateUsage]
+            self.assertEqual(client.post.await_args.kwargs['json'], {'Username': 'user', 'Pw': ''})
+            self.assertEqual(JellyfinClient._access_token, 'test-token')  # pyright: ignore[reportPrivateUsage]
 
     def test_channel_and_program_keep_jellyfin_stable_ids_and_missing_broadcast_fields(self) -> None:
         channel = ToIPTVChannel({
@@ -140,6 +158,20 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([entry.channel.id for entry in timetable], ['jellyfin-second', 'jellyfin-first'])
         self.assertEqual([program.id for program in timetable[1].programs], ['jellyfin-overlap'])
         self.assertIsNone(timetable[1].programs[0].reservation)  # type: ignore[union-attr]
+
+    async def test_broadcast_timetable_source_never_requests_jellyfin_even_with_pinned_ip_tv_id(self) -> None:
+        get_channels = AsyncMock()
+        with (
+            patch.object(JellyfinClient, 'is_configured', return_value=True),
+            patch.object(JellyfinClient, 'get_channels', get_channels),
+        ):
+            timetable, error = await GetIPTVTimeTable(
+                datetime.now(JST), datetime.now(JST), None, ['jellyfin-channel'], 'Broadcast',
+            )
+
+        self.assertEqual(timetable, [])
+        self.assertIsNone(error)
+        get_channels.assert_not_awaited()
 
     async def test_mpegts_generator_yields_upstream_chunks_without_reading_response_content(self) -> None:
         session = JellyfinPlaybackSession('e' * 32, 'http://jellyfin.example:8096/live.ts', 'mpegts', None)

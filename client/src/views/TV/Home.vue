@@ -287,10 +287,12 @@ export default defineComponent({
 
         // サーバー設定とチャンネル情報を更新 (初回)
         // サーバー設定の優先地域は、同一番組としてまとめた地デジ局の代表チャンネル選択に使う
-        await Promise.all([
-            this.serverSettingsStore.fetchServerSettingsOnce(),
-            this.channelsStore.update(),
-        ]);
+        // チャンネル表示をサーバー設定やネットテレビの遅延で待たせない。
+        // 優先地域の設定は到着後の代表局選択にだけ反映される。
+        this.serverSettingsStore.fetchServerSettingsOnce().catch((error) => {
+            console.warn('[TV-Home] Failed to fetch server settings:', error);
+        });
+        await this.channelsStore.update();
 
         // この時点でピン留めされているチャンネルがないなら、タブを地デジタブに切り替える
         // ピン留めされているチャンネル自体はあるが、現在放送されていないため表示できない場合に備える

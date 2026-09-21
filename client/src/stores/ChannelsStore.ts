@@ -6,6 +6,8 @@ import { IProgram, IProgramDefault } from '@/services/Programs';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils from '@/utils';
 
+const CHANNEL_TYPES: ChannelType[] = ['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K', 'IPTV'];
+
 
 /**
  * TV ホーム画面と TV 視聴画面の両方のページでチャンネル情報を共有するためのストア
@@ -86,7 +88,7 @@ const useChannelsStore = defineStore('channels', {
             };
 
             // display_channel_id は上流由来の安定 ID も取り得るため、放送チャンネル番号の正規表現で種別を推測しない。
-            const matched_channel = Object.values(this.channels_list).flat().find(
+            const matched_channel = CHANNEL_TYPES.flatMap((type) => this.channels_list[type]).find(
                 (channel) => channel.display_channel_id === this.display_channel_id,
             );
             if (matched_channel === undefined) {
@@ -219,7 +221,8 @@ const useChannelsStore = defineStore('channels', {
             // 順次 channels_list_with_pinned に追加していく
             // 1つのチャンネルに対するループ回数が少なくなる分、毎回 filter() や find() するよりも高速になるはず
             const pinned_channels: ILiveChannel[] = [];
-            for (const [channel_type, channels] of Object.entries(this.channels_list)) {
+            for (const channel_type of CHANNEL_TYPES) {
+                const channels = this.channels_list[channel_type];
                 for (const channel of channels) {
 
                     // ピン留め中チャンネルの ID (ex: NID32736-SID1024) が入るリストに含まれているチャンネルなら、ピン留めタブに追加
@@ -367,10 +370,15 @@ const useChannelsStore = defineStore('channels', {
          */
         async update(force: boolean = false): Promise<void> {
 
-            const update = async (): Promise<boolean> => {
+            // ローカル放送とネットテレビは互いの完了を待たずに開始する。
+            const iptv_update = this.updateIPTV().catch((error) => {
+                console.error('[ChannelsStore] IPTV update failed:', error);
+            });
 
-                // 最新のすべてのチャンネルの情報を取得
-                const channels_list = await Channels.fetchAllChannels();
+            const updateBroadcast = async (): Promise<boolean> => {
+
+                // ローカル放送だけを先に取得する。ネットテレビの応答待ちはホーム表示を止めない。
+                const channels_list = await Channels.fetchAllChannels('Broadcast');
                 if (channels_list === null) {
                     console.warn('[ChannelsStore] Failed to fetch channels list. Skip updating cache.');
                     return false;
@@ -382,14 +390,16 @@ const useChannelsStore = defineStore('channels', {
                 // 大きなオブジェクトを扱う際は、細部のリアクティブを捨てることでパフォーマンスが向上する (下記記事が大変参考になりました)
                 // ref: https://speakerdeck.com/tbashiyy/shi-shu-mo-rekodoninai-euruvue-dot-jspuroziekutowoshi-xian-surutamenopahuomansutiyuningu
                 // ref: https://unyacat.net/2021/01/20/vue-freeze-faster/
-                const {source_errors, ...channel_groups} = channels_list;
-                // 個別ソースの失敗は、最後に正常取得したネットテレビのカードを消す理由にしない。
-                // 表示はエラー状態へ切り替えつつ、再試行までカードとピン留めの位置を保つ。
-                if (source_errors.IPTV !== null && this.channels_list.IPTV.length > 0) {
-                    channel_groups.IPTV = this.channels_list.IPTV;
-                }
+                const channel_groups: ILiveChannelsList = {
+                    GR: channels_list.GR,
+                    BS: channels_list.BS,
+                    CS: channels_list.CS,
+                    CATV: channels_list.CATV,
+                    SKY: channels_list.SKY,
+                    BS4K: channels_list.BS4K,
+                    IPTV: this.channels_list.IPTV,
+                };
                 this.channels_list = Utils.deepObjectFreeze(channel_groups);
-                this.source_errors = source_errors;
 
                 // チャンネルリストの更新日時を更新
                 if (this.is_channels_list_initial_updated === false) {
@@ -405,16 +415,16 @@ const useChannelsStore = defineStore('channels', {
 
                 // ただし、最終更新日時が1分以上前の場合は非同期で更新する
                 if (Utils.time() - this.last_updated_at > 60) {
-                    update().catch((error) => {
-                        console.error('[ChannelsStore] Background update failed:', error);
-                    });
+                    updateBroadcast().then((succeeded) => {
+                        if (succeeded) return this.updateIPTV();
+                    }).catch((error) => console.error('[ChannelsStore] Background update failed:', error));
                 }
 
                 return;
             }
 
             // チャンネルリストの更新を行う
-            const is_update_succeeded = await update();
+            const is_update_succeeded = await updateBroadcast();
             if (is_update_succeeded === false) {
                 // ネットワークエラーなどでチャンネル情報更新に失敗した場合、以降の処理を実行すると
                 // 意図せずピン留め中チャンネルの情報が削除されてしまうため、実行しない
@@ -437,6 +447,20 @@ const useChannelsStore = defineStore('channels', {
                 }
                 return result;
             });
+
+            // 初回描画はローカル放送を待つだけでよく、ネットテレビは独立して状態を更新する。
+            void iptv_update;
+        },
+
+        async updateIPTV(): Promise<void> {
+            const response = await Channels.fetchAllChannels('Jellyfin');
+            if (response === null) {
+                return;
+            }
+            this.source_errors = response.source_errors;
+            if (response.source_errors.IPTV === null) {
+                this.channels_list = Utils.deepObjectFreeze({...this.channels_list, IPTV: response.IPTV});
+            }
         }
     }
 });
