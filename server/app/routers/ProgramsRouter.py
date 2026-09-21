@@ -56,11 +56,13 @@ async def GetIPTVTimeTable(
             channels = [channel for channel in channels if channel.id in order]
             channels.sort(key=lambda channel: order[channel.id])
         programs = [program for item in await JellyfinClient.get_programs(start_time, end_time, None) if (program := ToIPTVProgram(item)) is not None]
-        programs_by_channel: dict[str, list[schemas.IPTVTimeTableProgram]] = {channel.id: [] for channel in channels}
+        programs_by_channel: dict[str, list[schemas.TimeTableProgram | schemas.IPTVTimeTableProgram]] = {
+            channel.id: [] for channel in channels
+        }
         for program in programs:
             if program.channel_id in programs_by_channel and program.end_time > start_time and program.start_time < end_time:
                 programs_by_channel[program.channel_id].append(
-                    schemas.IPTVTimeTableProgram.model_validate(program),
+                    schemas.IPTVTimeTableProgram.model_validate(program.model_dump()),
                 )
         return ([schemas.TimeTableChannel(channel=channel, programs=programs_by_channel[channel.id]) for channel in channels], None)
     except JellyfinError as error:

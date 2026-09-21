@@ -5,7 +5,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -26,7 +26,7 @@ class JellyfinPlaybackSession:
 
     session_id: str
     upstream_url: str
-    stream_type: str
+    stream_type: Literal['hls', 'mpegts']
     live_stream_id: str | None
     resource_urls: dict[str, str] = field(default_factory=dict)
     last_accessed_at: float = field(default_factory=time.time)
@@ -68,8 +68,9 @@ class JellyfinClient:
     @classmethod
     async def _authenticate(cls) -> None:
         config = GetJellyfinConfig()
-        if config.username == '' or config.password == '':
-            raise JellyfinError('Jellyfin のユーザー名またはパスワードが設定されていません。')
+        # 空のパスワードも有効な認証入力なので、可否は Jellyfin に判断させる。
+        if config.username == '':
+            raise JellyfinError('Jellyfin のユーザー名が設定されていません。')
 
         async with cls._authentication_lock:
             if cls._access_token is not None and cls._user_id is not None:

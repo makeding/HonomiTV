@@ -1,8 +1,12 @@
 import time
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from app.constants import JST
+from app.routers.ChannelsRouter import GetIPTVChannels
+from app.routers.ProgramsRouter import GetIPTVTimeTable
 from app.utils.JellyfinClient import (
     JellyfinClient,
     JellyfinError,
@@ -94,6 +98,48 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         JellyfinClient._playback_sessions[session.session_id] = session  # pyright: ignore[reportPrivateUsage]
         await JellyfinClient.collect_expired_playbacks()
         self.assertNotIn(session.session_id, JellyfinClient._playback_sessions)  # pyright: ignore[reportPrivateUsage]
+
+    async def test_unified_channels_reports_upstream_failure_and_recovers(self) -> None:
+        upstream_channel = {'Id': 'channel-a', 'Name': 'ネットA'}
+        with (
+            patch.object(JellyfinClient, 'is_configured', return_value=True),
+            patch.object(JellyfinClient, 'get_channels', AsyncMock(side_effect=[JellyfinError('タイムアウト'), [upstream_channel]])),
+        ):
+            channels, error = await GetIPTVChannels()
+            self.assertEqual(channels, [])
+            self.assertEqual(error, 'タイムアウト')
+            channels, error = await GetIPTVChannels()
+
+        self.assertIsNone(error)
+        self.assertEqual([channel.id for channel in channels], ['jellyfin-channel-a'])
+
+    async def test_timetable_pinned_network_channels_keep_order_and_only_return_overlapping_programs(self) -> None:
+        start = datetime(2026, 9, 21, 12, 0, tzinfo=JST)
+        end = datetime(2026, 9, 21, 13, 0, tzinfo=JST)
+        channels = [{'Id': 'first', 'Name': '第一'}, {'Id': 'second', 'Name': '第二'}]
+        programs = [
+            {
+                'Id': 'overlap', 'ChannelId': 'first', 'Name': '重なる番組',
+                'StartDate': '2026-09-21T11:30:00+09:00', 'EndDate': '2026-09-21T12:30:00+09:00',
+            },
+            {
+                'Id': 'outside', 'ChannelId': 'second', 'Name': '範囲外',
+                'StartDate': '2026-09-21T13:00:00+09:00', 'EndDate': '2026-09-21T14:00:00+09:00',
+            },
+        ]
+        with (
+            patch.object(JellyfinClient, 'is_configured', return_value=True),
+            patch.object(JellyfinClient, 'get_channels', AsyncMock(return_value=channels)),
+            patch.object(JellyfinClient, 'get_programs', AsyncMock(return_value=programs)),
+        ):
+            timetable, error = await GetIPTVTimeTable(
+                start, end, None, ['jellyfin-second', 'jellyfin-first'],
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual([entry.channel.id for entry in timetable], ['jellyfin-second', 'jellyfin-first'])
+        self.assertEqual([program.id for program in timetable[1].programs], ['jellyfin-overlap'])
+        self.assertIsNone(timetable[1].programs[0].reservation)  # type: ignore[union-attr]
 
     async def test_mpegts_generator_yields_upstream_chunks_without_reading_response_content(self) -> None:
         session = JellyfinPlaybackSession('e' * 32, 'http://jellyfin.example:8096/live.ts', 'mpegts', None)

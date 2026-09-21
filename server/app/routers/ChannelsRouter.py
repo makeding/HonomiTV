@@ -3,7 +3,7 @@ import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import anyio
 import httpx
@@ -132,7 +132,9 @@ async def ChannelsAPI():
     ))
 
     # Jellyfin への接続失敗はネットワークテレビの領域にだけ明示し、ローカル放送局を返し続ける
-    channels, pf_programs, iptv_result = await asyncio.gather(*tasks, GetIPTVChannels())
+    local_results, iptv_result = await asyncio.gather(asyncio.gather(*tasks), GetIPTVChannels())
+    channels = cast(list[Channel], local_results[0])
+    pf_programs = cast(list[dict[str, Any]], local_results[1])
     iptv_channels, iptv_error = iptv_result
 
     # レスポンスの雛形
