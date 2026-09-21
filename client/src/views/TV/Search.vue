@@ -287,6 +287,14 @@ const createFallbackChannel = (program: IProgram): IChannel => {
         is_subchannel: false,
         is_radiochannel: false,
         is_watchable: true,
+        source: 'Broadcast',
+        capabilities: {
+            live_stream: true,
+            live_stream_session: false,
+            data_broadcasting: true,
+            recording: true,
+            remote_playback: true,
+        },
     };
 };
 

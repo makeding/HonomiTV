@@ -15,7 +15,7 @@ import { dayjs } from '@/utils';
 /**
  * チャンネルタイプの表示順序
  */
-export const CHANNEL_TYPE_DISPLAY_ORDER: ChannelTypePretty[] = ['ピン留め', '地デジ', 'BS', 'CS', 'CATV', 'SKY', 'BS4K'];
+export const CHANNEL_TYPE_DISPLAY_ORDER: ChannelTypePretty[] = ['ピン留め', '地デジ', 'BS', 'CS', 'CATV', 'SKY', 'BS4K', 'ネット'];
 
 /**
  * 表示名から API 用チャンネルタイプへのマッピング (ChannelTypePretty -> ChannelType)
@@ -28,6 +28,7 @@ const CHANNEL_TYPE_PRETTY_TO_API: Map<ChannelTypePretty, ChannelType> = new Map(
     ['CATV', 'CATV'],
     ['SKY', 'SKY'],
     ['BS4K', 'BS4K'],
+    ['ネット', 'IPTV'],
 ]);
 
 
@@ -52,6 +53,9 @@ const useTimeTableStore = defineStore('timetable', () => {
 
     // 番組表データ
     const channels_data = shallowRef<ITimeTableChannel[]>([]);
+
+    // 個別の番組表ソース失敗。既に取得済みの他チャンネルを消さず、画面で回復操作を出す。
+    const source_errors = ref<{ IPTV: string | null; }>({IPTV: null});
 
     // 番組表の日付範囲 (API から取得した earliest/latest)
     const date_range = ref<{ earliest: Dayjs; latest: Dayjs } | null>(null);
@@ -344,6 +348,7 @@ const useTimeTableStore = defineStore('timetable', () => {
         // 番組表データを更新
         // shallowRef でリアクティブ化の負荷を抑えつつ差し替えのみ検知する
         channels_data.value = response.channels;
+        source_errors.value = response.source_errors;
 
         // 日付範囲を更新 (API から返される文字列を Dayjs に変換)
         date_range.value = {
@@ -682,6 +687,7 @@ const useTimeTableStore = defineStore('timetable', () => {
         selected_channel_type,
         selected_date,
         channels_data,
+        source_errors,
         date_range,
         is_loading,
         is_initial_load_completed,

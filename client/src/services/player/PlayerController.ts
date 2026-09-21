@@ -12,12 +12,14 @@ import APIClient from '@/services/APIClient';
 import Bangumi from '@/services/Bangumi';
 import OfflineVideos from '@/services/OfflineVideos';
 import CustomBufferController from '@/services/player/CustomBufferController';
+import LivePlaybackSession, { type ILivePlaybackSession } from '@/services/player/LivePlaybackSession';
 import CaptureManager from '@/services/player/managers/CaptureManager';
 import DocumentPiPManager from '@/services/player/managers/DocumentPiPManager';
 import KeyboardShortcutManager from '@/services/player/managers/KeyboardShortcutManager';
 import LiveCommentManager from '@/services/player/managers/LiveCommentManager';
 import LiveDataBroadcastingManager from '@/services/player/managers/LiveDataBroadcastingManager';
 import LiveEventManager from '@/services/player/managers/LiveEventManager';
+import LiveSessionPlaybackManager from '@/services/player/managers/LiveSessionPlaybackManager';
 import MediaSessionManager from '@/services/player/managers/MediaSessionManager';
 import RecordedCMSkipManager from '@/services/player/managers/RecordedCMSkipManager';
 import TLVDataBroadcastingManager from '@/services/player/managers/TLVDataBroadcastingManager';
@@ -106,6 +108,13 @@ class PlayerController {
 
     // DPlayer のインスタンス
     private player: DPlayer | null = null;
+
+    // このインスタンスが所有するライブセッションと初期化世代。切り替え後の応答は再利用しない。
+    private readonly live_session = new LivePlaybackSession();
+    private live_session_info: ILivePlaybackSession | null = null;
+    private initialization_generation = 0;
+    private disposed = false;
+    private readonly display_channel_id: string;
 
     // それぞれの PlayerManager のインスタンスのリスト
     private player_managers: PlayerManager[] = [];
@@ -199,6 +208,7 @@ class PlayerController {
 
         // 再生モードをセット
         this.playback_mode = playback_mode;
+        this.display_channel_id = useChannelsStore().display_channel_id;
 
         const player_store = usePlayerStore();
         if (player_store.selected_quality_profile_type !== null) {
@@ -308,11 +318,39 @@ class PlayerController {
         default_quality: string | null;
         playback_rate: number | null;
         seek_seconds: number | null;
+    } = {default_quality: null, playback_rate: null, seek_seconds: null}): Promise<void> {
+        if (this.disposed) return;
+        const generation = ++this.initialization_generation;
+        const player_store = usePlayerStore();
+        if (this.playback_mode === 'Live') player_store.live_playback_error = null;
+        try {
+            await this.initialize(options, generation);
+        } catch (error) {
+            if (generation !== this.initialization_generation) return;
+            await this.destroy();
+            if (this.playback_mode !== 'Live') throw error;
+            if (useChannelsStore().display_channel_id !== this.display_channel_id) return;
+            player_store.live_playback_error = error instanceof Error ? error.message : '再生の初期化に失敗しました。 [LIVE_INIT_FAILED]';
+            player_store.is_loading = false;
+            player_store.is_video_buffering = false;
+        }
+    }
+
+
+    /**
+     * 現在の世代だけに DPlayer と対応する管理機能を割り当てる。
+     * @param options 既存プレイヤーの再開情報
+     * @param generation 初期化開始時の世代
+     */
+    private async initialize(options: {
+        default_quality: string | null;
+        playback_rate: number | null;
+        seek_seconds: number | null;
     } = {
         default_quality: null,
         playback_rate: null,
         seek_seconds: null,
-    }): Promise<void> {
+    }, generation: number): Promise<void> {
         const channels_store = useChannelsStore();
         const player_store = usePlayerStore();
         const settings_store = useSettingsStore();
@@ -352,6 +390,13 @@ class PlayerController {
         // HEVC 10bit は通信節約モード中の対応環境にだけ透過的に要求する
         // MediaCapabilities で滑らかに再生できると判断できない場合は、通常の HEVC 8bit に留めて互換性を優先する
         const is_hevc_10bit_playback = is_hevc_playback === true && await PlayerUtils.isHEVC10bitVideoSupported();
+        if (generation !== this.initialization_generation) return;
+
+        // セッション対応チャンネルは共通 API で開く。応答待ちの退出も所有権を失わず解放する。
+        if (this.playback_mode === 'Live' && channels_store.channel.current.capabilities.live_stream_session) {
+            this.live_session_info = await this.live_session.open(this.display_channel_id);
+            if (generation !== this.initialization_generation || this.live_session_info === null) return;
+        }
 
         // 再エンコード済みの MPEG-TS 録画は、ブラウザが元コーデックを再生できる場合だけ FFmpeg stream copy を利用できる
         // 録画中・インターレース・映像構成切り替えありのファイルは、固定 HLS セグメントへ安全に分割できないため対象外にする
@@ -574,6 +619,16 @@ class PlayerController {
 
                 // ライブ視聴: チャンネル情報がセットされているはず
                 if (this.playback_mode === 'Live') {
+                    if (this.live_session_info !== null) {
+                        return {
+                            quality: [{
+                                name: 'ネットワークテレビ',
+                                type: this.live_session_info.stream_type,
+                                url: `${Utils.api_base_url}${this.live_session_info.stream_url.replace(/^\/api/, '')}`,
+                            }],
+                            defaultQuality: 'ネットワークテレビ',
+                        };
+                    }
                     // ライブストリーミング API のベース URL
                     const streaming_api_base_url = `${Utils.api_base_url}/streams/live/${channels_store.channel.current.display_channel_id}`;
                     // BS4K チャンネルでは、Mirakurun から decode=0 で受け取った Raw MMTS をそのまま再生できる
@@ -929,6 +984,7 @@ class PlayerController {
                                 return;
                             }
                         }
+                        options.error('このチャンネルでは実況コメントを送信できません。');
                     } else {
                         // ビデオ視聴: 過去ログにはコメントできないのでエラーを返す
                         options.error('録画番組にはコメントできません。');
@@ -952,7 +1008,7 @@ class PlayerController {
                     // ライブ放送では選択中のサービスを明示する (tsreadex がすでに選択してくれているが念のため)
                     // 録画再生では、DB に記録済みのサービス ID がある場合だけ指定する
                     serviceId: this.playback_mode === 'Live' ?
-                        channels_store.channel.current.service_id : player_store.recorded_program.service_id ?? undefined,
+                        channels_store.channel.current.service_id ?? undefined : player_store.recorded_program.service_id ?? undefined,
                     // デコーダーが自動でデインタレースしてくれない端末だけ、YADIF Deinterlacer を通した Canvas を実際の表示映像として利用する
                     // TODO: Document Picture-in-Picture API に対応した環境では問題ないが、Picture-in-Picture API のみに対応した環境、
                     // かつデコーダーが自動でデインタレースしてくれない環境では、Picture-in-Picture するとインタレ未解除の映像が
@@ -1004,7 +1060,7 @@ class PlayerController {
                     preferManagedMediaSource: true,
                     // startPosition に視聴履歴などから求めた再生位置を渡し、ロード開始時点で正しい Media Sequence を選択させる
                     // これを指定しないと manifest 解析後に sequence=0 からフラグメント取得が始まってしまう
-                    startPosition: seek_seconds,
+                    startPosition: this.live_session_info !== null ? -1 : seek_seconds,
                     // 追っかけ再生は EVENT playlist を使うが、視聴位置はユーザーの再生位置・視聴履歴を優先する。
                     // liveSyncDurationCount / liveMaxLatencyDurationCount を低遅延ライブ向けに詰めると、
                     // manifest 更新時に hls.js が「大きく遅延している」と判定し、現在位置から録画末尾へ飛んでしまう。
@@ -1017,7 +1073,8 @@ class PlayerController {
                     // 通常再生ではサーバー側のエンコード済み範囲と連携し、保存再生では完結した HLS を標準実装で扱う
                     // 保存版には buffer.m3u8 の SSE がないため、CustomBufferController を使うとシーク時に存在しない URL へ接続してしまう
                     // @ts-ignore
-                    bufferController: player_store.is_offline_playback === true ? Hls.DefaultConfig.bufferController : CustomBufferController,
+                    bufferController: player_store.is_offline_playback === true || this.live_session_info !== null ?
+                        Hls.DefaultConfig.bufferController : CustomBufferController,
                     // プレイリスト / セグメントのリクエスト時のタイムアウトを回避する
                     manifestLoadPolicy: {
                         default: {
@@ -1066,7 +1123,13 @@ class PlayerController {
                                 maxRetryDelayMs: 8000,
                             }
                         }
-                    }
+                    },
+                    // 外部配信の待機は HLS 標準の有限タイムアウトと再試行を使う。
+                    ...(this.live_session_info !== null ? {
+                        manifestLoadPolicy: Hls.DefaultConfig.manifestLoadPolicy,
+                        playlistLoadPolicy: Hls.DefaultConfig.playlistLoadPolicy,
+                        fragLoadPolicy: Hls.DefaultConfig.fragLoadPolicy,
+                    } : {}),
                 },
                 // aribb24.js
                 aribb24: {
@@ -1349,7 +1412,7 @@ class PlayerController {
             console.warn('\u001b[31m[PlayerController] PlayerRestartRequired event received. Message: ', event.message);
 
             // ライブ視聴: iOS 17.0 以下で mpegts.js がサポートされていない場合は再起動できない
-            if (this.playback_mode === 'Live' && mpegts.isSupported() !== true) {  // mpegts.js 非対応環境では undefined が返る
+            if (this.playback_mode === 'Live' && this.live_session_info === null && mpegts.isSupported() !== true) {  // mpegts.js 非対応環境では undefined が返る
                 console.warn('\u001b[31m[PlayerController] PlayerRestartRequired event received, but mpegts.js is not supported. Ignored.');
                 // iOS 17.0 以下は mpegts.js がサポートされていないため、再生できない
                 this.player?.notice('iOS (Safari) 17.0 以下での視聴には対応していません。速やかに iOS を 17.1 以降に更新してください。', -1, undefined, '#FF6F6A');
@@ -1489,11 +1552,21 @@ class PlayerController {
         if (this.playback_mode === 'Live') {
             // ライブ視聴時に設定する PlayerManager
             this.player_managers = [
-                new LiveEventManager(this.player),
-                new LiveCommentManager(this.player),
-                this.player.quality?.type === 'tlv' ?
+                ...(this.live_session_info !== null ? [new LiveSessionPlaybackManager(this.player, (reason) => {
+                    const generation = this.initialization_generation;
+                    void this.destroy().then(() => {
+                        if (this.initialization_generation !== generation + 1 ||
+                            useChannelsStore().display_channel_id !== this.display_channel_id) return;
+                        player_store.live_playback_error = reason;
+                        player_store.is_loading = false;
+                        player_store.is_video_buffering = false;
+                        player_store.live_stream_status = 'Offline';
+                    });
+                })] : []),
+                ...(this.live_session_info === null ? [new LiveEventManager(this.player), new LiveCommentManager(this.player)] : []),
+                ...(this.live_session_info === null ? [this.player.quality?.type === 'tlv' ?
                     new TLVDataBroadcastingManager(this.player, this.playback_mode) :
-                    new LiveDataBroadcastingManager(this.player),
+                    new LiveDataBroadcastingManager(this.player)] : []),
                 new CaptureManager(this.player, this.playback_mode),
                 new DocumentPiPManager(this.player, this.playback_mode),
                 new KeyboardShortcutManager(this.player, this.playback_mode),
@@ -1515,6 +1588,7 @@ class PlayerController {
         // これにより各 PlayerManager での実際の処理が開始される
         // 同期処理すると時間が掛かるので、並行して実行する
         await Promise.all(this.player_managers.map((player_manager) => player_manager.init()));
+        if (generation !== this.initialization_generation) return;
 
         console.log('\u001b[31m[PlayerController] Initialized.');
     }
@@ -1689,6 +1763,10 @@ class PlayerController {
 
             // ライブ視聴時のみ
             if (this.playback_mode === 'Live') {
+
+                // セッション再生の準備と失敗は LiveSessionPlaybackManager が所有する。
+                // 放送用のバッファ待機や ONAir イベント待機へ進まない。
+                if (this.live_session_info !== null) return;
 
                 // mpeg2toh264 によるオリジナル画質再生時のみの専用処理
                 if (this.player.type === 'mpeg2toh264' && this.player.plugins.mpeg2toh264) {
@@ -2408,7 +2486,7 @@ class PlayerController {
         }
 
         // オフライン再生では通信節約モードや画質プロファイル切り替えは無関係なので、該当スイッチを設定パネルへ追加しない
-        if (is_offline_playback === false) {
+        if (is_offline_playback === false && this.live_session_info === null) {
             // モバイル回線プロファイルに切り替えるボタンを動的に追加する
             this.player.template.audio.insertAdjacentHTML('afterend', `
                 <div class="dplayer-setting-item dplayer-setting-mobile-profile">
@@ -3104,7 +3182,18 @@ class PlayerController {
      * PlayerController の再起動を行う場合、基本外部から直接 await destroy() と await init() は呼び出さず、代わりに
      * player_store.event_emitter.emit('PlayerRestartRequired', 'プレイヤーを再起動しています…') のようにイベントを発火させるべき
      */
+    public async dispose(): Promise<void> {
+        this.disposed = true;
+        await this.destroy();
+    }
+
+
+    /** 再起動にも使う破棄処理。画面から離れる場合は dispose() で再初期化も禁止する。 */
     public async destroy(): Promise<void> {
+        ++this.initialization_generation;
+        // 開始要求がまだ応答していなくても、後から届くセッションを無効化する。
+        const release_session = this.live_session.close();
+        this.live_session_info = null;
         const settings_store = useSettingsStore();
         const player_store = usePlayerStore();
 
@@ -3241,6 +3330,8 @@ class PlayerController {
         // 破棄済みかどうかのフラグを立てる
         this.destroying = false;
         this.destroyed = true;
+
+        await release_session;
 
         // PlayerStore にプレイヤーを破棄したことを通知
         player_store.is_player_initialized = false;

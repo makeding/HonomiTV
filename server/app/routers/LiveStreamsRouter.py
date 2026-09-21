@@ -21,6 +21,7 @@ from app.streams.StreamEncodingOptions import (
     SplitLiveQualityAndEncodingOptions,
 )
 from app.utils import GetBackendForReceiving, GetMirakurunAPIEndpointURL
+from app.utils.JellyfinClient import JellyfinClient, JellyfinError
 
 
 # ルーター
@@ -252,6 +253,71 @@ async def LiveStreamsAPI():
 
     # すべてのライブストリームの状態を返す
     return result
+
+
+@router.post('/sessions', response_model=schemas.LiveStreamSession)
+async def CreateLiveStreamSessionAPI(request: schemas.LiveStreamSessionRequest):
+    """外部ライブ入力向けの共通再生セッションを作成する。"""
+    if request.channel_id.startswith('jellyfin-') is False:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='This channel does not use a live stream session')
+    try:
+        await JellyfinClient.collect_expired_playbacks()
+        session = await JellyfinClient.open_playback(request.channel_id.removeprefix('jellyfin-'))
+        return schemas.LiveStreamSession(
+            id=session.session_id,
+            stream_url=f'/api/streams/live/sessions/{session.session_id}/playlist',
+            stream_type=session.stream_type,
+        )
+    except JellyfinError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+
+
+@router.delete('/sessions/{session_id}', status_code=status.HTTP_204_NO_CONTENT)
+async def CloseLiveStreamSessionAPI(session_id: Annotated[str, Path(min_length=16, max_length=64)]):
+    """共通ライブ再生セッションを閉じ、上流の LiveStream も解放する。"""
+    await JellyfinClient.close_playback(session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get('/sessions/{session_id}/playlist')
+async def LiveStreamSessionPlaylistAPI(session_id: Annotated[str, Path(min_length=16, max_length=64)]):
+    """HLS プレイリストを同一オリジンのリソース URL へ変換する。"""
+    try:
+        session = JellyfinClient.get_playback_session(session_id)
+        if session.stream_type == 'mpegts':
+            resource_id = JellyfinClient.register_resource(session, session.upstream_url)
+            stream, media_type = await JellyfinClient.stream_resource(session, resource_id)
+            return StreamingResponse(
+                stream,
+                media_type=media_type,
+                headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
+            )
+        content, media_type = await JellyfinClient.fetch_resource(session)
+        if session.stream_type == 'hls':
+            content = JellyfinClient.rewrite_playlist(session, content, session.upstream_url)
+            media_type = 'application/vnd.apple.mpegurl'
+        return Response(content=content, media_type=media_type, headers={'Cache-Control': 'no-store'})
+    except JellyfinError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+
+
+@router.get('/sessions/{session_id}/resource/{resource_id}')
+async def LiveStreamSessionResourceAPI(
+    session_id: Annotated[str, Path(min_length=16, max_length=64)],
+    resource_id: Annotated[str, Path(min_length=16, max_length=64)],
+):
+    """HLS の子プレイリスト・鍵・分片を代理し、TS はストリーミングで中継する。"""
+    try:
+        session = JellyfinClient.get_playback_session(session_id)
+        upstream_url = session.resource_urls.get(resource_id, '')
+        if '.m3u8' not in upstream_url.lower():
+            stream, media_type = await JellyfinClient.stream_resource(session, resource_id)
+            return StreamingResponse(stream, media_type=media_type, headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+        content, media_type = await JellyfinClient.fetch_resource(session, resource_id)
+        content = JellyfinClient.rewrite_playlist(session, content, upstream_url)
+        return Response(content=content, media_type='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-store'})
+    except JellyfinError as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
 
 @router.get(

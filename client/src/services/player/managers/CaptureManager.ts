@@ -208,7 +208,8 @@ class CaptureManager implements PlayerManager {
                 captured_playback_position: -1,  // 後の処理で設定するが、ここでは実装上の都合で -1 を入れておく
                 network_id: channels_store.channel.current.network_id,
                 service_id: channels_store.channel.current.service_id,
-                event_id: channels_store.channel.current.program_present?.event_id ?? -1,
+                event_id: channels_store.channel.current.program_present?.source === 'Broadcast' ?
+                    channels_store.channel.current.program_present.event_id : null,
                 title: channels_store.channel.current.program_present?.title ?? '放送休止',
                 description: channels_store.channel.current.program_present?.description ?? '',
                 start_time: channels_store.channel.current.program_present?.start_time ?? '2000-01-01T00:00:00+09:00',
@@ -537,13 +538,13 @@ class CaptureManager implements PlayerManager {
         // マクロ置換に必要なチャンネル情報の型
         interface CaptureChannelInfo {
             name: string;
-            service_id: number;
-            remocon_id: number;
+            service_id: number | null;
+            remocon_id: number | null;
         }
 
         // マクロ置換に必要な番組情報の型
         interface CaptureProgramInfo {
-            event_id: number;
+            event_id: number | null;
             title: string;
             start_time: string;
             end_time: string;
@@ -597,7 +598,7 @@ class CaptureManager implements PlayerManager {
                     remocon_id: current_channel.remocon_id,
                 };
                 program = {
-                    event_id: current_program.event_id,
+                    event_id: current_program.source === 'Broadcast' ? current_program.event_id : null,
                     title: current_program.title,
                     start_time: current_program.start_time,
                     end_time: current_program.end_time,
@@ -671,19 +672,19 @@ class CaptureManager implements PlayerManager {
             // チャンネル名
             '%channel-name%': channel.name,
             // リモコン番号
-            '%channel-no%': channel.remocon_id.toString(),
+            '%channel-no%': channel.remocon_id?.toString() ?? 'unknown',
             // リモコン番号 (2桁)
-            '%channel-no2%': channel.remocon_id.toString().padStart(2, '0'),
+            '%channel-no2%': channel.remocon_id?.toString().padStart(2, '0') ?? 'unknown',
             // リモコン番号 (3桁)
-            '%channel-no3%': channel.remocon_id.toString().padStart(3, '0'),
+            '%channel-no3%': channel.remocon_id?.toString().padStart(3, '0') ?? 'unknown',
             // 番組名
             '%event-name%': program.title,
             // イベント ID
-            '%event-id%': program.event_id.toString(),
+            '%event-id%': program.event_id?.toString() ?? 'unknown',
             // サービス名
             '%service-name%': channel.name,
             // サービス ID
-            '%service-id%': channel.service_id.toString(),
+            '%service-id%': channel.service_id?.toString() ?? 'unknown',
         };
 
         // マクロを長さの降順でソート

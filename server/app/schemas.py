@@ -25,6 +25,22 @@ from app.utils.TSInformation import TerrestrialRegion
 
 # ***** チャンネル *****
 
+class ChannelCapabilities(BaseModel):
+    """チャンネルごとに利用できる視聴機能。"""
+    live_stream: bool
+    live_stream_session: bool
+    data_broadcasting: bool
+    recording: bool
+    remote_playback: bool
+
+BroadcastChannelCapabilities = ChannelCapabilities(
+    live_stream=True,
+    live_stream_session=False,
+    data_broadcasting=True,
+    recording=True,
+    remote_playback=True,
+)
+
 class Channel(PydanticModel):
     # デフォルト値は録画番組からメタデータを取得する処理向け
     id: str
@@ -44,6 +60,8 @@ class Channel(PydanticModel):
     is_subchannel: bool = False
     is_radiochannel: bool = False
     is_watchable: bool = False
+    source: Literal['Broadcast'] = 'Broadcast'
+    capabilities: ChannelCapabilities = BroadcastChannelCapabilities
 
 class LiveChannel(Channel):
     # 以下はすべて動的に生成される TV ライブストリーミング用の追加カラム
@@ -52,6 +70,46 @@ class LiveChannel(Channel):
     program_present: Program | None
     program_following: Program | None
 
+class IPTVProgram(BaseModel):
+    """IPTV 側が提供する番組情報。
+
+    放送波 EPG の必須フィールドを推測して Program として扱わない。
+    """
+    id: str
+    channel_id: str
+    source: Literal['Jellyfin'] = 'Jellyfin'
+    title: str
+    description: str
+    start_time: datetime
+    end_time: datetime
+    duration: float
+    genres: list[Genre]
+
+class IPTVTimeTableProgram(IPTVProgram):
+    reservation: None = None
+
+class IPTVChannel(BaseModel):
+    id: str
+    display_channel_id: str
+    type: Literal['IPTV'] = 'IPTV'
+    source: Literal['Jellyfin'] = 'Jellyfin'
+    network_id: None = None
+    service_id: None = None
+    transport_stream_id: None = None
+    remocon_id: None = None
+    channel_number: str
+    name: str
+    terrestrial_regions: None = None
+    jikkyo_force: None = None
+    is_subchannel: bool = False
+    is_radiochannel: bool = False
+    is_watchable: bool = True
+    is_display: bool = True
+    viewer_count: None = None
+    capabilities: ChannelCapabilities
+    program_present: IPTVProgram | None = None
+    program_following: IPTVProgram | None = None
+
 class LiveChannels(BaseModel):
     GR: list[LiveChannel]
     BS: list[LiveChannel]
@@ -59,6 +117,8 @@ class LiveChannels(BaseModel):
     CATV: list[LiveChannel]
     SKY: list[LiveChannel]
     BS4K: list[LiveChannel]
+    IPTV: list[IPTVChannel] = []
+    source_errors: dict[Literal['IPTV'], str | None] = {'IPTV': None}
 
 # ***** 放送中/放送予定の番組 *****
 
@@ -85,10 +145,20 @@ class Program(PydanticModel):
     secondary_audio_type: str | None
     secondary_audio_language: str | None
     secondary_audio_sampling_rate: str | None
+    source: Literal['Broadcast'] = 'Broadcast'
 
 class Programs(BaseModel):
     total: int
     programs: list[Program]
+
+
+class LiveStreamSessionRequest(BaseModel):
+    channel_id: Annotated[str, Field(min_length=1)]
+
+class LiveStreamSession(BaseModel):
+    id: str
+    stream_url: str
+    stream_type: Literal['hls', 'mpegts']
 
 class Genre(TypedDict):
     major: str
@@ -101,6 +171,7 @@ class TimeTable(BaseModel):
     channels: list[TimeTableChannel]
     # 番組データの有効範囲 (日付セレクター用)
     date_range: TimeTableDateRange
+    source_errors: dict[Literal['IPTV'], str | None] = {'IPTV': None}
 
 class TimeTableDateRange(BaseModel):
     # 番組データの最も早い日時
@@ -110,9 +181,9 @@ class TimeTableDateRange(BaseModel):
 
 class TimeTableChannel(BaseModel):
     # チャンネル情報
-    channel: Channel
+    channel: Channel | IPTVChannel
     # 番組リスト
-    programs: list[TimeTableProgram]
+    programs: list[TimeTableProgram | IPTVTimeTableProgram]
     # サブチャンネルのリスト (8時間ルールに該当しないサブチャンネルのみ)
     ## 同一 TS 内のサブチャンネルが1日あたり8時間以上放送されている場合、
     ## そのサブチャンネルは独立したチャンネル列として表示され、このフィールドには含まれない

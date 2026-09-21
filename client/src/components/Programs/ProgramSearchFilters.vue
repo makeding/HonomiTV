@@ -922,11 +922,12 @@ const buildCondition = (): IProgramSearchCondition => {
         condition.service_ranges = null;
     } else {
         condition.service_ranges = selectableChannels.value
-            .filter((channel) => selectedServiceKeys.value.has(getChannelServiceKey(channel)) === true)
+            .filter((channel) => selectedServiceKeys.value.has(getChannelServiceKey(channel)) === true &&
+                channel.network_id !== null && channel.service_id !== null)
             .map((channel) => ({
-                network_id: channel.network_id,
+                network_id: channel.network_id!,
                 transport_stream_id: channel.transport_stream_id ?? 0,
-                service_id: channel.service_id,
+                service_id: channel.service_id!,
             }));
     }
 

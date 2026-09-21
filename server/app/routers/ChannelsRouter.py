@@ -25,6 +25,7 @@ from app.utils import (
 )
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
+from app.utils.JellyfinClient import JellyfinClient, JellyfinError, ToIPTVChannel
 from app.utils.JikkyoClient import JikkyoClient
 from app.utils.TSInformation import TSInformation
 
@@ -53,6 +54,18 @@ async def GetChannel(channel_id: Annotated[str, Path(description='チャンネ�
         )
 
     return channel
+
+
+async def GetIPTVChannels() -> tuple[list[schemas.IPTVChannel], str | None]:
+    """Jellyfin の障害を放送波チャンネル一覧へ波及させず IPTV カテゴリだけに留める。"""
+    if JellyfinClient.is_configured() is False:
+        return ([], None)
+    try:
+        channels = [channel for item in await JellyfinClient.get_channels() if (channel := ToIPTVChannel(item)) is not None]
+        return (channels, None)
+    except JellyfinError as error:
+        logging.warning(f'[ChannelsRouter][GetIPTVChannels] {error}')
+        return ([], str(error))
 
 
 @router.get(
@@ -118,17 +131,20 @@ async def ChannelsAPI():
         ],
     ))
 
-    # 並行して実行
-    channels, pf_programs = await asyncio.gather(*tasks)
+    # Jellyfin への接続失敗はネットワークテレビの領域にだけ明示し、ローカル放送局を返し続ける
+    channels, pf_programs, iptv_result = await asyncio.gather(*tasks, GetIPTVChannels())
+    iptv_channels, iptv_error = iptv_result
 
     # レスポンスの雛形
-    result = {
+    result: dict[str, Any] = {
         'GR': [],
         'BS': [],
         'CS': [],
         'CATV': [],
         'SKY': [],
         'BS4K': [],
+        'IPTV': iptv_channels,
+        'source_errors': {'IPTV': iptv_error},
     }
 
     # チャンネルごとに実行
@@ -263,11 +279,25 @@ async def ChannelsAPI():
     response_model = schemas.LiveChannel,
 )
 async def ChannelAPI(
-    channel: Annotated[Channel, Depends(GetChannel)],
+    channel_id: Annotated[str, Path(description='チャンネル ID (id or display_channel_id) 。ex: NID32736-SID1024, gr011, jellyfin-...')],
 ):
     """
     指定されたチャンネルの情報を取得する。
     """
+
+    if channel_id.startswith('jellyfin-'):
+        if JellyfinClient.is_configured() is False:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Network TV channel was not found')
+        try:
+            for item in await JellyfinClient.get_channels():
+                channel = ToIPTVChannel(item)
+                if channel is not None and channel.display_channel_id == channel_id:
+                    return channel
+        except JellyfinError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Network TV channel was not found')
+
+    channel = await GetChannel(channel_id)
 
     # 現在と次の番組情報を取得
     channel.program_present, channel.program_following = await channel.getCurrentAndNextProgram()
@@ -473,6 +503,19 @@ async def ChannelLogoAPI(
     # HTTP レスポンスヘッダーの Cache-Control の設定
     ## 1ヶ月キャッシュする
     CACHE_CONTROL = 'public, no-transform, immutable, max-age=2592000'
+
+    # ***** ネットワークテレビのロゴを取得 *****
+    if channel_id.startswith('jellyfin-'):
+        try:
+            upstream_id = channel_id.removeprefix('jellyfin-')
+            logo_data, logo_media_type = await JellyfinClient.get_channel_logo(upstream_id)
+            return Response(
+                content=logo_data,
+                media_type=logo_media_type,
+                headers={'Cache-Control': 'public, max-age=3600'},
+            )
+        except JellyfinError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Network TV channel logo was not found')
 
     # ***** チャンネル情報を取得 *****
 

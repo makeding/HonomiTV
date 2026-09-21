@@ -36,11 +36,11 @@ export interface ICaptureExifData {
     // 番組開始時刻から換算したキャプチャ位置 (秒)
     captured_playback_position: number;
     // チャンネルの network_id
-    network_id: number;
+    network_id: number | null;
     // チャンネルの service_id
-    service_id: number;
+    service_id: number | null;
     // 番組の event_id
-    event_id: number;
+    event_id: number | null;
     // 番組名
     title: string;
     // 番組概要

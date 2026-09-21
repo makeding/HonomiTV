@@ -406,6 +406,15 @@ class ServerSettingsNotificationService(BaseModel):
 class _ServerSettingsNotifications(BaseModel):
     services: list[ServerSettingsNotificationService] = []
 
+
+class JellyfinSettings(BaseModel):
+    """Jellyfin Live TV の接続に必要なサーバー設定。"""
+
+    enabled: bool = False
+    url: Annotated[Url, UrlConstraints(allowed_schemes=['http', 'https'])] = Url('http://127.0.0.1:8096/')
+    username: str = ''
+    password: str = ''
+
 class ServerSettings(BaseModel):
     general: _ServerSettingsGeneral = _ServerSettingsGeneral()
     server: _ServerSettingsServer = _ServerSettingsServer()
@@ -420,6 +429,7 @@ class ServerSettings(BaseModel):
 # _CONFIG には直接アクセスせず、Config() 関数を通してアクセスする
 
 _CONFIG: ServerSettings | None = None
+_JELLYFIN_CONFIG: JellyfinSettings | None = None
 _CONFIG_YAML_PATH = BASE_DIR.parent / 'config.yaml'
 _DOCKER_PATH_PREFIX = '/host-rootfs'
 
@@ -467,7 +477,7 @@ def LoadConfig(bypass_validation: bool = False) -> ServerSettings:
         default_config_dict = ServerSettings().model_dump(mode='json')
         return merge_dicts(default_config_dict, config_dict)
 
-    global _CONFIG, _CONFIG_YAML_PATH, _DOCKER_PATH_PREFIX
+    global _CONFIG, _JELLYFIN_CONFIG, _CONFIG_YAML_PATH, _DOCKER_PATH_PREFIX
     assert _CONFIG is None, 'LoadConfig() has already been called.'
 
     # 循環参照を避けるために遅延インポート
@@ -546,6 +556,10 @@ def LoadConfig(bypass_validation: bool = False) -> ServerSettings:
     else:
         _CONFIG = ServerSettings.model_validate(config_dict, context={'bypass_validation': True})
         # logging.debug('Server settings loaded (bypassed validation).')
+
+    # Jellyfin の認証情報はクライアント設定 API のレスポンスへ含めない。
+    # ServerSettings の公開モデルへ混ぜるとパスワードがブラウザへ返るため、専用のサーバー内キャッシュへ分離する。
+    _JELLYFIN_CONFIG = JellyfinSettings.model_validate(config_dict.get('jellyfin', {}), context={'bypass_validation': True})
 
     return _CONFIG
 
@@ -672,6 +686,18 @@ def Config() -> ServerSettings:
     global _CONFIG
     assert _CONFIG is not None, 'Server settings have not been initialized.'
     return _CONFIG
+
+
+def GetJellyfinConfig() -> JellyfinSettings:
+    """
+    サーバー内で利用する Jellyfin 設定を返す。
+
+    Returns:
+        JellyfinSettings: ブラウザへ公開しない Jellyfin 設定。
+    """
+
+    assert _JELLYFIN_CONFIG is not None, 'Jellyfin settings have not been initialized.'
+    return _JELLYFIN_CONFIG
 
 
 def GetServerPort() -> int:

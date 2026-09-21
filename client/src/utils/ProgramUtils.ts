@@ -1,5 +1,5 @@
 
-import { IProgram } from '@/services/Programs';
+import { ILiveProgram } from '@/services/Programs';
 import { IRecordedProgram } from '@/services/Videos';
 import Utils, { dayjs } from '@/utils';
 
@@ -351,7 +351,7 @@ export class ProgramUtils {
      * @param program 番組情報
      * @returns ショッピング・通販枠なら true
      */
-    static isShoppingProgram(program: IProgram): boolean {
+    static isShoppingProgram(program: ILiveProgram): boolean {
         return program.genres?.some((genre) => genre.middle === 'ショッピング・通販') ?? false;
     }
 
@@ -362,7 +362,7 @@ export class ProgramUtils {
      * @param key 番組情報のオブジェクトから取り出すプロパティのキー
      * @returns 装飾した文字列
      */
-    static decorateProgramInfo(program: IProgram | IRecordedProgram | null, key: string): string {
+    static decorateProgramInfo(program: ILiveProgram | IRecordedProgram | null, key: string): string {
 
         // program が空でないかつ、program[key] が存在する
         if (program !== null && program[key] !== null) {
@@ -414,7 +414,7 @@ export class ProgramUtils {
      * @param program 番組情報
      * @returns 番組の進捗状況（%単位）
      */
-    static getProgramProgress(program: IProgram | IRecordedProgram | null): number {
+    static getProgramProgress(program: ILiveProgram | IRecordedProgram | null): number {
 
         // program が空でない
         if (program !== null) {
@@ -443,7 +443,7 @@ export class ProgramUtils {
      * @param is_short 時刻のみ返すかどうか
      * @returns 番組の放送時刻
      */
-    static getProgramTime(program: IProgram | IRecordedProgram | null, is_short: boolean = false): string {
+    static getProgramTime(program: ILiveProgram | IRecordedProgram | null, is_short: boolean = false): string {
 
         // program が空でなく、かつ番組時刻が初期値でない
         if (program !== null && program.start_time !== '2000-01-01T00:00:00+09:00') {
@@ -685,7 +685,7 @@ export class ProgramUtils {
      * @param use_kanji 1:30:00 ではなく「1時間30分00秒」のような形式で返すかどうか
      * @returns フォーマットされた番組の長さ
      */
-    static getProgramDuration(program: IProgram | IRecordedProgram, use_kanji: boolean = false): string {
+    static getProgramDuration(program: ILiveProgram | IRecordedProgram, use_kanji: boolean = false): string {
         // 録画番組の場合は recorded_video.duration を使用
         if ('recorded_video' in program) {
             const duration = program.recorded_video.duration;

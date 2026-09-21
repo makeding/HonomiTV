@@ -54,6 +54,7 @@ from app.utils.EventLoopBlockDetector import (
 )
 from app.utils.FastAPITaskUtil import repeat_every
 from app.utils.HardwareDevice import InitializeVAAPIHardwareDevices
+from app.utils.JellyfinClient import JellyfinClient
 
 
 # もし Config() の実行時に AssertionError が発生した場合は、LoadConfig() を実行してサーバー設定データをロードする
@@ -294,6 +295,12 @@ async def UpdateChannelAndProgram():
 @repeat_every(seconds=0.5 * 60, wait_first=0.5 * 60, logger=logging.logger)
 async def UpdateChannelJikkyoStatus():
     await Channel.updateJikkyoStatus()
+
+# 失われたブラウザ接続や上流の一時障害で残ったネットテレビの LiveStream を回収する。
+@app.on_event('startup')
+@repeat_every(seconds=30, wait_first=30, logger=logging.logger)
+async def CollectExpiredNetworkTVSessions():
+    await JellyfinClient.collect_expired_playbacks()
 
 # 30分に1回、連携済み Bangumi アカウントの在看・看過一覧から Series の条目情報を更新する。
 ## 条目検索を Series ごとに行わず、アカウントごとの收藏一覧を候補プールとして一括照合する。

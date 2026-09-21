@@ -44,13 +44,12 @@
                     <span>番組詳細</span>
                 </v-btn>
                 <!-- 録画予約ボタン: 予約なしの場合は追加、予約ありの場合は有効/無効切替 -->
-                <v-btn variant="flat" size="small"
+                <v-btn v-if="canReserve && !isPast" variant="flat" size="small"
                     class="timetable-program-cell__action-button"
                     :class="{
                         'timetable-program-cell__action-button--reserved': hasReservation && !isReservationDisabled,
                         'timetable-program-cell__action-button--disabled-reservation': isReservationDisabled,
                     }"
-                    v-if="!isPast"
                     @click.stop="onQuickReserve">
                     <Icon :icon="reservationButtonIcon" width="16px" />
                     <span>{{ reservationButtonLabel }}</span>
@@ -175,35 +174,39 @@ const isExpanded = computed(() => {
  * 予約がある場合
  */
 const hasReservation = computed(() => {
-    return props.program.reservation !== null;
+    return 'reservation' in props.program && props.program.reservation !== null;
+});
+
+const canReserve = computed(() => {
+    return props.channel.capabilities.recording && !props.isPast;
 });
 
 /**
  * 録画中の場合
  */
 const isRecording = computed(() => {
-    return props.program.reservation?.status === 'Recording';
+    return 'reservation' in props.program && props.program.reservation?.status === 'Recording';
 });
 
 /**
  * 予約が無効の場合
  */
 const isReservationDisabled = computed(() => {
-    return props.program.reservation?.status === 'Disabled';
+    return 'reservation' in props.program && props.program.reservation?.status === 'Disabled';
 });
 
 /**
  * 一部のみ録画の場合
  */
 const isPartialRecording = computed(() => {
-    return props.program.reservation?.recording_availability === 'Partial';
+    return 'reservation' in props.program && props.program.reservation?.recording_availability === 'Partial';
 });
 
 /**
  * 録画不可の場合
  */
 const isUnavailableRecording = computed(() => {
-    return props.program.reservation?.recording_availability === 'Unavailable';
+    return 'reservation' in props.program && props.program.reservation?.recording_availability === 'Unavailable';
 });
 
 /**

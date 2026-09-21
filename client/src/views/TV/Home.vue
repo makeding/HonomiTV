@@ -53,7 +53,7 @@
                                                     <path fill="currentColor" d="M572.52 241.4C518.29 135.59 410.93 64 288 64S57.68 135.64 3.48 241.41a32.35 32.35 0 0 0 0 29.19C57.71 376.41 165.07 448 288 448s230.32-71.64 284.52-177.41a32.35 32.35 0 0 0 0-29.19zM288 400a144 144 0 1 1 144-144a143.93 143.93 0 0 1-144 144zm0-240a95.31 95.31 0 0 0-25.31 3.79a47.85 47.85 0 0 1-66.9 66.9A95.78 95.78 0 1 0 288 160z"></path>
                                                 </svg>
                                                 <span class="ml-1">視聴数:</span>
-                                                <span class="ml-1">{{home_channel.viewer_count}}</span>
+                                                <span class="ml-1">{{home_channel.viewer_count ?? '--'}}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -127,6 +127,14 @@
                         <div class="mt-1 text-text-darken-1">再度チャンネルスキャンを行ってください。</div>
                     </div>
                 </div>
+                <div v-if="activeChannelType === 'ネット' && channelsStore.source_errors.IPTV !== null"
+                    class="channels-list pinned-container d-flex justify-center align-center w-100" style="flex-grow: 1;">
+                    <div class="d-flex justify-center align-center flex-column">
+                        <h2>ネットテレビのチャンネルを読み込めませんでした。</h2>
+                        <div class="mt-2 text-text-darken-1">{{ channelsStore.source_errors.IPTV }}</div>
+                        <v-btn class="mt-4" variant="flat" @click="channelsStore.update(true)">再試行</v-btn>
+                    </div>
+                </div>
             </div>
         </main>
         <div v-ripple class="floating-button" @click="$router.push('/timetable/')">
@@ -161,7 +169,7 @@ interface HomeChannel {
     representative: ILiveChannel;
     channels: ILiveChannel[];
     jikkyo_force: number | null;
-    viewer_count: number;
+    viewer_count: number | null;
 }
 
 export default defineComponent({
@@ -219,6 +227,9 @@ export default defineComponent({
             }
 
             return home_channels_list_with_pinned;
+        },
+        activeChannelType(): ChannelTypePretty | null {
+            return Array.from(this.home_channels_list_with_pinned.keys())[this.active_tab_index] ?? null;
         },
     },
     watch: {
@@ -366,7 +377,11 @@ export default defineComponent({
         appendHomeChannel(home_channel: HomeChannel, channel: ILiveChannel) {
             home_channel.channels.push(channel);
             home_channel.representative = this.selectHomeChannelRepresentative(home_channel.channels);
-            home_channel.viewer_count += channel.viewer_count;
+            if (home_channel.viewer_count !== null && channel.viewer_count !== null) {
+                home_channel.viewer_count += channel.viewer_count;
+            } else {
+                home_channel.viewer_count = null;
+            }
 
             // 同一番組の重複チャンネルでは同じ実況勢いが返るケースが多い
             // 合算すると二重計上に見えてしまうため、表示値は最大値に留める
@@ -524,7 +539,7 @@ export default defineComponent({
         // ホーム画面のカードに表示するチャンネル名を取得する
         getHomeChannelDisplayName(home_channel: HomeChannel): string {
             const channel = home_channel.representative;
-            return `Ch: ${channel.channel_number} ${channel.name}`;
+            return channel.type === 'IPTV' ? channel.name : `Ch: ${channel.channel_number} ${channel.name}`;
         },
 
         // ホーム画面の合成カード内に表示する、代表チャンネル以外のチャンネルを取得する

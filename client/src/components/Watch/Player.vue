@@ -19,6 +19,12 @@
             :class="{'watch-player__buffering--display': playerStore.is_video_buffering}">
         </v-progress-circular>
         <div class="watch-player__dplayer"></div>
+        <div v-if="playback_mode === 'Live' && playerStore.live_playback_error !== null"
+            class="watch-player__session-error" role="alert">
+            <p>ライブ再生を開始・継続できませんでした。</p>
+            <p>{{ playerStore.live_playback_error }}</p>
+            <v-btn @click="playerStore.event_emitter.emit('LivePlaybackRetry')">再試行</v-btn>
+        </div>
         <div class="watch-player__dplayer-setting-cover"
             :class="{'watch-player__dplayer-setting-cover--display': playerStore.is_player_setting_panel_open}"
             @click="handleSettingCoverClick"></div>
@@ -87,6 +93,18 @@ const handleSettingCoverClick = () => {
 
 </script>
 <style lang="scss">
+
+// 失敗と再試行はプレイヤーの確保済み領域に表示し、周囲のチャンネルやパネルを移動させない。
+.watch-player__session-error {
+    position: absolute;
+    inset: 15% 12%;
+    z-index: 6;
+    overflow: auto;
+    padding: 20px;
+    border-radius: 8px;
+    background: rgb(var(--v-theme-background));
+    p { margin-bottom: 12px; overflow-wrap: anywhere; }
+}
 
 // DPlayer のデフォルトスタイルを上書き
 .watch-player__dplayer {

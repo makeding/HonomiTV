@@ -17,7 +17,7 @@
         </div>
         <!-- チャンネル情報 -->
         <div class="timetable-channel-header__info">
-            <span class="timetable-channel-header__number">{{ channel.channel_number }}</span>
+            <span v-if="channel.type !== 'IPTV'" class="timetable-channel-header__number">{{ channel.channel_number }}</span>
             <span class="timetable-channel-header__name">{{ channel.name }}</span>
         </div>
     </router-link>

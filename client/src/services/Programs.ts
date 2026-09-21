@@ -6,6 +6,7 @@ import { IChannel } from '@/services/Channels';
 
 /** 番組情報を表すインターフェイス */
 export interface IProgram {
+    source: 'Broadcast';
     id: string;
     channel_id: string;
     network_id: number;
@@ -30,8 +31,24 @@ export interface IProgram {
     secondary_audio_sampling_rate: string | null;
 }
 
+/** ネットテレビ由来の番組情報。放送波専用の識別子やメディア情報は持たない。 */
+export interface IIPTVProgram {
+    source: 'Jellyfin';
+    id: string;
+    channel_id: string;
+    title: string;
+    description: string;
+    start_time: string;
+    end_time: string;
+    duration: number;
+    genres: { major: string; middle: string; }[];
+}
+
+export type ILiveProgram = IProgram | IIPTVProgram;
+
 /** 番組情報を表すインターフェイスのデフォルト値 */
 export const IProgramDefault: IProgram = {
+    source: 'Broadcast',
     id: 'NID0-SID0-EID0',
     channel_id: 'NID0-SID0',
     network_id: 0,
@@ -122,6 +139,7 @@ export interface IProgramSearchConditionDate {
 export interface ITimeTable {
     channels: ITimeTableChannel[];
     date_range: ITimeTableDateRange;
+    source_errors: { IPTV: string | null; };
 }
 
 /**
@@ -154,9 +172,9 @@ export interface ITimeTableSubchannel {
 /**
  * 番組表向けの番組情報 (IProgram に予約情報を追加したもの)
  */
-export interface ITimeTableProgram extends IProgram {
+export type ITimeTableProgram = (IProgram & {
     reservation: ITimeTableProgramReservation | null;
-}
+}) | IIPTVProgram;
 
 /**
  * 番組表向けの録画予約情報
@@ -208,7 +226,7 @@ class Programs {
     static async fetchTimeTable(
         start_time: Dayjs,
         end_time: Dayjs,
-        channel_type?: 'GR' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K',
+        channel_type?: 'GR' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K' | 'IPTV',
         pinned_channel_ids?: string[],
     ): Promise<ITimeTable | null> {
 

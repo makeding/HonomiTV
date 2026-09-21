@@ -72,6 +72,8 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
      * ref: https://github.com/xtne6f/EDCB/blob/work-plus-s-230212/ini/HttpPublic/legacy/util.lua#L444-L497
      */
     public run(decoded_callback: (message: ResponseMessage | IProgramPF) => void): void {
+        // 放送識別子を持たないチャンネルに PSI デコーダーを起動しない。
+        if (this.channel.service_id === null || !this.channel.capabilities.data_broadcasting) return;
 
         // TS ストリームがデコードされた際のハンドラーをセット
         // web-bml には字幕表示機能もあるが、mpegts.js 側で既に対応しているため敢えて無効化している

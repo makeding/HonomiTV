@@ -14,6 +14,7 @@ export class ChannelUtils {
      */
     static getChannelType(display_channel_id: string): ChannelType | null {
         try {
+            if (display_channel_id.startsWith('jellyfin-')) return 'IPTV';
             const result = display_channel_id.match('(?<channel_type>[a-z]+(?:4k)?)\\d+')?.groups?.channel_type.toUpperCase();
             if (!result) return null;
             switch (result) {
@@ -23,6 +24,7 @@ export class ChannelUtils {
                 case 'CATV': return 'CATV';
                 case 'SKY': return 'SKY';
                 case 'BS4K': return 'BS4K';
+                case 'IPTV': return 'IPTV';
                 // ChannelType のいずれにもマッチしない場合
                 default: return null;
             }

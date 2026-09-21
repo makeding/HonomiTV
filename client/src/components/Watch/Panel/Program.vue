@@ -52,7 +52,7 @@
             <div v-ripple="isRecordButtonClickable"
                 class="program-info__record-button"
                 :class="{
-                    'program-info__record-button--disabled': !isEDCBBackend,
+                    'program-info__record-button--disabled': !isEDCBBackend || !canRecord,
                     'program-info__record-button--preparing': isPreparing,
                 }"
                 @click="handleRecordButtonClick">
@@ -68,6 +68,10 @@
                     <span style="margin-left: 5px;">録画開始中...</span>
                 </template>
                 <!-- 未予約 (EDCB バックエンド): クリックで録画開始 -->
+                <template v-else-if="!canRecord">
+                    <Icon icon="fluent:record-16-regular" width="17px" height="17px" style="margin-bottom: -1px" />
+                    <span style="margin-left: 5px;">ネットテレビでは録画できません</span>
+                </template>
                 <template v-else-if="isEDCBBackend">
                     <Icon icon="fluent:record-16-regular" width="17px" height="17px"
                         style="color: #EF5350; margin-bottom: -1px" />
@@ -119,7 +123,7 @@
         </v-dialog>
         <section class="program-detail-container">
             <div class="program-detail" :key="detail_heading"
-                v-for="(detail_text, detail_heading) in channelsStore.channel.current.program_present?.detail ?? {}">
+                v-for="(detail_text, detail_heading) in currentProgramDetail">
                 <h2 class="program-detail__heading">{{detail_heading}}</h2>
                 <div class="program-detail__text" v-html="Utils.URLtoLink(detail_text)"></div>
             </div>
@@ -176,6 +180,13 @@ export default defineComponent({
             }
             return this.serverSettingsStore.server_settings.general.backend === 'EDCB';
         },
+        canRecord(): boolean {
+            return this.channelsStore.channel.current.capabilities.recording;
+        },
+        currentProgramDetail(): { [key: string]: string; } {
+            const program = this.channelsStore.channel.current.program_present;
+            return program !== null && program.source === 'Broadcast' ? program.detail : {};
+        },
 
         // 現在の番組が録画中かどうか
         isRecording(): boolean {
@@ -195,7 +206,7 @@ export default defineComponent({
         // 録画ボタンがクリック可能かどうか（v-ripple エフェクトの表示判定に使用）
         // 録画中（停止ダイアログを開く）または未予約 (EDCB バックエンド) の場合のみクリック可能
         isRecordButtonClickable(): boolean {
-            return this.isRecording || (this.isEDCBBackend && !this.hasReservation && !this.is_starting_recording);
+            return this.canRecord && (this.isRecording || (this.isEDCBBackend && !this.hasReservation && !this.is_starting_recording));
         },
 
         // 録画予約状態チェック用の現在番組 ID
@@ -234,7 +245,7 @@ export default defineComponent({
             // channelsStore.channel.current.program_present は PSI/SI 取得済みならリアルタイムの event_id を含み、
             // 未取得なら channels API のデータ (DB スナップショット) が使用される
             const programPresent = this.channelsStore.channel.current.program_present;
-            if (this.isEDCBBackend !== true || programPresent === null) {
+            if (this.isEDCBBackend !== true || this.canRecord !== true || programPresent === null || programPresent.source !== 'Broadcast') {
                 this.reservation = null;
                 return false;
             }
@@ -254,7 +265,7 @@ export default defineComponent({
                 }
 
                 // 通信待ちの間に EDCB 以外へ切り替わった場合も結果を破棄する
-                if (this.isEDCBBackend !== true) {
+                if (this.isEDCBBackend !== true || this.canRecord !== true) {
                     this.reservation = null;
                     return false;
                 }
@@ -292,6 +303,10 @@ export default defineComponent({
                 Message.warning('録画予約機能は EDCB バックエンド選択時のみ利用できます。');
                 return;
             }
+            if (this.canRecord !== true) {
+                Message.warning('ネットテレビでは録画できません。');
+                return;
+            }
             // 未予約の場合は録画を開始
             this.startRecording();
         },
@@ -307,7 +322,7 @@ export default defineComponent({
             }
             // channels API のデータ、または PSI/SI デコード結果が反映された番組情報を使用
             const programPresent = this.channelsStore.channel.current.program_present;
-            if (programPresent === null) {
+            if (programPresent === null || programPresent.source !== 'Broadcast' || this.canRecord !== true) {
                 return;
             }
             // EIT[p/f] の duration が未定の場合は、EDCB に投入する録画時間を決められないため予約しない

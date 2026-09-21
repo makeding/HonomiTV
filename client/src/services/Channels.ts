@@ -1,13 +1,21 @@
 
 import APIClient from '@/services/APIClient';
-import { IProgram, IProgramDefault } from '@/services/Programs';
+import { ILiveProgram, IProgramDefault } from '@/services/Programs';
 
 
 /** チャンネルタイプの型 */
-export type ChannelType = 'GR' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K';
+export type ChannelType = 'GR' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K' | 'IPTV';
 
 // チャンネルタイプの型 (実際のチャンネルリストに表示される表現)
-export type ChannelTypePretty = 'ピン留め' | '地デジ' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K';
+export type ChannelTypePretty = 'ピン留め' | '地デジ' | 'BS' | 'CS' | 'CATV' | 'SKY' | 'BS4K' | 'ネット';
+
+export interface IChannelCapabilities {
+    live_stream: boolean;
+    live_stream_session: boolean;
+    data_broadcasting: boolean;
+    recording: boolean;
+    remote_playback: boolean;
+}
 
 /** 地デジ放送エリアの型 (北海道は7分割、計53選択肢) */
 export type TerrestrialRegion =
@@ -26,10 +34,10 @@ export type TerrestrialRegion =
 export interface IChannel {
     id: string;
     display_channel_id: string;
-    network_id: number;
-    service_id: number;
+    network_id: number | null;
+    service_id: number | null;
     transport_stream_id: number | null;
-    remocon_id: number;
+    remocon_id: number | null;
     channel_number: string;
     type: ChannelType;
     name: string;
@@ -41,15 +49,17 @@ export interface IChannel {
     is_subchannel: boolean;
     is_radiochannel: boolean;
     is_watchable: boolean;
+    source: 'Broadcast' | 'Jellyfin';
+    capabilities: IChannelCapabilities;
 }
 
 /** 現在放送中のチャンネル情報を表すインターフェイス */
 export interface ILiveChannel extends IChannel {
     // 以下はすべて動的に生成される TV ライブストリーミング用の追加カラム
     is_display: boolean;
-    viewer_count: number;
-    program_present: IProgram | null;
-    program_following: IProgram | null;
+    viewer_count: number | null;
+    program_present: ILiveProgram | null;
+    program_following: ILiveProgram | null;
 }
 
 /** 現在放送中のチャンネル情報を表すインターフェイスのデフォルト値 */
@@ -67,6 +77,14 @@ export const ILiveChannelDefault: ILiveChannel = {
     is_subchannel: false,
     is_radiochannel: false,
     is_watchable: true,
+    source: 'Broadcast',
+    capabilities: {
+        live_stream: true,
+        live_stream_session: false,
+        data_broadcasting: true,
+        recording: true,
+        remote_playback: true,
+    },
     terrestrial_regions: null,
     is_display: true,
     viewer_count: 0,
@@ -82,6 +100,11 @@ export interface ILiveChannelsList {
     CATV: ILiveChannel[];
     SKY: ILiveChannel[];
     BS4K: ILiveChannel[];
+    IPTV: ILiveChannel[];
+}
+
+export interface ILiveChannelsResponse extends ILiveChannelsList {
+    source_errors: { IPTV: string | null; };
 }
 
 /** ニコニコ実況の WebSocket API の情報を表すインターフェイス */
@@ -100,10 +123,10 @@ class Channels {
      * すべてのチャンネルの情報を取得する
      * @return すべてのチャンネルの情報
      */
-    static async fetchAllChannels(): Promise<ILiveChannelsList | null> {
+    static async fetchAllChannels(): Promise<ILiveChannelsResponse | null> {
 
         // API リクエストを実行
-        const response = await APIClient.get<ILiveChannelsList>('/channels');
+        const response = await APIClient.get<ILiveChannelsResponse>('/channels');
 
         // エラー処理
         if (response.type === 'error') {

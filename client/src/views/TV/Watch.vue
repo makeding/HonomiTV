@@ -11,7 +11,7 @@ import PlayerController from '@/services/player/PlayerController';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
 import useSettingsStore from '@/stores/SettingsStore';
-import Utils from '@/utils';
+import Utils, { dayjs } from '@/utils';
 
 // PlayerController のインスタンス
 // data() 内に記述すると再帰的にリアクティブ化され重くなる上リアクティブにする必要自体がないので、グローバル変数にしている
@@ -28,6 +28,9 @@ export default defineComponent({
             // ページ遷移時に setInterval(), setTimeout() の実行を止めるのに使う
             // setInterval(), setTimeout() の返り値を登録する
             interval_ids: [] as number[],
+            // 退出・切り替えのたびに更新し、古い更新応答でプレイヤーを作らない。
+            playback_generation: 0,
+            is_leaving: false,
         };
     },
     computed: {
@@ -40,6 +43,7 @@ export default defineComponent({
 
         // チャンネル ID をセット
         this.channelsStore.display_channel_id = this.$route.params.display_channel_id as string;
+        this.playerStore.event_emitter.on('LivePlaybackRetry', this.retryPlayback);
 
         // 再生セッションを初期化
         this.init();
@@ -53,6 +57,10 @@ export default defineComponent({
         // このとき this.interval_ids に登録された setTimeout がキャンセルされるため、
         // 後述の 0.5 秒の間にザッピングにより他のチャンネルに切り替えた場合は this.init() は実行されない
         const destroy_promise = this.destroy();
+        const generation = this.playback_generation;
+        const initializeIfCurrent = () => {
+            if (generation === this.playback_generation && this.is_leaving === false) return this.init();
+        };
 
         // チャンネル ID を次のチャンネルのものに切り替える
         this.channelsStore.display_channel_id = to.params.display_channel_id as string;
@@ -65,12 +73,12 @@ export default defineComponent({
             if (this.playerStore.is_zapping === true) {
                 this.playerStore.is_zapping = false;
                 this.interval_ids.push(window.setTimeout(() => {
-                    destroy_promise.then(() => this.init());  // destroy() の実行完了を待ってから初期化する
+                    destroy_promise.then(initializeIfCurrent);  // destroy() の実行完了を待ってから初期化する
                 }, 0.5 * 1000));
 
             // 通常のチャンネル移動時は、すぐに再生セッションを初期化する
             } else {
-                destroy_promise.then(() => this.init());  // destroy() の実行完了を待ってから初期化する
+                destroy_promise.then(initializeIfCurrent);  // destroy() の実行完了を待ってから初期化する
             }
         })();
 
@@ -79,6 +87,8 @@ export default defineComponent({
     },
     // 終了前に実行
     beforeUnmount() {
+        this.is_leaving = true;
+        this.playerStore.event_emitter.off('LivePlaybackRetry', this.retryPlayback);
 
         // destroy() を実行
         // 別のページへ遷移するため、DPlayer のインスタンスを確実に破棄する
@@ -92,12 +102,25 @@ export default defineComponent({
     },
     methods: {
 
+        // 初期化失敗で DPlayer が存在しない場合も、画面自身が新しい再生を開始する。
+        async retryPlayback() {
+            if (this.playerStore.live_playback_error === null) return;
+            this.playerStore.live_playback_error = null;
+            await this.destroy();
+            if (this.is_leaving === false) await this.init(true);
+        },
+
         // 再生セッションを初期化する
-        async init() {
+        async init(force = false) {
+            const generation = ++this.playback_generation;
+            const channel_id = this.channelsStore.display_channel_id;
+            this.playerStore.live_playback_error = null;
+            this.playerStore.is_loading = true;
+            this.playerStore.is_video_buffering = true;
 
             // 00秒までの残り秒数を取得
             // 現在 16:01:34 なら 26 (秒) になる
-            const residue_second = 60 - new Date().getSeconds();
+            const residue_second = 60 - dayjs().second();
 
             // 00秒になるまで待ってから実行するタイマー
             // 番組は基本1分単位で組まれているため、20秒や45秒など中途半端な秒数で更新してしまうと番組情報の反映が遅れてしまう
@@ -114,7 +137,9 @@ export default defineComponent({
             }, residue_second * 1000));
 
             // チャンネル情報を更新 (初回)
-            await this.channelsStore.update();
+            await this.channelsStore.update(force);
+            if (generation !== this.playback_generation || this.is_leaving ||
+                this.channelsStore.display_channel_id !== channel_id) return;
 
             // URL 上のチャンネル ID が未定義なら実行しない (フェイルセーフ)
             // 基本あり得ないはずだが、念のため
@@ -126,19 +151,29 @@ export default defineComponent({
             // もしこの時点でチャンネル名が「チャンネル情報取得エラー」の場合、
             // URL で指定された display_channel_id に紐づくチャンネル情報がないことを示しているので、404 ページにリダイレクト
             if (this.channelsStore.channel.current.name === 'チャンネル情報取得エラー') {
+                // 一時的な供給元の障害を 404 として扱わず、同じ視聴枠に復旧手段を残す。
+                if (channel_id.startsWith('jellyfin-')) {
+                    this.playerStore.live_playback_error = 'チャンネル情報を取得できませんでした。接続を確認して再試行してください。 [LIVE_CHANNEL_UNAVAILABLE]';
+                    this.playerStore.is_loading = false;
+                    this.playerStore.is_video_buffering = false;
+                    return;
+                }
                 await Utils.sleep(3);  // 3秒待機
+                if (generation !== this.playback_generation || this.is_leaving) return;
                 this.$router.push({path: '/not-found/'});
                 return;
             }
 
             // PlayerController を初期化
-            player_controller = new PlayerController('Live');
-            await player_controller.init();
+            const controller = new PlayerController('Live');
+            player_controller = controller;
+            await controller.init();
         },
 
         // 再生セッションを破棄する
         // チャンネルを切り替える際に実行される
         async destroy() {
+            ++this.playback_generation;
 
             // clearInterval() ですべての setInterval(), setTimeout() の実行を止める
             // clearInterval() と clearTimeout() は中身共通なので問題ない
@@ -151,8 +186,9 @@ export default defineComponent({
 
             // PlayerController を破棄
             if (player_controller !== null) {
-                await player_controller.destroy();
+                const controller = player_controller;
                 player_controller = null;
+                await controller.dispose();
             }
         }
     }

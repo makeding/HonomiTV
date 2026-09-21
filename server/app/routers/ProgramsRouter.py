@@ -19,6 +19,12 @@ from app.utils import NormalizeToJSTDatetime, ParseDatetimeStringToJST
 from app.utils.edcb import EventInfo, ReserveDataRequired, SearchKeyInfo
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
+from app.utils.JellyfinClient import (
+    JellyfinClient,
+    JellyfinError,
+    ToIPTVChannel,
+    ToIPTVProgram,
+)
 from app.utils.TSInformation import TSInformation
 
 
@@ -29,6 +35,37 @@ router = APIRouter(
 )
 
 TimeTableSubchannelGroupKey = tuple[Literal['TS', 'BSService'], int, int]
+
+
+async def GetIPTVTimeTable(
+    start_time: datetime,
+    end_time: datetime,
+    channel_type: str | None,
+    pinned_channel_ids: list[str] | None,
+) -> tuple[list[schemas.TimeTableChannel], str | None]:
+    """IPTV 番組表を取得する。Jellyfin 障害はローカル番組表を空にしない。"""
+    should_include = channel_type in (None, 'IPTV')
+    if pinned_channel_ids is not None:
+        should_include = any(channel_id.startswith('jellyfin-') for channel_id in pinned_channel_ids)
+    if should_include is False or JellyfinClient.is_configured() is False:
+        return ([], None)
+    try:
+        channels = [channel for item in await JellyfinClient.get_channels() if (channel := ToIPTVChannel(item)) is not None]
+        if pinned_channel_ids is not None:
+            order = {channel_id: index for index, channel_id in enumerate(pinned_channel_ids)}
+            channels = [channel for channel in channels if channel.id in order]
+            channels.sort(key=lambda channel: order[channel.id])
+        programs = [program for item in await JellyfinClient.get_programs(start_time, end_time, None) if (program := ToIPTVProgram(item)) is not None]
+        programs_by_channel: dict[str, list[schemas.IPTVTimeTableProgram]] = {channel.id: [] for channel in channels}
+        for program in programs:
+            if program.channel_id in programs_by_channel and program.end_time > start_time and program.start_time < end_time:
+                programs_by_channel[program.channel_id].append(
+                    schemas.IPTVTimeTableProgram.model_validate(program),
+                )
+        return ([schemas.TimeTableChannel(channel=channel, programs=programs_by_channel[channel.id]) for channel in channels], None)
+    except JellyfinError as error:
+        logging.warning(f'[ProgramsRouter][GetIPTVTimeTable] {error}')
+        return ([], str(error))
 
 
 def GetTimeTableChannelSortKey(channel_row: dict[str, Any]) -> tuple[int, int, int, int, str]:
@@ -366,7 +403,7 @@ async def ProgramSearchAPI(
 async def TimeTableAPI(
     start_time: Annotated[datetime | None, Query(description='取得開始日時 (ISO8601 形式)。省略時は現在時刻。')] = None,
     end_time: Annotated[datetime | None, Query(description='取得終了日時 (ISO8601 形式)。省略時は DB に存在する最終日時。')] = None,
-    channel_type: Annotated[Literal['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K'] | None, Query(description='チャンネル種別。省略時は全種別。')] = None,
+    channel_type: Annotated[Literal['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K', 'IPTV'] | None, Query(description='チャンネル種別。省略時は全種別。')] = None,
     pinned_channel_ids: Annotated[str | None, Query(description='チャンネル ID のカンマ区切りリスト (ピン留めチャンネル用)。指定時は channel_type より優先される。')] = None,
 ):
     """
@@ -418,6 +455,9 @@ async def TimeTableAPI(
     if pinned_channel_ids is not None and pinned_channel_ids.strip() != '':
         target_channel_ids = [cid.strip() for cid in pinned_channel_ids.split(',') if cid.strip()]
 
+    # ネットワークテレビは永続化せず、同じ時刻範囲で上流から取得する
+    iptv_task = GetIPTVTimeTable(start_time, end_time, channel_type, target_channel_ids)
+
     # チャンネル情報を raw SQL で取得 (Tortoise ORM のオーバーヘッドを回避)
     if target_channel_ids is not None:
         # 指定されたチャンネル ID のチャンネルのみ取得
@@ -434,7 +474,7 @@ async def TimeTableAPI(
         # 指定された順序でソート
         channel_id_order = {cid: idx for idx, cid in enumerate(target_channel_ids)}
         channels_result.sort(key=lambda c: channel_id_order.get(c['id'], float('inf')))  # type: ignore[arg-type]
-    elif channel_type is not None:
+    elif channel_type is not None and channel_type != 'IPTV':
         # 指定されたチャンネル種別のチャンネルのみ取得
         channels_query = """
             SELECT
@@ -459,11 +499,13 @@ async def TimeTableAPI(
         """
         channels_result = await connection.execute_query_dict(channels_query)
 
-    # チャンネルがない場合は空のレスポンスを返す
+    # チャンネルがない場合も IPTV は返す
     if not channels_result:
+        iptv_channels, iptv_error = await iptv_task
         return schemas.TimeTable(
-            channels=[],
+            channels=iptv_channels,
             date_range=schemas.TimeTableDateRange(earliest=earliest, latest=latest),
+            source_errors={'IPTV': iptv_error},
         )
 
     # チャンネル行データの真偽値を変換 (SQLite では 0/1)
@@ -743,7 +785,13 @@ async def TimeTableAPI(
     # result_channels のみを TypeAdapter で一括バリデートし、date_range は直接構築する
     channels_adapter = TypeAdapter(list[schemas.TimeTableChannel])
     validated_channels = channels_adapter.validate_python(result_channels)
+    iptv_channels, iptv_error = await iptv_task
+    all_channels = [*validated_channels, *iptv_channels]
+    if target_channel_ids is not None:
+        pinned_order = {channel_id: index for index, channel_id in enumerate(target_channel_ids)}
+        all_channels.sort(key=lambda entry: pinned_order.get(entry.channel.id, float('inf')))
     return schemas.TimeTable(
-        channels=validated_channels,
+        channels=all_channels,
         date_range=schemas.TimeTableDateRange(earliest=earliest, latest=latest),
+        source_errors={'IPTV': iptv_error},
     )

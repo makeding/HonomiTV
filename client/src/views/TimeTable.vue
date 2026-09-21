@@ -56,6 +56,11 @@
             <Navigation :icon-only="isNavigationIconOnly" />
             <div class="timetable-container" :class="{'timetable-container--loading': timetableStore.is_loading}">
                 <SPHeaderBar />
+                <v-alert v-if="selectedChannelTypeDisplay === 'ネット' && timetableStore.source_errors.IPTV !== null"
+                    class="mx-4 mt-3" type="error" variant="tonal" density="compact">
+                    ネットテレビの番組表を取得できませんでした。{{ timetableStore.source_errors.IPTV }}
+                    <template #append><v-btn size="small" variant="text" @click="timetableStore.fetchTimeTableData()">再試行</v-btn></template>
+                </v-alert>
                 <!-- スマホ/タブレット用コントロールバー -->
                 <div class="timetable-controls-mobile" v-if="isCompactControls">
                     <div class="timetable-controls-mobile__inner">
@@ -563,6 +568,12 @@ function onDateDisplayOffsetChange(offset: number): void {
  */
 async function onShowProgramDetail(programId: string, channel: IChannel, program: ITimeTableProgram): Promise<void> {
 
+    // ネットテレビの番組は放送波の録画予約契約を持たないため、専用の予約ドロワーへ渡さない。
+    if (channel.capabilities.recording === false || !('reservation' in program)) {
+        Message.info('ネットテレビの番組詳細では録画予約を利用できません。');
+        return;
+    }
+
     // 過去番組かどうかを判定
     const endTime = dayjs(program.end_time);
     isDrawerProgramPast.value = endTime.isBefore(dayjs());
@@ -648,6 +659,10 @@ async function onReservationDeleted(): Promise<void> {
  * @param program 番組情報
  */
 async function onQuickReserve(programId: string, channel: IChannel, program: ITimeTableProgram): Promise<void> {
+    if (channel.capabilities.recording === false || !('reservation' in program)) {
+        Message.warning('ネットテレビでは録画予約を利用できません。');
+        return;
+    }
     // 過去番組の場合は何もしない
     const endTime = dayjs(program.end_time);
     if (endTime.isBefore(dayjs())) {

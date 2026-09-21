@@ -15,6 +15,8 @@ import useSettingsStore from '@/stores/SettingsStore';
  * PlayerManager 側からのイベントも UI 側からのイベントも PlayerEvents を通じて行う
  */
 export type PlayerEvents = {
+    // 初期化前の失敗からも、視聴画面が所有する新しい再生を開始できる。
+    LivePlaybackRetry: undefined;
     // UI コンポーネントからプレイヤーに通知メッセージの送信を要求する
     // DPlayer.notice() の引数と同じで、そのまま DPlayer.notice() に渡される
     SendNotification: {
@@ -149,6 +151,9 @@ const usePlayerStore = defineStore('player', {
         // 既定でローディングとする
         is_loading: true,
 
+        // 共通ライブセッションの失敗理由。プレイヤー領域内の再試行操作と一緒に表示する。
+        live_playback_error: null as string | null,
+
         // プレイヤーが映像の再生をバッファリングしているか
         // 視聴開始時以外にも、ネットワークが遅くて再生が一時的に途切れたときなどで表示される
         // 既定でバッファリング中とする
@@ -254,6 +259,7 @@ const usePlayerStore = defineStore('player', {
             this.is_offline_playback = false;
             this.offline_video = null;
             this.is_loading = true;
+            this.live_playback_error = null;
             this.is_video_buffering = true;
             this.is_video_paused = false;
             this.is_background_display = false;

@@ -502,7 +502,7 @@ function isNextProgramReserved(
         return dayjs(p.start_time).valueOf() === programEndTime;
     });
     // 次の番組が存在し、予約されている場合は true
-    return nextProgram !== undefined && nextProgram.reservation !== null;
+    return nextProgram !== undefined && 'reservation' in nextProgram && nextProgram.reservation !== null;
 }
 
 /**

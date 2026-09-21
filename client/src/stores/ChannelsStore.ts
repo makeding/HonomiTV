@@ -23,7 +23,10 @@ const useChannelsStore = defineStore('channels', {
             CATV: [],
             SKY: [],
             BS4K: [],
+            IPTV: [],
         } as ILiveChannelsList,
+
+        source_errors: {IPTV: null} as {IPTV: string | null},
 
         // 初回のチャンネル情報更新が実行された後かどうか
         is_channels_list_initial_updated: false,
@@ -82,11 +85,11 @@ const useChannelsStore = defineStore('channels', {
                 program_following: IProgramError,
             };
 
-            // display_channel_id に一致するチャンネルタイプを取得する
-            // 取得できなかった場合、display_channel_id 自体が不正なため、エラー発生時用のダミーのチャンネル情報を返す
-            // このチャンネル情報が返されたとき、視聴画面側では 404 ページへのリダイレクトが行われる
-            const channel_type = ChannelUtils.getChannelType(this.display_channel_id);
-            if (channel_type === null) {
+            // display_channel_id は上流由来の安定 ID も取り得るため、放送チャンネル番号の正規表現で種別を推測しない。
+            const current_channel = Object.values(this.channels_list).flat().find(
+                (channel) => channel.display_channel_id === this.display_channel_id,
+            );
+            if (current_channel === undefined) {
                 return {
                     previous: ILiveChannelError,
                     current: ILiveChannelError,
@@ -94,20 +97,9 @@ const useChannelsStore = defineStore('channels', {
                 };
             }
 
-            // チャンネルタイプごとのチャンネル情報リストを取得する (すべてのチャンネルリストから探索するより効率的)
-            const channels: ILiveChannel[] = this.channels_list[channel_type];
-
-            // 起点にするチャンネル情報があるインデックスを取得
-            // 取得できなかった場合、display_channel_id に一致するチャンネル情報は存在しないため、エラー発生時用のダミーのチャンネル情報を返す
-            // このチャンネル情報が返されたとき、視聴画面側では 404 ページへのリダイレクトが行われる
+            // チャンネル送りは現在の分類の中だけで循環させる。
+            const channels = this.channels_list[current_channel.type];
             const current_channel_index = channels.findIndex((channel) => channel.display_channel_id === this.display_channel_id);
-            if (current_channel_index === -1) {
-                return {
-                    previous: ILiveChannelError,
-                    current: ILiveChannelError,
-                    next: ILiveChannelError,
-                };
-            }
 
             // 前のインデックスを取得する
             // インデックスがマイナスになった時は、最後のインデックスに巻き戻す
@@ -210,6 +202,7 @@ const useChannelsStore = defineStore('channels', {
             const channels_list_with_pinned = new Map<ChannelTypePretty, ILiveChannel[]>();
             channels_list_with_pinned.set('ピン留め', []);
             channels_list_with_pinned.set('地デジ', []);
+            channels_list_with_pinned.set('ネット', []);
 
             // 初回のチャンネル情報更新がまだ実行されていない or 実行中のときは最低限の上記2つだけで返す
             if (this.is_channels_list_initial_updated === false) {
@@ -267,6 +260,10 @@ const useChannelsStore = defineStore('channels', {
                             channels_list_with_pinned.get('BS4K')?.push(channel);
                             break;
                         }
+                        case 'IPTV': {
+                            channels_list_with_pinned.get('ネット')?.push(channel);
+                            break;
+                        }
                     }
                 }
             }
@@ -308,7 +305,7 @@ const useChannelsStore = defineStore('channels', {
                 if (channel_type === 'ピン留め') {
                     continue;
                 }
-                if (channels.length === 0) {
+                if (channels.length === 0 && channel_type !== 'ネット') {
                     channels_list_with_pinned.delete(channel_type);
                 }
             }
@@ -385,7 +382,9 @@ const useChannelsStore = defineStore('channels', {
                 // 大きなオブジェクトを扱う際は、細部のリアクティブを捨てることでパフォーマンスが向上する (下記記事が大変参考になりました)
                 // ref: https://speakerdeck.com/tbashiyy/shi-shu-mo-rekodoninai-euruvue-dot-jspuroziekutowoshi-xian-surutamenopahuomansutiyuningu
                 // ref: https://unyacat.net/2021/01/20/vue-freeze-faster/
-                this.channels_list = Utils.deepObjectFreeze(channels_list);
+                const {source_errors, ...channel_groups} = channels_list;
+                this.channels_list = Utils.deepObjectFreeze(channel_groups);
+                this.source_errors = source_errors;
 
                 // チャンネルリストの更新日時を更新
                 if (this.is_channels_list_initial_updated === false) {
@@ -422,6 +421,10 @@ const useChannelsStore = defineStore('channels', {
             // 受信環境の変化などでピン留め中チャンネルのチャンネル情報が取得できなくなった場合に備える
             const settings_store = useSettingsStore();
             settings_store.settings.pinned_channel_ids = settings_store.settings.pinned_channel_ids.filter((channel_id) => {
+                // Jellyfin の一時障害時は、復旧後にカードを戻せるようネットチャンネルのピンを残す。
+                if (this.source_errors.IPTV !== null && channel_id.startsWith('jellyfin-')) {
+                    return true;
+                }
                 const result = this.channels_list_with_pinned.get('ピン留め')?.some((channel) => channel.id === channel_id);
                 if (result === false) {
                     console.warn('[ChannelsStore] Deleted pinned channel ID:', channel_id);
