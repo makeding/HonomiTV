@@ -4,7 +4,7 @@
             <Icon icon="fluent:chevron-left-12-filled" width="21px" />
         </router-link>
         <div class="watch-header__broadcaster" v-if="playback_mode === 'Live'">
-            <div class="ch-sprite" :chid="channelsStore.channel.current.id">
+            <div class="ch-sprite" :class="{'channel-logo--iptv': channelsStore.channel.current.type === 'IPTV'}" :chid="channelsStore.channel.current.id">
                 <img loading="lazy" :src="`${Utils.api_base_url}/channels/${channelsStore.channel.current.id}/logo`">
             </div>
         </div>

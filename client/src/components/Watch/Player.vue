@@ -5,6 +5,7 @@
         'watch-player--video': playback_mode === 'Video',
         'watch-player--pure-black': settingsStore.settings.use_pure_black_player_background,
         'watch-player--data-broadcasting': playerStore.is_data_broadcasting_display,
+        'watch-player--net': playback_mode === 'Live' && channelsStore.channel.current.type === 'IPTV',
     }">
         <div class="watch-player__background-wrapper">
             <div class="watch-player__background" :class="{
@@ -89,6 +90,17 @@ const handleSettingCoverClick = () => {
 <style lang="scss">
 
 // DPlayer のデフォルトスタイルを上書き
+.watch-player--net {
+    // 実況非対応のネット視聴には、操作しても効果のないコメント設定を表示しない。
+    .dplayer-setting-showdan,
+    .dplayer-setting-danunlimit,
+    .dplayer-setting-danmaku,
+    .dplayer-comment-box,
+    .dplayer-comment-icon {
+        display: none !important;
+    }
+}
+
 .watch-player__dplayer {
     @include smartphone-vertical {
         overflow: visible !important;

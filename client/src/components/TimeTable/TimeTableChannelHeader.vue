@@ -10,7 +10,7 @@
             '--timetable-channel-name-size': `${nameFontSize}px`,
         }">
         <!-- チャンネルロゴ -->
-        <div class="timetable-channel-header__logo-wrapper">
+        <div class="timetable-channel-header__logo-wrapper" :class="{'channel-logo--iptv': channel.type === 'IPTV'}">
             <img class="timetable-channel-header__logo" loading="lazy" decoding="async"
                 :src="`${Utils.api_base_url}/channels/${channel.id}/logo`"
                 :alt="channel.name">

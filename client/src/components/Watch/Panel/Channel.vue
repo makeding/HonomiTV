@@ -27,7 +27,7 @@
                             <div class="channel__broadcaster">
                                 <div class="channel__broadcaster-icon">
                                     <div class="ch-sprite" :chid="channel.id">
-                                        <img loading="lazy" :src="`${Utils.api_base_url}/channels/${channel.id}/logo`">
+                                        <img loading="lazy" :class="{'channel-logo--iptv': channel.type === 'IPTV'}" :src="`${Utils.api_base_url}/channels/${channel.id}/logo`">
                                     </div>
                                 </div>
                                 <div class="channel__broadcaster-content">

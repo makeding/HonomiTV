@@ -26,6 +26,17 @@ general:
     # Mirakurun / mirakc と同じ PC に KonomiTV をインストールしている場合、localhost ではなく 127.0.0.1 の利用を推奨します。
     mirakurun_url: 'http://127.0.0.1:40772/'
 
+    # ============================== Jellyfin Live TV ==============================
+    # Jellyfin の Live TV を既存の「ネット」タブのネットテレビへ統合する設定です。
+    # この設定は HonomiTV サーバーから Jellyfin へ接続するためだけに使われ、
+    # パスワードや Jellyfin のアクセストークンがブラウザへ返されることはありません。
+    jellyfin:
+
+        enabled: false
+        url: 'http://127.0.0.1:8096/'
+        username: ''
+        password: ''
+
     # 利用するエンコーダー
     # FFmpeg・QSVEncC・NVEncC・VCEEncC・rkmppenc から選択してください。
     # FFmpeg はソフトウェアエンコーダーです。すべての PC で利用できますが、CPU に多大な負荷がかかり、パフォーマンスが悪いです。
@@ -48,17 +59,6 @@ general:
     # 有効にすると、ライブ視聴時のエンコーダーのログが server/logs/KonomiTV-Encoder-(ストリームID).log に保存されます。
     # さらにデバッグモードが有効のときは、デバッグログとしてリアルタイムにエンコーダーのログが出力されます。
     debug_encoder: false
-
-# ================================ Jellyfin Live TV ================================
-# Jellyfin の Live TV を既存の「ネット」タブのネットテレビへ統合する設定です。
-# この設定は HonomiTV サーバーから Jellyfin へ接続するためだけに使われ、
-# パスワードや Jellyfin のアクセストークンがブラウザへ返されることはありません。
-jellyfin:
-
-    enabled: false
-    url: 'http://127.0.0.1:8096/'
-    username: ''
-    password: ''
 
 # ================================ サーバーの設定 ================================
 server:

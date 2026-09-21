@@ -25,7 +25,7 @@ function createPlayer() {
 describe('ネットテレビの実メディア状態', () => {
     beforeEach(() => {
         vi.useFakeTimers();
-        Object.assign(state, {is_loading: true, is_video_buffering: true, is_background_display: true, live_stream_status: ''});
+        Object.assign(state, {is_loading: false, is_video_buffering: false, is_background_display: false, live_stream_status: ''});
     });
     afterEach(() => vi.useRealTimers());
 
@@ -35,9 +35,12 @@ describe('ネットテレビの実メディア状態', () => {
         const manager = new LiveSessionPlaybackManager(player, failure);
         await manager.init();
         expect(state.live_stream_status).toBe('Standby');
+        expect(state.is_background_display).toBe(true);
+        expect(state.is_loading).toBe(true);
         video.dispatchEvent(new Event('playing'));
         expect(state.is_loading).toBe(false);
         expect(state.is_video_buffering).toBe(false);
+        expect(state.is_background_display).toBe(false);
         expect(state.live_stream_status).toBe('ONAir');
         await vi.advanceTimersByTimeAsync(30000);
         expect(failure).not.toHaveBeenCalled();

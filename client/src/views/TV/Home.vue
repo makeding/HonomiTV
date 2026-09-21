@@ -32,7 +32,7 @@
                                 <!-- 以下では Icon コンポーネントを使うとチャンネルが多いときに高負荷になるため、意図的に SVG を直書きしている -->
                                 <div class="channel__broadcaster">
                                      <div class="channel__broadcaster-icon">
-                                        <div class="ch-sprite" :chid="home_channel.representative.id">
+                                        <div class="ch-sprite" :class="{'channel-logo--iptv': home_channel.representative.type === 'IPTV'}" :chid="home_channel.representative.id">
                                             <img loading="lazy" :src="`${Utils.api_base_url}/channels/${home_channel.representative.id}/logo`">
                                         </div>
                                     </div>
@@ -67,7 +67,7 @@
                                                 @click.prevent.stop="$router.push(`/tv/watch/${merged_channel.display_channel_id}`)"
                                                 @mousedown.prevent.stop=""> <!-- ← 親要素の波紋が広がらないように -->
                                                 <div class="ch-sprite" :chid="merged_channel.id">
-                                                    <img loading="lazy" :src="`${Utils.api_base_url}/channels/${merged_channel.id}/logo`">
+                                                    <img loading="lazy" :class="{'channel-logo--iptv': merged_channel.type === 'IPTV'}" :src="`${Utils.api_base_url}/channels/${merged_channel.id}/logo`">
                                                 </div>
                                             </div>
                                         </div>

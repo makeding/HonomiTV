@@ -10,7 +10,7 @@
             <v-spacer></v-spacer>
             <div class="panel-broadcaster" v-if="playback_mode === 'Live'">
                 <div class="panel-broadcaster__icon">
-                    <div class="ch-sprite" :chid="channelsStore.channel.current.id">
+                    <div class="ch-sprite" :class="{'channel-logo--iptv': channelsStore.channel.current.type === 'IPTV'}" :chid="channelsStore.channel.current.id">
                         <img loading="lazy" :src="`${Utils.api_base_url}/channels/${channelsStore.channel.current.id}/logo`">
                     </div>
                 </div>

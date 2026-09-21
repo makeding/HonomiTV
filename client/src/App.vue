@@ -328,6 +328,12 @@ body .route-container {
 }
 
 // カーソルをポインターにする
+.channel-logo--iptv,
+.channel-logo--iptv > img {
+    background-color: #fff !important;
+    object-fit: contain !important;
+}
+
 .cursor-pointer {
     cursor: pointer;
 }

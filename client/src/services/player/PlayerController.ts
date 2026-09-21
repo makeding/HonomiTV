@@ -374,6 +374,14 @@ class PlayerController {
         // KeyboardShortcutManager がこのタイミングで破棄される
         player_store.is_player_initialized = true;
 
+        // 放送 SSE の有無にかかわらず、セッション作成待ちから既存の読み込み背景を表示する。
+        if (this.playback_mode === 'Live') {
+            player_store.background_url = PlayerUtils.generatePlayerBackgroundURL();
+            player_store.is_background_display = true;
+            player_store.is_loading = true;
+            player_store.is_video_buffering = true;
+        }
+
         // ブラウザが H.265 / HEVC の再生に対応しているとき、以下の条件で H.265 / HEVC で再生する:
         // 1. 通信節約モードが有効な場合
         // 2. 録画ファイル自体が HEVC でエンコードされている場合（再エンコードなしでの配信が可能なため）
@@ -638,11 +646,11 @@ class PlayerController {
                     if (this.live_session_info !== null) {
                         return {
                             quality: [{
-                                name: 'ネットワークテレビ',
+                                name: 'Direct',
                                 type: this.live_session_info.stream_type,
                                 url: `${Utils.api_base_url}${this.live_session_info.stream_url.replace(/^\/api/, '')}`,
                             }],
-                            defaultQuality: 'ネットワークテレビ',
+                            defaultQuality: 'Direct',
                         };
                     }
                     // ライブストリーミング API のベース URL
@@ -890,7 +898,7 @@ class PlayerController {
             })(),
 
             // コメントの設定
-            danmaku: {
+            danmaku: this.playback_mode === 'Live' && channels_store.channel.current.type === 'IPTV' ? undefined : {
                 // コメントするユーザー名: 便宜上 KonomiTV に固定 (実際には利用されない)
                 user: 'KonomiTV',
                 // コメントの流れる速度
@@ -1579,7 +1587,9 @@ class PlayerController {
                     player_store.live_stream_status = 'Offline';
                     this.player?.notice(`${reason} プレイヤーの再起動ボタンで再試行できます。`, -1, undefined, '#FF6F6A');
                 })] : []),
-                ...(this.live_session_required === false ? [new LiveEventManager(this.player), new LiveCommentManager(this.player)] : []),
+                ...(this.live_session_required === false ? [new LiveEventManager(this.player)] : []),
+                ...(channels_store.channel.current.type !== 'IPTV' && this.live_session_required === false ?
+                    [new LiveCommentManager(this.player)] : []),
                 ...(this.live_session_required === false ? [this.player.quality?.type === 'tlv' ?
                     new TLVDataBroadcastingManager(this.player, this.playback_mode) :
                     new LiveDataBroadcastingManager(this.player)] : []),
@@ -1777,6 +1787,11 @@ class PlayerController {
 
             // ローディング中の背景写真をランダムに変更
             player_store.background_url = PlayerUtils.generatePlayerBackgroundURL();
+
+            // Raw MMTS とネットテレビも放送イベントに依存せず同じ背景表示を開始する。
+            if (this.playback_mode === 'Live') {
+                player_store.is_background_display = true;
+            }
 
             // 実装上画質切り替え後にそのまま対応できない PlayerManager (LiveDataBroadcastingManager など) をここで再起動する
             // 初回実行時はそもそもまだ PlayerManager が一つも初期化されていないので、何も起こらない
@@ -2749,8 +2764,8 @@ class PlayerController {
         const resize_handler = () => {
 
             // コメント描画領域の要素
-            if (this.player === null) return;
-            const comment_area_element = this.player.danmaku!.container;
+            if (this.player?.danmaku == null) return;
+            const comment_area_element = this.player.danmaku.container;
 
             // コメント描画領域の幅から算出した、映像の要素の幅/高さ (px)
             // 実際の映像の要素の幅は BML ブラウザの ShadowDOM 内に入ると正確な算出ができないため、代わりにコメント描画領域の幅を使って算出する
@@ -3343,7 +3358,7 @@ class PlayerController {
             // これにより、チャンネルを切り替えるなどして再度初期化されるまでの僅かな間もプレイヤーのコントロール UI が表示される (動作はしない)
             // ここで HTML 要素を削除してしまうと、プレイヤーのコントロール UI が一瞬削除されることでちらつきが発生して見栄えが悪い
             // HTML 要素を保持する分、破棄中に描画されていたコメントも残ってしまうので、破棄前にコメントを全て削除する
-            this.player.danmaku!.clear();
+            this.player.danmaku?.clear();
             try {
                 this.player.destroy(true);
             } catch (e) {

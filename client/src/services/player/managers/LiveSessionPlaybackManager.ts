@@ -67,6 +67,7 @@ export default class LiveSessionPlaybackManager implements PlayerManager {
         const store = usePlayerStore();
         store.is_loading = true;
         store.is_video_buffering = true;
+        store.is_background_display = true;
         store.live_stream_status = 'Standby';
         this.player.video.addEventListener('playing', this.onPlaying);
         this.player.video.addEventListener('error', this.onNativeError);
