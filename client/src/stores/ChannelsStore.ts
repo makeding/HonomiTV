@@ -493,13 +493,9 @@ const useChannelsStore = defineStore('channels', {
                         this.channels_list = Utils.deepObjectFreeze({...this.channels_list, IPTV: response.IPTV});
                         this.is_iptv_initial_updated = true;
                     } else if (response.IPTV.length > 0) {
-                        // 番組表だけが失敗しても、チャンネルと取得済みの現在番組は表示し続ける。
-                        // 新しい応答に現在番組がなければ、同じチャンネルの直近の有効値を残す。
-                        const cached_channels = new Map(this.channels_list.IPTV.map((channel) => [channel.id, channel]));
-                        const partial_channels = response.IPTV.map((channel) =>
-                            channel.program_present !== null ? channel : (cached_channels.get(channel.id) ?? channel),
-                        );
-                        this.channels_list = Utils.deepObjectFreeze({...this.channels_list, IPTV: partial_channels});
+                        // 番組表だけが失敗しても、バックエンドが実時刻で検証済みのチャンネルと現在番組を表示する。
+                        // 過去の current / following をクライアントで再利用すると、番組交代後に誤表示するため保持しない。
+                        this.channels_list = Utils.deepObjectFreeze({...this.channels_list, IPTV: response.IPTV});
                         this.is_iptv_initial_updated = true;
                     }
                 } finally {

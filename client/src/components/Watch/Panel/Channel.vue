@@ -31,7 +31,7 @@
                                     </div>
                                 </div>
                                 <div class="channel__broadcaster-content">
-                                    <span class="channel__broadcaster-name">Ch: {{channel.channel_number}} {{channel.name}}</span>
+                                    <span class="channel__broadcaster-name"><template v-if="channel.type !== 'IPTV'">Ch: {{channel.channel_number}} </template>{{channel.name}}</span>
                                     <div class="channel__broadcaster-force"
                                         :class="`channel__broadcaster-force--${ChannelUtils.getChannelForceType(channel.jikkyo_force)}`">
                                         <svg class="iconify iconify--fa-solid" width="9.63px" height="11px" viewBox="0 0 448 512">

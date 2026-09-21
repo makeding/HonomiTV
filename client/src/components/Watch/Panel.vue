@@ -14,7 +14,7 @@
                         <img loading="lazy" :src="`${Utils.api_base_url}/channels/${channelsStore.channel.current.id}/logo`">
                     </div>
                 </div>
-                <div class="panel-broadcaster__number">{{channelsStore.channel.current.channel_number}}</div>
+                <div class="panel-broadcaster__number" v-if="channelsStore.channel.current.type !== 'IPTV'">{{channelsStore.channel.current.channel_number}}</div>
                 <div class="panel-broadcaster__name">{{channelsStore.channel.current.name}}</div>
             </div>
         </div>
@@ -280,6 +280,11 @@ export default defineComponent({
                 @include smartphone-horizontal {
                     font-size: 14px;
                 }
+            }
+
+            // ネットテレビでは番号を表示せず、ロゴと局名の間隔を直接確保する。
+            &__icon + .panel-broadcaster__name {
+                margin-left: 8px;
             }
         }
     }
