@@ -489,7 +489,10 @@ async def TimeTableAPI(
         # 指定された順序でソート
         channel_id_order = {cid: idx for idx, cid in enumerate(target_channel_ids)}
         channels_result.sort(key=lambda c: channel_id_order.get(c['id'], float('inf')))  # type: ignore[arg-type]
-    elif channel_type is not None and channel_type != 'IPTV':
+    elif channel_type == 'IPTV':
+        # ネットテレビは上流から取得するため、放送波の全局一覧へフォールスルーさせない。
+        channels_result = []
+    elif channel_type is not None:
         # 指定されたチャンネル種別のチャンネルのみ取得
         channels_query = """
             SELECT

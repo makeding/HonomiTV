@@ -322,6 +322,31 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([program.id for program in timetable[1].programs], ['jellyfin-overlap', 'jellyfin-overlap-end'])
         self.assertIsNone(timetable[1].programs[0].reservation)  # type: ignore[union-attr]
 
+    def test_timetable_network_filter_never_queries_broadcast_channels(self) -> None:
+        """ネット分類とソース指定が放送波の全局クエリへ落ちないことを検証する。"""
+        app = FastAPI()
+        app.include_router(programs_router)
+        for selection in ({'channel_type': 'IPTV'}, {'source': 'IPTV'}, {'source': 'Jellyfin'}):
+            with self.subTest(selection=selection):
+                # 日付範囲以外の SQL は失敗させ、放送局が存在しても混入する余地を残さない。
+                query = AsyncMock(side_effect=[[]])
+                with (
+                    patch('app.routers.ProgramsRouter.connections.get', return_value=SimpleNamespace(execute_query_dict=query)),
+                    patch.object(JellyfinClient, 'is_configured', return_value=True),
+                    patch.object(JellyfinClient, 'get_channels', AsyncMock(return_value=[{'Id': 'channel', 'Name': 'ネット局'}])),
+                    patch.object(JellyfinClient, 'get_programs', AsyncMock(return_value=[])),
+                ):
+                    response = TestClient(app).get('/api/programs/timetable', params={
+                        **selection, 'start_time': '2026-09-21T12:00:00+09:00',
+                        'end_time': '2026-09-21T13:00:00+09:00',
+                    })
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual([row['channel']['id'] for row in response.json()['channels']], ['jellyfin-channel'])
+                self.assertEqual(response.json()['channels'][0]['channel']['type'], 'IPTV')
+                self.assertEqual(response.json()['channels'][0]['programs'], [])
+                self.assertEqual(response.json()['source_errors'], {'IPTV': None})
+                query.assert_awaited_once()
+
     def test_timetable_http_retains_overlap_at_both_ends_and_reports_epg_failure(self) -> None:
         programs = [
             {'Id': 'last', 'ChannelId': 'channel', 'StartDate': '2026-09-21T12:30:00+09:00', 'EndDate': '2026-09-21T13:30:00+09:00'},

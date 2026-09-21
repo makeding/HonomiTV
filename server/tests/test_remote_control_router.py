@@ -3,6 +3,8 @@ import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 
 from app import schemas
@@ -16,10 +18,43 @@ from app.routers.RemoteControlRouter import (
     RemoteCommandAPI,
     RemoteDeviceConnection,
     RequestRemoteDeviceStates,
+    router,
 )
+from app.routers.UsersRouter import GenerateAccessToken
 
 
 class RemoteControlRouterTest(unittest.TestCase):
+    def test_jellyfin_open_live_http_authentication_and_device_ownership(self) -> None:
+        """実際の Bearer 認証を通し、Jellyfin ID と所有者境界を HTTP で検証する。"""
+
+        app = FastAPI()
+        app.include_router(router)
+        websocket = AsyncMock()
+        REMOTE_DEVICE_CONNECTIONS[(1, 'living-room')] = RemoteDeviceConnection(
+            device_id='living-room', device_name='リビング', user_id=1, websocket=websocket,
+        )
+        payload = {'type': 'OpenLive', 'display_channel_id': 'jellyfin-upstream-channel'}
+        try:
+            with TestClient(app) as client, patch('app.routers.UsersRouter.User.filter') as users:
+                users.return_value.get_or_none = AsyncMock(return_value=MagicMock(id=1))
+                response = client.post('/api/remote/devices/living-room/commands', json=payload,
+                    headers={'Authorization': f'Bearer {GenerateAccessToken(1)}'})
+                self.assertEqual(response.status_code, 200)
+                websocket.send_json.assert_awaited_once_with({
+                    'type': 'Command', 'command_id': response.json()['command_id'], 'command': payload,
+                })
+                websocket.send_json.reset_mock()
+                users.return_value.get_or_none = AsyncMock(return_value=MagicMock(id=2))
+                denied = client.post('/api/remote/devices/living-room/commands', json=payload,
+                    headers={'Authorization': f'Bearer {GenerateAccessToken(2)}'})
+                self.assertEqual(denied.status_code, 409)
+                self.assertEqual(denied.json(), {'detail': 'Remote device is offline'})
+                unauthenticated = client.post('/api/remote/devices/living-room/commands', json=payload)
+                self.assertEqual(unauthenticated.status_code, 401)
+                websocket.send_json.assert_not_awaited()
+        finally:
+            REMOTE_DEVICE_CONNECTIONS.clear()
+
     def test_volume_commands_are_accepted_by_remote_command_schema(self) -> None:
         """音量操作コマンドを識別子付き Union として受け付ける。"""
 
