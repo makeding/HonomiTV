@@ -113,6 +113,17 @@
         </main>
         <!-- 番組表設定ダイアログ -->
         <TimeTableSettingsDialog v-model:isOpen="isSettingsDialogOpen" />
+        <v-dialog v-model="isNetworkProgramDialogOpen" max-width="640">
+            <v-card v-if="networkProgram !== null">
+                <v-card-title class="pt-5 px-6">{{ networkProgram.title }}</v-card-title>
+                <v-card-text class="px-6">
+                    <div class="text-text-darken-1 mb-3">{{ networkProgramChannel?.name }}・{{ networkProgram.start_time }} ～ {{ networkProgram.end_time }}</div>
+                    <div class="mb-4">{{ networkProgram.description }}</div>
+                    <v-alert type="info" variant="tonal" density="compact">ネットテレビでは録画予約を利用できません。</v-alert>
+                </v-card-text>
+                <v-card-actions class="px-6 pb-5"><v-spacer /><v-btn variant="text" @click="isNetworkProgramDialogOpen = false">閉じる</v-btn></v-card-actions>
+            </v-card>
+        </v-dialog>
         <!-- 番組詳細ドロワー (予約詳細ドロワーを流用) -->
         <ReservationDetailDrawer
             v-model="isDrawerOpen"
@@ -246,6 +257,9 @@ const drawerReservation = ref<IReservation | null>(null);
 const drawerProgram = ref<IProgram | null>(null);
 const drawerChannel = ref<IChannel | null>(null);
 const isDrawerProgramPast = ref(false);
+const isNetworkProgramDialogOpen = ref(false);
+const networkProgram = ref<ITimeTableProgram | null>(null);
+const networkProgramChannel = ref<IChannel | null>(null);
 
 
 // チャンネルタイプの選択肢
@@ -570,7 +584,9 @@ async function onShowProgramDetail(programId: string, channel: IChannel, program
 
     // ネットテレビの番組は放送波の録画予約契約を持たないため、専用の予約ドロワーへ渡さない。
     if (channel.capabilities.recording === false || !('reservation' in program)) {
-        Message.info('ネットテレビの番組詳細では録画予約を利用できません。');
+        networkProgram.value = program;
+        networkProgramChannel.value = channel;
+        isNetworkProgramDialogOpen.value = true;
         return;
     }
 

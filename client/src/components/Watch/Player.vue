@@ -19,11 +19,12 @@
             :class="{'watch-player__buffering--display': playerStore.is_video_buffering}">
         </v-progress-circular>
         <div class="watch-player__dplayer"></div>
-        <div v-if="playback_mode === 'Live' && playerStore.live_playback_error !== null"
+        <div v-if="playback_mode === 'Live' && (playerStore.live_playback_error !== null || playerStore.live_playback_recovering)"
             class="watch-player__session-error" role="alert">
-            <p>ライブ再生を開始・継続できませんでした。</p>
-            <p>{{ playerStore.live_playback_error }}</p>
-            <v-btn @click="playerStore.event_emitter.emit('LivePlaybackRetry')">再試行</v-btn>
+            <p>{{ playerStore.live_playback_recovering ? 'ライブ再生に再接続しています…' : 'ライブ再生を開始・継続できませんでした。' }}</p>
+            <p>{{ playerStore.live_playback_error ?? '映像が届くまでお待ちください。' }}</p>
+            <v-btn :loading="playerStore.live_playback_recovering" :disabled="playerStore.live_playback_recovering"
+                @click="playerStore.event_emitter.emit('LivePlaybackRetry')">再試行</v-btn>
         </div>
         <div class="watch-player__dplayer-setting-cover"
             :class="{'watch-player__dplayer-setting-cover--display': playerStore.is_player_setting_panel_open}"

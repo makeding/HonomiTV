@@ -153,6 +153,7 @@ const usePlayerStore = defineStore('player', {
 
         // 共通ライブセッションの失敗理由。プレイヤー領域内の再試行操作と一緒に表示する。
         live_playback_error: null as string | null,
+        live_playback_recovering: false,
 
         // プレイヤーが映像の再生をバッファリングしているか
         // 視聴開始時以外にも、ネットワークが遅くて再生が一時的に途切れたときなどで表示される
@@ -260,6 +261,7 @@ const usePlayerStore = defineStore('player', {
             this.offline_video = null;
             this.is_loading = true;
             this.live_playback_error = null;
+            this.live_playback_recovering = false;
             this.is_video_buffering = true;
             this.is_video_paused = false;
             this.is_background_display = false;

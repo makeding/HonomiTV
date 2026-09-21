@@ -29,6 +29,7 @@ export default class LiveSessionPlaybackManager implements PlayerManager {
         store.is_loading = false;
         store.is_video_buffering = false;
         store.is_background_display = false;
+        store.live_playback_recovering = false;
         store.live_stream_status = 'ONAir';
     };
 
@@ -41,6 +42,17 @@ export default class LiveSessionPlaybackManager implements PlayerManager {
 
     private onNativeError = (): void => {
         this.fail(`映像を読み込めませんでした。接続を確認して再試行してください。 [LIVE_MEDIA_${this.player.video.error?.code ?? 'UNKNOWN'}]`);
+    };
+
+    private onEnded = (): void => {
+        this.fail('配信が終了しました。もう一度視聴するには再試行してください。 [LIVE_STREAM_ENDED]');
+    };
+
+    private onWaiting = (): void => {
+        if (this.timeout !== null || this.destroyed || this.failed) return;
+        this.timeout = window.setTimeout(() => {
+            this.fail('配信から映像が届かなくなりました。接続を確認して再試行してください。 [LIVE_STALL_TIMEOUT]');
+        }, 30000);
     };
 
     private onHLSError = (_event: string, data: {fatal: boolean; details: string}): void => {
@@ -59,6 +71,8 @@ export default class LiveSessionPlaybackManager implements PlayerManager {
         store.live_stream_status = 'Standby';
         this.player.video.addEventListener('playing', this.onPlaying);
         this.player.video.addEventListener('error', this.onNativeError);
+        this.player.video.addEventListener('ended', this.onEnded);
+        this.player.video.addEventListener('waiting', this.onWaiting);
         this.player.plugins.hls?.on(Hls.Events.ERROR, this.onHLSError);
         this.player.plugins.mpegts?.on(mpegts.Events.ERROR, this.onTSError);
         this.timeout = window.setTimeout(() => {
@@ -74,6 +88,8 @@ export default class LiveSessionPlaybackManager implements PlayerManager {
         if (this.timeout !== null) window.clearTimeout(this.timeout);
         this.player.video.removeEventListener('playing', this.onPlaying);
         this.player.video.removeEventListener('error', this.onNativeError);
+        this.player.video.removeEventListener('ended', this.onEnded);
+        this.player.video.removeEventListener('waiting', this.onWaiting);
         this.player.plugins.hls?.off(Hls.Events.ERROR, this.onHLSError);
         this.player.plugins.mpegts?.off(mpegts.Events.ERROR, this.onTSError);
     }

@@ -254,7 +254,7 @@ class JellyfinClient:
         if session is None:
             return
         session.closing = True
-        if session.live_stream_id is None:
+        if session.live_stream_id is None or cls.is_configured() is False:
             cls._playback_sessions.pop(session_id, None)
             return
         try:

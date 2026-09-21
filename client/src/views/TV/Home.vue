@@ -116,6 +116,14 @@
                                     <div class="mt-2 text-text-darken-1">チャンネルをピン留めすると、<br>このタブが最初に表示されます。</div>
                                 </div>
                             </div>
+                            <div class="pinned-container d-flex justify-center align-center w-100"
+                                v-if="channels_type === 'ネット' && channels.length === 0 && channelsStore.source_errors.IPTV === null">
+                                <div class="d-flex justify-center align-center flex-column">
+                                    <h2>ネットテレビのチャンネルがありません。</h2>
+                                    <div class="mt-2 text-text-darken-1">ネットテレビの接続設定を確認して、再試行してください。</div>
+                                    <v-btn class="mt-4" variant="flat" @click="channelsStore.update(true)">再試行</v-btn>
+                                </div>
+                            </div>
                         </div>
                     </SwiperSlide>
                 </Swiper>

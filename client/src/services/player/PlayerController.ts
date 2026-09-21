@@ -331,6 +331,7 @@ class PlayerController {
             if (this.playback_mode !== 'Live') throw error;
             if (useChannelsStore().display_channel_id !== this.display_channel_id) return;
             player_store.live_playback_error = error instanceof Error ? error.message : '再生の初期化に失敗しました。 [LIVE_INIT_FAILED]';
+            player_store.live_playback_recovering = false;
             player_store.is_loading = false;
             player_store.is_video_buffering = false;
         }
@@ -1558,6 +1559,7 @@ class PlayerController {
                         if (this.initialization_generation !== generation + 1 ||
                             useChannelsStore().display_channel_id !== this.display_channel_id) return;
                         player_store.live_playback_error = reason;
+                        player_store.live_playback_recovering = false;
                         player_store.is_loading = false;
                         player_store.is_video_buffering = false;
                         player_store.live_stream_status = 'Offline';

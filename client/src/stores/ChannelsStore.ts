@@ -4,7 +4,7 @@ import { defineStore } from 'pinia';
 import Channels, { ChannelType, ChannelTypePretty, ILiveChannelsList, ILiveChannel, ILiveChannelDefault } from '@/services/Channels';
 import { IProgram, IProgramDefault } from '@/services/Programs';
 import useSettingsStore from '@/stores/SettingsStore';
-import Utils, { ChannelUtils } from '@/utils';
+import Utils from '@/utils';
 
 
 /**
@@ -86,10 +86,10 @@ const useChannelsStore = defineStore('channels', {
             };
 
             // display_channel_id は上流由来の安定 ID も取り得るため、放送チャンネル番号の正規表現で種別を推測しない。
-            const current_channel = Object.values(this.channels_list).flat().find(
+            const matched_channel = Object.values(this.channels_list).flat().find(
                 (channel) => channel.display_channel_id === this.display_channel_id,
             );
-            if (current_channel === undefined) {
+            if (matched_channel === undefined) {
                 return {
                     previous: ILiveChannelError,
                     current: ILiveChannelError,
@@ -98,7 +98,7 @@ const useChannelsStore = defineStore('channels', {
             }
 
             // チャンネル送りは現在の分類の中だけで循環させる。
-            const channels = this.channels_list[current_channel.type];
+            const channels = this.channels_list[matched_channel.type];
             const current_channel_index = channels.findIndex((channel) => channel.display_channel_id === this.display_channel_id);
 
             // 前のインデックスを取得する

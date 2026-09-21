@@ -105,6 +105,7 @@ export default defineComponent({
         // 初期化失敗で DPlayer が存在しない場合も、画面自身が新しい再生を開始する。
         async retryPlayback() {
             if (this.playerStore.live_playback_error === null) return;
+            this.playerStore.live_playback_recovering = true;
             this.playerStore.live_playback_error = null;
             await this.destroy();
             if (this.is_leaving === false) await this.init(true);
@@ -114,6 +115,7 @@ export default defineComponent({
         async init(force = false) {
             const generation = ++this.playback_generation;
             const channel_id = this.channelsStore.display_channel_id;
+            if (force === false) this.playerStore.live_playback_recovering = false;
             this.playerStore.live_playback_error = null;
             this.playerStore.is_loading = true;
             this.playerStore.is_video_buffering = true;
@@ -154,6 +156,7 @@ export default defineComponent({
                 // 一時的な供給元の障害を 404 として扱わず、同じ視聴枠に復旧手段を残す。
                 if (channel_id.startsWith('jellyfin-')) {
                     this.playerStore.live_playback_error = 'チャンネル情報を取得できませんでした。接続を確認して再試行してください。 [LIVE_CHANNEL_UNAVAILABLE]';
+                    this.playerStore.live_playback_recovering = false;
                     this.playerStore.is_loading = false;
                     this.playerStore.is_video_buffering = false;
                     return;
