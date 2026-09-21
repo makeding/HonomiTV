@@ -56,11 +56,15 @@ async def GetIPTVTimeTable(
             order = {channel_id: index for index, channel_id in enumerate(pinned_channel_ids)}
             channels = [channel for channel in channels if channel.id in order]
             channels.sort(key=lambda channel: order[channel.id])
+    except JellyfinError as error:
+        logging.warning(f'[ProgramsRouter][GetIPTVTimeTable] Channel request failed: {error}')
+        return ([], str(error))
+    try:
         programs = [program for item in await JellyfinClient.get_programs(start_time, end_time, None) if (program := ToIPTVProgram(item)) is not None]
         programs_by_channel: dict[str, list[schemas.TimeTableProgram | schemas.IPTVTimeTableProgram]] = {
             channel.id: [] for channel in channels
         }
-        for program in programs:
+        for program in sorted(programs, key=lambda program: (program.start_time, program.id)):
             if program.channel_id in programs_by_channel and program.end_time > start_time and program.start_time < end_time:
                 programs_by_channel[program.channel_id].append(
                     schemas.IPTVTimeTableProgram.model_validate(program.model_dump()),
@@ -68,7 +72,7 @@ async def GetIPTVTimeTable(
         return ([schemas.TimeTableChannel(channel=channel, programs=programs_by_channel[channel.id]) for channel in channels], None)
     except JellyfinError as error:
         logging.warning(f'[ProgramsRouter][GetIPTVTimeTable] {error}')
-        return ([], str(error))
+        return ([schemas.TimeTableChannel(channel=channel, programs=[]) for channel in channels], str(error))
 
 
 def GetTimeTableChannelSortKey(channel_row: dict[str, Any]) -> tuple[int, int, int, int, str]:

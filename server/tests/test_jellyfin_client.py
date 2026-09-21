@@ -1,7 +1,7 @@
 import time
 import unittest
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -12,10 +12,12 @@ from app.constants import JST
 from app.routers.ChannelsRouter import GetIPTVChannels
 from app.routers.ChannelsRouter import router as channels_router
 from app.routers.ProgramsRouter import GetIPTVTimeTable
+from app.routers.ProgramsRouter import router as programs_router
 from app.utils.JellyfinClient import (
     JellyfinClient,
     JellyfinError,
     JellyfinPlaybackSession,
+    SetIPTVCurrentAndNextPrograms,
     ToIPTVChannel,
     ToIPTVProgram,
 )
@@ -86,7 +88,7 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
                 'StartDate': '2026-09-21T00:00:00+09:00',
                 'EndDate': '2026-09-21T00:30:00+09:00',
             },
-        })
+        }, datetime(2026, 9, 21, 0, 15, tzinfo=JST))
         assert channel is not None
         self.assertEqual(channel.id, 'jellyfin-upstream-channel')
         self.assertEqual(channel.display_channel_id, channel.id)
@@ -177,6 +179,7 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(JellyfinClient, 'is_configured', return_value=True),
             patch.object(JellyfinClient, 'get_channels', AsyncMock(side_effect=[JellyfinError('タイムアウト'), [upstream_channel]])),
+            patch.object(JellyfinClient, 'get_programs', AsyncMock(return_value=[])),
         ):
             channels, error = await GetIPTVChannels()
             self.assertEqual(channels, [])
@@ -185,6 +188,86 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(error)
         self.assertEqual([channel.id for channel in channels], ['jellyfin-channel-a'])
+
+    def test_program_handoff_gap_midnight_and_offsets(self) -> None:
+        channel = ToIPTVChannel({'Id': 'channel'})
+        assert channel is not None
+        programs = [ToIPTVProgram(item) for item in [
+            {'Id': 'next', 'ChannelId': 'channel', 'StartDate': '2026-09-22T00:30:00+09:00', 'EndDate': '2026-09-22T01:00:00+09:00'},
+            {'Id': 'midnight', 'ChannelId': 'channel', 'StartDate': '2026-09-21T15:00:00Z', 'EndDate': '2026-09-21T15:15:00Z'},
+            {'Id': 'first', 'ChannelId': 'channel', 'StartDate': '2026-09-21T22:30:00+08:00', 'EndDate': '2026-09-21T23:00:00+08:00'},
+        ]]
+        valid_programs = [program for program in programs if program is not None]
+        for instant, present, following in [
+            ('2026-09-21T23:59:59+09:00', 'first', 'midnight'),
+            ('2026-09-22T00:00:00+09:00', 'midnight', 'next'),
+            ('2026-09-21T23:00:00+08:00', 'midnight', 'next'),
+            ('2026-09-22T00:15:00+09:00', None, 'next'),
+            ('2026-09-22T01:00:00+09:00', None, None),
+        ]:
+            with self.subTest(instant=instant):
+                SetIPTVCurrentAndNextPrograms([channel], valid_programs, datetime.fromisoformat(instant))
+                self.assertEqual(channel.program_present.id if channel.program_present else None, f'jellyfin-{present}' if present else None)
+                self.assertEqual(channel.program_following.id if channel.program_following else None, f'jellyfin-{following}' if following else None)
+
+    def test_program_rejects_naive_or_invalid_interval_and_preserves_instant(self) -> None:
+        item = {'Id': 'program', 'ChannelId': 'channel', 'StartDate': '2026-09-21T19:00:00+08:00', 'EndDate': '2026-09-21T12:00:00Z'}
+        program = ToIPTVProgram(item)
+        assert program is not None
+        self.assertEqual(program.start_time.isoformat(), item['StartDate'])
+        self.assertEqual(program.duration, 3600)
+        for start in ['2026-09-21T19:00:00', 'invalid', '2026-09-21T12:00:00Z']:
+            self.assertIsNone(ToIPTVProgram({**item, 'StartDate': start}))
+
+    async def test_program_query_uses_overlap_filters_and_all_pages(self) -> None:
+        request = AsyncMock(side_effect=[
+            Mock(json=Mock(return_value={'Items': [{'Id': 'first'}], 'TotalRecordCount': 2})),
+            Mock(json=Mock(return_value={'Items': [{'Id': 'last'}], 'TotalRecordCount': 2})),
+        ])
+        start = datetime(2026, 9, 21, 12, tzinfo=JST)
+        end = datetime(2026, 9, 21, 13, tzinfo=JST)
+        with patch.object(JellyfinClient, '_authenticate', AsyncMock()), patch.object(JellyfinClient, '_request', request):
+            programs = await JellyfinClient.get_programs(start, end, None)
+        self.assertEqual([program['Id'] for program in programs], ['first', 'last'])
+        params = request.await_args_list[0].kwargs['params']
+        self.assertEqual(params['MinEndDate'], start.isoformat())
+        self.assertEqual(params['MaxStartDate'], end.isoformat())
+        self.assertNotIn('MinStartDate', params)
+        self.assertNotIn('MaxEndDate', params)
+        self.assertEqual(request.await_args_list[1].kwargs['params']['StartIndex'], 1)
+
+    def test_channels_list_and_detail_share_programs_and_keep_channels_on_epg_failure(self) -> None:
+        now = datetime.now(JST)
+        current = {
+            'Id': 'current', 'ChannelId': 'channel', 'Name': '現在',
+            'StartDate': (now - timedelta(minutes=30)).isoformat(),
+            'EndDate': (now + timedelta(minutes=30)).isoformat(),
+        }
+        following = {
+            'Id': 'following', 'ChannelId': 'channel', 'Name': '次',
+            'StartDate': current['EndDate'], 'EndDate': (now + timedelta(hours=1)).isoformat(),
+        }
+        app = FastAPI()
+        app.include_router(channels_router)
+        with (
+            patch.object(JellyfinClient, 'is_configured', return_value=True),
+            patch.object(JellyfinClient, 'get_channels', AsyncMock(return_value=[{'Id': 'channel', 'CurrentProgram': current}])),
+            patch.object(JellyfinClient, 'get_programs', AsyncMock(side_effect=[[following, current], [following, current], JellyfinError('EPG unavailable'), TimeoutError()])),
+        ):
+            client = TestClient(app)
+            listing = client.get('/api/channels?source=IPTV')
+            detail = client.get('/api/channels/jellyfin-channel')
+            failed = client.get('/api/channels?source=IPTV')
+            timeout = client.get('/api/channels/jellyfin-channel')
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(listing.json()['IPTV'][0], detail.json())
+        self.assertEqual(detail.json()['program_following']['id'], 'jellyfin-following')
+        for response, channel in [(failed, failed.json()['IPTV'][0]), (timeout, timeout.json())]:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(channel['program_present']['id'], 'jellyfin-current')
+            self.assertIsNone(channel['program_following'])
+            self.assertNotEqual(response.headers['X-Channel-Source-Errors'], '{"IPTV":null}')
 
     def test_channels_http_body_contains_only_arrays_and_source_error_is_safe_header_json(self) -> None:
         app = FastAPI()
@@ -206,6 +289,10 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         channels = [{'Id': 'first', 'Name': '第一'}, {'Id': 'second', 'Name': '第二'}]
         programs = [
             {
+                'Id': 'overlap-end', 'ChannelId': 'first', 'Name': '終端をまたぐ番組',
+                'StartDate': '2026-09-21T12:30:00+09:00', 'EndDate': '2026-09-21T13:30:00+09:00',
+            },
+            {
                 'Id': 'overlap', 'ChannelId': 'first', 'Name': '重なる番組',
                 'StartDate': '2026-09-21T11:30:00+09:00', 'EndDate': '2026-09-21T12:30:00+09:00',
             },
@@ -225,8 +312,37 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(error)
         self.assertEqual([entry.channel.id for entry in timetable], ['jellyfin-second', 'jellyfin-first'])
-        self.assertEqual([program.id for program in timetable[1].programs], ['jellyfin-overlap'])
+        self.assertEqual([program.id for program in timetable[1].programs], ['jellyfin-overlap', 'jellyfin-overlap-end'])
         self.assertIsNone(timetable[1].programs[0].reservation)  # type: ignore[union-attr]
+
+    def test_timetable_http_retains_overlap_at_both_ends_and_reports_epg_failure(self) -> None:
+        programs = [
+            {'Id': 'last', 'ChannelId': 'channel', 'StartDate': '2026-09-21T12:30:00+09:00', 'EndDate': '2026-09-21T13:30:00+09:00'},
+            {'Id': 'first', 'ChannelId': 'channel', 'StartDate': '2026-09-21T11:30:00+09:00', 'EndDate': '2026-09-21T12:30:00+09:00'},
+            {'Id': 'ended', 'ChannelId': 'channel', 'StartDate': '2026-09-21T11:00:00+09:00', 'EndDate': '2026-09-21T12:00:00+09:00'},
+            {'Id': 'future', 'ChannelId': 'channel', 'StartDate': '2026-09-21T13:00:00+09:00', 'EndDate': '2026-09-21T14:00:00+09:00'},
+        ]
+        app = FastAPI()
+        app.include_router(programs_router)
+        with (
+            patch('app.routers.ProgramsRouter.connections.get', return_value=SimpleNamespace(execute_query_dict=AsyncMock(return_value=[]))),
+            patch.object(JellyfinClient, 'is_configured', return_value=True),
+            patch.object(JellyfinClient, 'get_channels', AsyncMock(return_value=[{'Id': 'channel'}])),
+            patch.object(JellyfinClient, 'get_programs', AsyncMock(side_effect=[programs, JellyfinError('EPG unavailable')])),
+        ):
+            client = TestClient(app)
+            params = {'source': 'IPTV', 'start_time': '2026-09-21T12:00:00+09:00', 'end_time': '2026-09-21T13:00:00+09:00'}
+            response = client.get('/api/programs/timetable', params=params)
+            failed = client.get('/api/programs/timetable', params=params)
+        self.assertEqual(response.status_code, 200)
+        row = response.json()['channels'][0]
+        self.assertEqual(row['channel']['id'], 'jellyfin-channel')
+        self.assertEqual([program['id'] for program in row['programs']], ['jellyfin-first', 'jellyfin-last'])
+        self.assertEqual(row['programs'][0]['start_time'], '2026-09-21T11:30:00+09:00')
+        self.assertEqual(row['programs'][1]['end_time'], '2026-09-21T13:30:00+09:00')
+        self.assertEqual(failed.status_code, 200)
+        self.assertEqual(failed.json()['channels'][0]['channel']['id'], 'jellyfin-channel')
+        self.assertEqual(failed.json()['source_errors']['IPTV'], 'EPG unavailable')
 
     async def test_broadcast_timetable_source_never_requests_jellyfin_even_with_pinned_ip_tv_id(self) -> None:
         get_channels = AsyncMock()

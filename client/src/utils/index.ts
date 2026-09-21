@@ -1,8 +1,6 @@
 
-// day.js に毎回プラグインやタイムゾーンを設定するのが面倒かつ嵌まりポイントが多いので、ここでエクスポートする day.js を使う
-// ややこしすぎるので KonomiTV 内ではブラウザのタイムゾーンに関わらず、常に Asia/Tokyo として扱う
-// ref: https://github.com/iamkun/dayjs/issues/1227#issuecomment-917720826
-// ref: https://zenn.dev/taigakiyokawa/articles/20221122-dayjs-timezone
+// day.js に毎回プラグインを設定するのが面倒かつ嵌まりポイントが多いので、ここでエクスポートする day.js を使う。
+// API の ISO 8601 オフセットは実時刻として保持し、表示と番組表境界はブラウザを実行する端末のローカル時刻にする。
 
 import dayjsOriginal from 'dayjs';
 import ja from 'dayjs/locale/ja';
@@ -22,13 +20,9 @@ dayjsOriginal.extend(isSameOrBefore);
 dayjsOriginal.extend(utc);
 dayjsOriginal.extend(timezone);
 dayjsOriginal.locale(ja);
-dayjsOriginal.tz.setDefault('Asia/Tokyo');
 
 export const dayjs = (date?: ConfigType): Dayjs => {
-    // return dayjsOriginal(date).tz();  // .tz() では setDefault で設定したタイムゾーンが適用される
-    // dayjs.tz() があまりにもクッソ遅いことが判明したので当面使わないことにする
-    // dayjs.tz() を使わないようにするだけで低スペ端末でのパフォーマンスが大幅に向上した…
-    return dayjsOriginal(date);
+    return dayjsOriginal(date).local();
 };
 export { dayjsOriginal };
 

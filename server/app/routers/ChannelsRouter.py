@@ -25,7 +25,13 @@ from app.utils import (
 )
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
-from app.utils.JellyfinClient import JellyfinClient, JellyfinError, ToIPTVChannel
+from app.utils.JellyfinClient import (
+    JellyfinClient,
+    JellyfinError,
+    SetIPTVCurrentAndNextPrograms,
+    ToIPTVChannel,
+    ToIPTVProgram,
+)
 from app.utils.JikkyoClient import JikkyoClient
 from app.utils.TSInformation import TSInformation
 
@@ -60,18 +66,31 @@ async def GetIPTVChannels() -> tuple[list[schemas.IPTVChannel], str | None]:
     """Jellyfin の障害を放送波チャンネル一覧へ波及させず IPTV カテゴリだけに留める。"""
     if JellyfinClient.is_configured() is False:
         return ([], None)
+    now = datetime.now(JST)
     try:
         channels = [
             channel for item in await asyncio.wait_for(JellyfinClient.get_channels(), timeout=3)
-            if (channel := ToIPTVChannel(item)) is not None
+            if (channel := ToIPTVChannel(item, now)) is not None
         ]
-        return (channels, None)
     except TimeoutError:
         logging.warning('[ChannelsRouter][GetIPTVChannels] Jellyfin channel request timed out')
         return ([], 'ネットテレビのチャンネル取得がタイムアウトしました。')
     except JellyfinError as error:
         logging.warning(f'[ChannelsRouter][GetIPTVChannels] {error}')
         return ([], str(error))
+
+    # EPG の失敗で取得済みチャンネルを捨てず、有効な CurrentProgram と供給元エラーを返す。
+    try:
+        items = await asyncio.wait_for(JellyfinClient.get_programs(now, None, None), timeout=3)
+        programs = [program for item in items if (program := ToIPTVProgram(item)) is not None]
+        SetIPTVCurrentAndNextPrograms(channels, programs, now)
+        return (channels, None)
+    except TimeoutError:
+        logging.warning('[ChannelsRouter][GetIPTVChannels] Jellyfin program request timed out')
+        return (channels, 'ネットテレビの番組表取得がタイムアウトしました。再読み込みしてください。')
+    except JellyfinError as error:
+        logging.warning(f'[ChannelsRouter][GetIPTVChannels] Program request failed: {error}')
+        return (channels, str(error))
 
 
 @router.get(
@@ -309,6 +328,7 @@ async def ChannelsAPI(
     response_model = schemas.LiveChannel | schemas.IPTVChannel,
 )
 async def ChannelAPI(
+    response: Response,
     channel_id: Annotated[str, Path(description='チャンネル ID (id or display_channel_id) 。ex: NID32736-SID1024, gr011, jellyfin-...')],
 ):
     """
@@ -318,13 +338,13 @@ async def ChannelAPI(
     if channel_id.startswith('jellyfin-'):
         if JellyfinClient.is_configured() is False:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Network TV channel was not found')
-        try:
-            for item in await JellyfinClient.get_channels():
-                channel = ToIPTVChannel(item)
-                if channel is not None and channel.display_channel_id == channel_id:
-                    return channel
-        except JellyfinError as error:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+        channels, source_error = await GetIPTVChannels()
+        response.headers['X-Channel-Source-Errors'] = json.dumps({'IPTV': source_error}, ensure_ascii=True, separators=(',', ':'))
+        for channel in channels:
+            if channel.display_channel_id == channel_id:
+                return channel
+        if source_error is not None:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=source_error)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Network TV channel was not found')
 
     channel = await GetChannel(channel_id)

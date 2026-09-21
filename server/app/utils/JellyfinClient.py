@@ -5,7 +5,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urljoin, urlsplit
 
@@ -14,7 +14,6 @@ import httpx
 from app import logging, schemas
 from app.config import GetJellyfinConfig
 from app.constants import HTTPX_CLIENT, VERSION
-from app.utils import ParseDatetimeStringToJST
 
 
 class JellyfinError(Exception):
@@ -151,6 +150,8 @@ class JellyfinClient:
     @classmethod
     async def get_channels(cls) -> list[dict[str, object]]:
         """Jellyfin の Live TV チャンネル一覧を取得する。"""
+        # UserId は認証後に確定するため、クエリを作る前に認証を済ませる。
+        await cls._authenticate()
         response = await cls._request('GET', 'LiveTv/Channels', params={
             'UserId': cls._user_id,
             'EnableImages': 'true',
@@ -184,32 +185,52 @@ class JellyfinClient:
         return sorted_channels
 
     @classmethod
-    async def get_programs(cls, start_time: datetime, end_time: datetime, channel_id: str | None) -> list[dict[str, object]]:
-        """指定期間の Jellyfin 番組表を取得する。"""
+    async def get_programs(cls, start_time: datetime, end_time: datetime | None, channel_id: str | None) -> list[dict[str, object]]:
+        """指定期間と重なる番組を取得する。終端なしの場合は未終了番組を取得する。
+
+        Args:
+            start_time: 検索範囲の開始時点。
+            end_time: 検索範囲の終了時点。現在・次番組の検索では None。
+            channel_id: 上流のチャンネル ID。None なら全チャンネル。
+
+        Returns:
+            list[dict[str, object]]: 全ページの番組情報。
+        """
+        await cls._authenticate()
         params: dict[str, object] = {
             'UserId': cls._user_id,
-            'MinStartDate': start_time.isoformat(),
-            'MaxEndDate': end_time.isoformat(),
+            'MinEndDate': start_time.isoformat(),
+            'SortBy': 'StartDate',
+            'SortOrder': 'Ascending',
             'EnableImages': 'false',
             'EnableUserData': 'false',
             'Limit': 1000,
         }
+        # 開始・終了で内包を要求せず、検索範囲をまたぐ長時間番組も上流から取得する。
+        if end_time is not None:
+            params['MaxStartDate'] = end_time.isoformat()
         if channel_id is not None:
             params['ChannelIds'] = channel_id
         items: list[dict[str, object]] = []
         start_index = 0
         while True:
             response = await cls._request('GET', 'LiveTv/Programs', params={**params, 'StartIndex': start_index})
-            payload = response.json()
-            page = payload.get('Items', [])
+            # 壊れた EPG 応答は空の番組表として扱わず、供給元エラーへ変換する。
+            try:
+                payload = response.json()
+            except ValueError as error:
+                raise JellyfinError('Jellyfin の番組表応答が不正です。') from error
+            if not isinstance(payload, dict):
+                raise JellyfinError('Jellyfin の番組表応答が不正です。')
+            page = payload.get('Items')
             if not isinstance(page, list):
-                break
+                raise JellyfinError('Jellyfin の番組表応答が不正です。')
             valid_page = [item for item in page if isinstance(item, dict)]
             items.extend(valid_page)
             total = payload.get('TotalRecordCount')
-            if len(valid_page) == 0 or (isinstance(total, int) and len(items) >= total):
+            if len(page) == 0 or (isinstance(total, int) and start_index + len(page) >= total):
                 break
-            start_index += len(valid_page)
+            start_index += len(page)
         return items
 
     @classmethod
@@ -417,16 +438,17 @@ class JellyfinClient:
 def ToIPTVProgram(item: dict[str, object]) -> schemas.IPTVProgram | None:
     """Jellyfin 番組を不足した放送波 EPG 情報を補わない IPTV 型へ変換する。"""
     try:
-        start_time = ParseDatetimeStringToJST(str(item['StartDate']))
-        end_time = ParseDatetimeStringToJST(str(item['EndDate']))
+        start_time = datetime.fromisoformat(str(item['StartDate']))
+        end_time = datetime.fromisoformat(str(item['EndDate']))
+        # タイムゾーンを推測すると実際の放送時点が変わるため、不正な時刻を除外する。
+        if start_time.utcoffset() is None or end_time.utcoffset() is None or end_time <= start_time:
+            raise ValueError('Invalid program interval')
         channel_id = str(item['ChannelId'])
         program_id = str(item['Id'])
     except (KeyError, TypeError, ValueError):
+        logging.warning('[JellyfinClient] Skipping program with invalid identifiers or timezone-aware interval')
         return None
-    duration = max((end_time - start_time).total_seconds(), 0.0)
-    ticks = item.get('RunTimeTicks')
-    if isinstance(ticks, (int, float)) and ticks > 0:
-        duration = ticks / 10_000_000
+    duration = (end_time - start_time).total_seconds()
     genres: list[schemas.Genre] = []
     source_genres = item.get('Genres')
     if isinstance(source_genres, list):
@@ -445,13 +467,17 @@ def ToIPTVProgram(item: dict[str, object]) -> schemas.IPTVProgram | None:
     )
 
 
-def ToIPTVChannel(item: dict[str, object]) -> schemas.IPTVChannel | None:
+def ToIPTVChannel(item: dict[str, object], now: datetime | None = None) -> schemas.IPTVChannel | None:
     """Jellyfin チャンネルを統一チャンネル一覧の IPTV カテゴリへ変換する。"""
     jellyfin_id = item.get('Id')
     if not isinstance(jellyfin_id, str) or not jellyfin_id:
         return None
     current = item.get('CurrentProgram')
     present = ToIPTVProgram(current) if isinstance(current, dict) else None
+    # EPG 障害時にも終了済み番組や別チャンネルの番組を現在番組として残さない。
+    now = now or datetime.now(UTC)
+    if present is not None and (present.channel_id != f'jellyfin-{jellyfin_id}' or not present.start_time <= now < present.end_time):
+        present = None
     return schemas.IPTVChannel(
         id=f'jellyfin-{jellyfin_id}',
         display_channel_id=f'jellyfin-{jellyfin_id}',
@@ -466,3 +492,25 @@ def ToIPTVChannel(item: dict[str, object]) -> schemas.IPTVChannel | None:
         ),
         program_present=present,
     )
+
+
+def SetIPTVCurrentAndNextPrograms(channels: list[schemas.IPTVChannel], programs: list[schemas.IPTVProgram], now: datetime) -> None:
+    """同一時点の EPG からチャンネルごとの現在・次番組を設定する。
+
+    Args:
+        channels: 現在・次番組を更新するチャンネル一覧。
+        programs: 上流から取得・検証済みの番組一覧。
+        now: 全チャンネルで共通の判定時点。
+
+    Returns:
+        None: channels を更新する。
+    """
+    programs_by_channel: dict[str, list[schemas.IPTVProgram]] = {}
+    for program in programs:
+        programs_by_channel.setdefault(program.channel_id, []).append(program)
+    for channel in channels:
+        # 同じ開始時刻の重複にも安定した順序を与え、交接点では終了済み番組を選ばない。
+        ordered = sorted(programs_by_channel.get(channel.id, []), key=lambda program: (program.start_time, program.id))
+        channel.program_present = next((program for program in ordered if program.start_time <= now < program.end_time), None)
+        following_start = channel.program_present.end_time if channel.program_present is not None else now
+        channel.program_following = next((program for program in ordered if program.start_time >= following_start), None)
