@@ -51,8 +51,23 @@ const useTimeTableStore = defineStore('timetable', () => {
     // デフォルトは現在日時から算出した今日の 4:00
     const selected_date = ref<Dayjs>(getTodayStartTime());
 
-    // 番組表データ
-    const channels_data = shallowRef<ITimeTableChannel[]>([]);
+    // 取得した番組表データ。表示対象は選択中の分類から別途導出する。
+    const fetched_channels_data = shallowRef<ITimeTableChannel[]>([]);
+
+    // 見出しと番組グリッドへ同じ絞り込み結果を渡す。
+    // 通信中・取得失敗時も、別分類の取得済みチャンネルを選択中の分類として表示しない。
+    const channels_data = computed<ITimeTableChannel[]>(() => {
+        if (selected_channel_type.value === 'ピン留め') {
+            const channels_by_id = new Map(fetched_channels_data.value.map(channel => [channel.channel.id, channel]));
+            return settings_store.settings.pinned_channel_ids.flatMap(id => {
+                const channel = channels_by_id.get(id);
+                return channel === undefined ? [] : [channel];
+            });
+        }
+        const channel_type = selected_channel_type.value === null
+            ? undefined : CHANNEL_TYPE_PRETTY_TO_API.get(selected_channel_type.value);
+        return fetched_channels_data.value.filter(channel => channel.channel.type === channel_type);
+    });
 
     // 個別の番組表ソース失敗。既に取得済みの他チャンネルを消さず、画面で回復操作を出す。
     const source_errors = ref<{ IPTV: string | null; }>({IPTV: null});
@@ -353,16 +368,16 @@ const useTimeTableStore = defineStore('timetable', () => {
             const response_iptv_channels_with_programs = response.channels.filter((channel) =>
                 channel.channel.type === 'IPTV' && channel.programs.length > 0,
             );
-            const cached_iptv_channels = channels_data.value.filter((channel) => channel.channel.type === 'IPTV');
+            const cached_iptv_channels = fetched_channels_data.value.filter((channel) => channel.channel.type === 'IPTV');
             const response_iptv_channel_ids = new Set(response_iptv_channels_with_programs
                 .map((channel) => channel.channel.id));
-            channels_data.value = [
+            fetched_channels_data.value = [
                 ...response.channels.filter((channel) => channel.channel.type !== 'IPTV'),
                 ...response_iptv_channels_with_programs,
                 ...cached_iptv_channels.filter((channel) => !response_iptv_channel_ids.has(channel.channel.id)),
             ];
         } else {
-            channels_data.value = response.channels;
+            fetched_channels_data.value = response.channels;
         }
         source_errors.value = response.source_errors;
 
@@ -645,7 +660,7 @@ const useTimeTableStore = defineStore('timetable', () => {
      * 番組表ページから離れる際に呼び出される
      */
     function reset(): void {
-        channels_data.value = [];
+        fetched_channels_data.value = [];
         date_range.value = null;
         is_loading.value = false;
         is_initial_load_completed.value = false;
