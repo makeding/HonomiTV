@@ -117,7 +117,14 @@
                                 </div>
                             </div>
                             <div class="pinned-container d-flex justify-center align-center w-100"
-                                v-if="channels_type === 'ネット' && channels.length === 0 && channelsStore.source_errors.IPTV === null">
+                                v-if="channels_type === 'ネット' && channelsStore.is_iptv_loading">
+                                <div class="d-flex justify-center align-center flex-column">
+                                    <v-progress-circular indeterminate size="32" width="3" />
+                                    <div class="mt-3 text-text-darken-1">ネットテレビのチャンネルを読み込んでいます。</div>
+                                </div>
+                            </div>
+                            <div class="pinned-container d-flex justify-center align-center w-100"
+                                v-else-if="channels_type === 'ネット' && channels.length === 0 && channelsStore.source_errors.IPTV === null">
                                 <div class="d-flex justify-center align-center flex-column">
                                     <h2>ネットテレビのチャンネルがありません。</h2>
                                     <div class="mt-2 text-text-darken-1">ネットテレビの接続設定を確認して、再試行してください。</div>
@@ -607,7 +614,7 @@ export default defineComponent({
             if (this.is_network_retrying) return;
             this.is_network_retrying = true;
             try {
-                await this.channelsStore.update(true);
+                await this.channelsStore.update(true, 'Jellyfin');
             } finally {
                 this.is_network_retrying = false;
             }

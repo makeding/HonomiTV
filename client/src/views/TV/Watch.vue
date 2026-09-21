@@ -145,7 +145,7 @@ export default defineComponent({
             }, residue_second * 1000));
 
             // チャンネル情報を更新 (初回)
-            await this.channelsStore.update(force);
+            await this.channelsStore.update(force, channel_id.startsWith('jellyfin-') ? 'Jellyfin' : 'Broadcast');
             if (generation !== this.playback_generation || this.is_leaving ||
                 this.channelsStore.display_channel_id !== channel_id) return;
 

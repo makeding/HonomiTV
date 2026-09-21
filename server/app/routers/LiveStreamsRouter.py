@@ -309,13 +309,13 @@ async def LiveStreamSessionResourceAPI(
     """HLS の子プレイリスト・鍵・分片を代理し、TS はストリーミングで中継する。"""
     try:
         session = JellyfinClient.get_playback_session(session_id)
-        upstream_url = session.resource_urls.get(resource_id, '')
-        if '.m3u8' not in upstream_url.lower():
-            stream, media_type = await JellyfinClient.stream_resource(session, resource_id)
-            return StreamingResponse(stream, media_type=media_type, headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
-        content, media_type = await JellyfinClient.fetch_resource(session, resource_id)
-        content = JellyfinClient.rewrite_playlist(session, content, upstream_url)
-        return Response(content=content, media_type='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-store'})
+        upstream_url = JellyfinClient.get_resource_url(session, resource_id)
+        stream, media_type = await JellyfinClient.stream_resource(session, resource_id)
+        if 'mpegurl' in media_type.lower():
+            content = b''.join([chunk async for chunk in stream])
+            content = JellyfinClient.rewrite_playlist(session, content, upstream_url)
+            return Response(content=content, media_type='application/vnd.apple.mpegurl', headers={'Cache-Control': 'no-store'})
+        return StreamingResponse(stream, media_type=media_type, headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
     except JellyfinError as error:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 

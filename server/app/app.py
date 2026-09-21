@@ -109,7 +109,7 @@ app.add_middleware(
     allow_methods = ['*'],
     allow_headers = ['*'],
     # 録画 TS の直接再生でクライアントが Range 応答の開始位置と総ファイルサイズを検証するため必要なヘッダーを許可
-    expose_headers = ['Accept-Ranges', 'Content-Length', 'Content-Range', 'ETag', 'Last-Modified'],
+    expose_headers = ['Accept-Ranges', 'Content-Length', 'Content-Range', 'ETag', 'Last-Modified', 'X-Channel-Source-Errors'],
     allow_credentials = True,
 )
 

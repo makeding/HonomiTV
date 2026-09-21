@@ -7,6 +7,8 @@ import useSettingsStore from '@/stores/SettingsStore';
 import Utils from '@/utils';
 
 const CHANNEL_TYPES: ChannelType[] = ['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K', 'IPTV'];
+let broadcast_update_promise: Promise<void> | null = null;
+let iptv_update_promise: Promise<void> | null = null;
 
 
 /**
@@ -29,6 +31,8 @@ const useChannelsStore = defineStore('channels', {
         } as ILiveChannelsList,
 
         source_errors: {IPTV: null} as {IPTV: string | null},
+        is_iptv_loading: false,
+        is_iptv_initial_updated: false,
 
         // 初回のチャンネル情報更新が実行された後かどうか
         is_channels_list_initial_updated: false,
@@ -66,7 +70,7 @@ const useChannelsStore = defineStore('channels', {
         channel(): { previous: ILiveChannel; current: ILiveChannel; next: ILiveChannel; } {
 
             // 初回のチャンネル情報更新がまだ実行されていない or 実行中のときは、情報取得中であることを示すダミーのチャンネル情報を返す
-            if (this.is_channels_list_initial_updated === false) {
+            if (this.is_channels_list_initial_updated === false && this.is_iptv_initial_updated === false) {
                 return {
                     previous: structuredClone(ILiveChannelDefault),
                     current: structuredClone(ILiveChannelDefault),
@@ -207,7 +211,7 @@ const useChannelsStore = defineStore('channels', {
             channels_list_with_pinned.set('ネット', []);
 
             // 初回のチャンネル情報更新がまだ実行されていない or 実行中のときは最低限の上記2つだけで返す
-            if (this.is_channels_list_initial_updated === false) {
+            if (this.is_channels_list_initial_updated === false && this.is_iptv_initial_updated === false) {
                 return channels_list_with_pinned;
             }
 
@@ -368,7 +372,12 @@ const useChannelsStore = defineStore('channels', {
          * チャンネルリストを更新する
          * @param force 強制的に更新するかどうか
          */
-        async update(force: boolean = false): Promise<void> {
+        async update(force: boolean = false, source: 'Broadcast' | 'Jellyfin' = 'Broadcast'): Promise<void> {
+
+            if (source === 'Jellyfin') {
+                await this.updateIPTV();
+                return;
+            }
 
             // ローカル放送とネットテレビは互いの完了を待たずに開始する。
             const iptv_update = this.updateIPTV().catch((error) => {
@@ -424,42 +433,71 @@ const useChannelsStore = defineStore('channels', {
             }
 
             // チャンネルリストの更新を行う
-            const is_update_succeeded = await updateBroadcast();
-            if (is_update_succeeded === false) {
-                // ネットワークエラーなどでチャンネル情報更新に失敗した場合、以降の処理を実行すると
-                // 意図せずピン留め中チャンネルの情報が削除されてしまうため、実行しない
-                console.warn('[ChannelsStore] Failed to update channels list. Skip removing pinned channel IDs.');
+            if (broadcast_update_promise !== null) {
+                await broadcast_update_promise;
                 return;
             }
+            broadcast_update_promise = (async () => {
+                const is_update_succeeded = await updateBroadcast();
+                if (is_update_succeeded === false) {
+                // ネットワークエラーなどでチャンネル情報更新に失敗した場合、以降の処理を実行すると
+                // 意図せずピン留め中チャンネルの情報が削除されてしまうため、実行しない
+                    console.warn('[ChannelsStore] Failed to update channels list. Skip removing pinned channel IDs.');
+                    return;
+                }
 
-            // この時点で pinned_channels に存在していないピン留め中チャンネルの ID を pinned_channel_ids から削除する
-            // 受信環境の変化などでピン留め中チャンネルのチャンネル情報が取得できなくなった場合に備える
-            const settings_store = useSettingsStore();
-            settings_store.settings.pinned_channel_ids = settings_store.settings.pinned_channel_ids.filter((channel_id) => {
+                // この時点で pinned_channels に存在していないピン留め中チャンネルの ID を pinned_channel_ids から削除する
+                // 受信環境の変化などでピン留め中チャンネルのチャンネル情報が取得できなくなった場合に備える
+                const settings_store = useSettingsStore();
+                settings_store.settings.pinned_channel_ids = settings_store.settings.pinned_channel_ids.filter((channel_id) => {
                 // ネットテレビの無効化・空応答・一時障害では、復旧後にカードを戻せるようピンを残す。
                 // 上流に存在しないことをこのレスポンスだけで断定しない。
-                if (channel_id.startsWith('jellyfin-')) {
-                    return true;
-                }
-                const result = this.channels_list_with_pinned.get('ピン留め')?.some((channel) => channel.id === channel_id);
-                if (result === false) {
-                    console.warn('[ChannelsStore] Deleted pinned channel ID:', channel_id);
-                }
-                return result;
-            });
+                    if (channel_id.startsWith('jellyfin-')) {
+                        return true;
+                    }
+                    const result = this.channels_list_with_pinned.get('ピン留め')?.some((channel) => channel.id === channel_id);
+                    if (result === false) {
+                        console.warn('[ChannelsStore] Deleted pinned channel ID:', channel_id);
+                    }
+                    return result;
+                });
 
-            // 初回描画はローカル放送を待つだけでよく、ネットテレビは独立して状態を更新する。
-            void iptv_update;
+                // 初回描画はローカル放送を待つだけでよく、ネットテレビは独立して状態を更新する。
+                void iptv_update;
+            })();
+            try {
+                await broadcast_update_promise;
+            } finally {
+                broadcast_update_promise = null;
+            }
         },
 
         async updateIPTV(): Promise<void> {
-            const response = await Channels.fetchAllChannels('Jellyfin');
-            if (response === null) {
+            if (iptv_update_promise !== null) {
+                await iptv_update_promise;
                 return;
             }
-            this.source_errors = response.source_errors;
-            if (response.source_errors.IPTV === null) {
-                this.channels_list = Utils.deepObjectFreeze({...this.channels_list, IPTV: response.IPTV});
+            iptv_update_promise = (async () => {
+                this.is_iptv_loading = true;
+                try {
+                    const response = await Channels.fetchAllChannels('Jellyfin');
+                    if (response === null) {
+                        this.source_errors.IPTV = 'ネットテレビのチャンネルを取得できませんでした。接続を確認して再試行してください。';
+                        return;
+                    }
+                    this.source_errors = response.source_errors;
+                    if (response.source_errors.IPTV === null) {
+                        this.channels_list = Utils.deepObjectFreeze({...this.channels_list, IPTV: response.IPTV});
+                        this.is_iptv_initial_updated = true;
+                    }
+                } finally {
+                    this.is_iptv_loading = false;
+                }
+            })();
+            try {
+                await iptv_update_promise;
+            } finally {
+                iptv_update_promise = null;
             }
         }
     }

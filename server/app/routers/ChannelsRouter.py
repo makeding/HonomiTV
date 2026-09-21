@@ -81,6 +81,7 @@ async def GetIPTVChannels() -> tuple[list[schemas.IPTVChannel], str | None]:
     response_model = schemas.LiveChannels,
 )
 async def ChannelsAPI(
+    response: Response,
     channel_type: Annotated[Literal['GR', 'BS', 'CS', 'CATV', 'SKY', 'BS4K', 'IPTV'] | None, Query(alias='type')] = None,
     source: Annotated[Literal['Broadcast', 'Jellyfin', 'IPTV'] | None, Query()] = None,
 ):
@@ -172,8 +173,10 @@ async def ChannelsAPI(
         'SKY': [],
         'BS4K': [],
         'IPTV': iptv_channels,
-        'source_errors': {'IPTV': iptv_error},
     }
+    # 既存クライアントはレスポンス直下の全値をチャンネル配列として列挙する。
+    # 供給元の失敗は後方互換なヘッダーへ移し、本文の配列契約を維持する。
+    response.headers['X-Channel-Source-Errors'] = json.dumps({'IPTV': iptv_error}, ensure_ascii=True, separators=(',', ':'))
 
     # チャンネルごとに実行
     for channel in channels:
@@ -304,7 +307,7 @@ async def ChannelsAPI(
     '/{channel_id}',
     summary = 'チャンネル情報 API',
     response_description = 'チャンネル情報。',
-    response_model = schemas.LiveChannel,
+    response_model = schemas.LiveChannel | schemas.IPTVChannel,
 )
 async def ChannelAPI(
     channel_id: Annotated[str, Path(description='チャンネル ID (id or display_channel_id) 。ex: NID32736-SID1024, gr011, jellyfin-...')],

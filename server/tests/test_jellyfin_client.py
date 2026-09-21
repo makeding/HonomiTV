@@ -1,5 +1,6 @@
 import time
 import unittest
+from collections import OrderedDict
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -92,6 +93,19 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         with patch('app.utils.JellyfinClient.GetJellyfinConfig', return_value=self._config()):
             with self.assertRaises(JellyfinError):
                 JellyfinClient.register_resource(session, 'https://other.example/segment.ts')
+
+    def test_resource_map_evicts_only_the_least_recently_used_reference(self) -> None:
+        session = JellyfinPlaybackSession('f' * 32, 'http://jellyfin.example:8096/live/master.m3u8', 'hls', None)
+        session.resource_urls = OrderedDict(
+            (f'id-{index}', f'http://jellyfin.example:8096/live/{index}.ts') for index in range(2048)
+        )
+        with patch('app.utils.JellyfinClient.GetJellyfinConfig', return_value=self._config()):
+            JellyfinClient.get_resource_url(session, 'id-0')
+            JellyfinClient.register_resource(session, 'new.ts')
+
+        self.assertIn('id-0', session.resource_urls)
+        self.assertNotIn('id-1', session.resource_urls)
+        self.assertEqual(len(session.resource_urls), 2048)
 
     async def test_close_failure_is_retained_and_retried_even_after_integration_is_disabled(self) -> None:
         session = JellyfinPlaybackSession('c' * 32, 'http://jellyfin.example:8096/live.ts', 'mpegts', 'live-1')

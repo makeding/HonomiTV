@@ -2,6 +2,7 @@ import asyncio
 import re
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,7 +29,7 @@ class JellyfinPlaybackSession:
     upstream_url: str
     stream_type: Literal['hls', 'mpegts']
     live_stream_id: str | None
-    resource_urls: dict[str, str] = field(default_factory=dict)
+    resource_urls: OrderedDict[str, str] = field(default_factory=OrderedDict)
     last_accessed_at: float = field(default_factory=time.time)
     closing: bool = False
 
@@ -308,21 +309,31 @@ class JellyfinClient:
         upstream_url = cls._resolve_resource_url(resource_url, base_url or session.upstream_url)
         for resource_id, existing_url in session.resource_urls.items():
             if existing_url == upstream_url:
+                session.resource_urls.move_to_end(resource_id)
                 return resource_id
         if len(session.resource_urls) >= 2048:
-            # HLS の最新プレイリストを次回更新時に再登録できるよう、無制限な参照蓄積を防ぐ。
-            session.resource_urls.clear()
+            # 参照中の新しいプレイリストを壊さないよう、最も古い 1 件だけを LRU で破棄する。
+            session.resource_urls.popitem(last=False)
         resource_id = uuid.uuid4().hex
         session.resource_urls[resource_id] = upstream_url
         return resource_id
 
     @classmethod
-    async def fetch_resource(cls, session: JellyfinPlaybackSession, resource_id: str | None = None) -> tuple[bytes, str]:
-        upstream_url = session.upstream_url if resource_id is None else session.resource_urls.get(resource_id)
+    def get_resource_url(cls, session: JellyfinPlaybackSession, resource_id: str) -> str:
+        upstream_url = session.resource_urls.get(resource_id)
         if upstream_url is None:
             raise JellyfinError('Jellyfin の再生リソースは存在しません。')
-        async with HTTPX_CLIENT() as client:
-            response = await client.get(upstream_url, headers=cls._authorization_headers(), timeout=20)
+        session.resource_urls.move_to_end(resource_id)
+        return upstream_url
+
+    @classmethod
+    async def fetch_resource(cls, session: JellyfinPlaybackSession, resource_id: str | None = None) -> tuple[bytes, str]:
+        upstream_url = session.upstream_url if resource_id is None else cls.get_resource_url(session, resource_id)
+        try:
+            async with HTTPX_CLIENT() as client:
+                response = await client.get(upstream_url, headers=cls._authorization_headers(), timeout=20)
+        except (httpx.NetworkError, httpx.TimeoutException) as error:
+            raise JellyfinError('Jellyfin の再生リソースに接続できません。') from error
         if response.status_code < 200 or response.status_code >= 300:
             raise JellyfinError(f'Jellyfin の再生リソースが HTTP {response.status_code} を返しました。')
         return response.content, response.headers.get('content-type', 'application/octet-stream')
@@ -330,9 +341,7 @@ class JellyfinClient:
     @classmethod
     async def stream_resource(cls, session: JellyfinPlaybackSession, resource_id: str) -> tuple[AsyncGenerator[bytes, None], str]:
         """持続する MPEG-TS をメモリへ全量読み込みせずそのまま中継する。"""
-        upstream_url = session.resource_urls.get(resource_id)
-        if upstream_url is None:
-            raise JellyfinError('Jellyfin の再生リソースは存在しません。')
+        upstream_url = cls.get_resource_url(session, resource_id)
         client = HTTPX_CLIENT()
         request = client.build_request('GET', upstream_url, headers=cls._authorization_headers())
         try:
@@ -348,6 +357,8 @@ class JellyfinClient:
         async def generate() -> AsyncGenerator[bytes, None]:
             try:
                 async for chunk in response.aiter_bytes():
+                    if session.closing is True:
+                        break
                     session.last_accessed_at = time.time()
                     yield chunk
             finally:

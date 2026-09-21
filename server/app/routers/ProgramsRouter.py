@@ -47,7 +47,7 @@ async def GetIPTVTimeTable(
     """IPTV 番組表を取得する。Jellyfin 障害はローカル番組表を空にしない。"""
     should_include = source != 'Broadcast' and channel_type in (None, 'IPTV')
     if pinned_channel_ids is not None:
-        should_include = any(channel_id.startswith('jellyfin-') for channel_id in pinned_channel_ids)
+        should_include = should_include and any(channel_id.startswith('jellyfin-') for channel_id in pinned_channel_ids)
     if should_include is False or JellyfinClient.is_configured() is False:
         return ([], None)
     try:
@@ -657,19 +657,19 @@ async def TimeTableAPI(
                     program_id = f'NID{reserve_data["onid"]}-SID{reserve_data["sid"]:03d}-EID{reserve_data["eid"]}'
 
                     # 予約状態を判定
-                    status: Literal['Reserved', 'Recording', 'Disabled']
+                    reservation_status: Literal['Reserved', 'Recording', 'Disabled']
                     rec_mode = reserve_data.get('rec_setting', {}).get('rec_mode', 1)
                     if rec_mode >= 5:  # 5以上は無効
-                        status = 'Disabled'
+                        reservation_status = 'Disabled'
                     else:
                         # 現在時刻付近の番組のみ録画中かどうかを判定 (N+1 問題の回避)
                         # 明らかに録画中でない番組に対して EDCB にクエリを発行しても無駄なので、
                         # 録画中判定の時間範囲内 (現在時刻の前後2時間) にある番組のみチェックする
                         if reserve_start_time <= recording_check_end and reserve_end_time >= recording_check_start:
                             is_recording = type(await edcb.sendGetRecFilePath(reserve_data['reserve_id'])) is str
-                            status = 'Recording' if is_recording else 'Reserved'
+                            reservation_status = 'Recording' if is_recording else 'Reserved'
                         else:
-                            status = 'Reserved'
+                            reservation_status = 'Reserved'
 
                     # 録画可能状態
                     recording_availability: Literal['Full', 'Partial', 'Unavailable'] = 'Full'
@@ -680,7 +680,7 @@ async def TimeTableAPI(
 
                     reservations_by_program_id[program_id] = {
                         'id': reserve_data['reserve_id'],
-                        'status': status,
+                        'status': reservation_status,
                         'recording_availability': recording_availability,
                     }
                     channel_id = channel_id_by_service_triplet.get((

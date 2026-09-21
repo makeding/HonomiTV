@@ -118,7 +118,6 @@ class LiveChannels(BaseModel):
     SKY: list[LiveChannel]
     BS4K: list[LiveChannel]
     IPTV: list[IPTVChannel] = []
-    source_errors: dict[Literal['IPTV'], str | None] = {'IPTV': None}
 
 # ***** 放送中/放送予定の番組 *****
 

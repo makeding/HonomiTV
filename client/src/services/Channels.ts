@@ -127,7 +127,7 @@ class Channels {
 
         // API リクエストを実行
         const query = source === undefined ? '' : `?source=${source}`;
-        const response = await APIClient.get<ILiveChannelsResponse>(`/channels${query}`);
+        const response = await APIClient.get<ILiveChannelsList>(`/channels${query}`);
 
         // エラー処理
         if (response.type === 'error') {
@@ -135,7 +135,21 @@ class Channels {
             return null;
         }
 
-        return response.data;
+        // チャンネル一覧の HTTP 本文は分類ごとの配列だけに保つ。
+        // 供給元の状態は別ヘッダーで受け取り、表示用の結果へ明示的に合成する。
+        const source_errors: ILiveChannelsResponse['source_errors'] = {IPTV: null};
+        const errors_header = response.headers['x-channel-source-errors'];
+        if (typeof errors_header === 'string') {
+            try {
+                const errors: unknown = JSON.parse(errors_header);
+                if (errors !== null && typeof errors === 'object' && 'IPTV' in errors && typeof errors.IPTV === 'string') {
+                    source_errors.IPTV = errors.IPTV;
+                }
+            } catch {
+                source_errors.IPTV = 'ネットテレビの状態を取得できませんでした。再試行してください。';
+            }
+        }
+        return {...response.data, source_errors};
     }
 
 
