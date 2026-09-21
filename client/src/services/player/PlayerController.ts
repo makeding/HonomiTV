@@ -323,16 +323,18 @@ class PlayerController {
         if (this.disposed) return;
         const generation = ++this.initialization_generation;
         const player_store = usePlayerStore();
-        if (this.playback_mode === 'Live') player_store.live_playback_error = null;
         try {
             await this.initialize(options, generation);
         } catch (error) {
             if (generation !== this.initialization_generation) return;
-            await this.destroy();
-            if (this.playback_mode !== 'Live') throw error;
+            if (this.playback_mode !== 'Live') {
+                await this.destroy();
+                throw error;
+            }
             if (useChannelsStore().display_channel_id !== this.display_channel_id) return;
-            player_store.live_playback_error = error instanceof Error ? error.message : '再生の初期化に失敗しました。 [LIVE_INIT_FAILED]';
-            player_store.live_playback_recovering = false;
+            await this.live_session.close();
+            const reason = error instanceof Error ? error.message : '再生の初期化に失敗しました。 [LIVE_INIT_FAILED]';
+            this.player?.notice(reason, -1, undefined, '#FF6F6A');
             player_store.is_loading = false;
             player_store.is_video_buffering = false;
         }
@@ -1548,7 +1550,9 @@ class PlayerController {
             });
 
             // 通知を表示してから PlayerController を破棄すると DPlayer の DOM 要素ごと消えてしまうので、DPlayer を作り直した後に通知を表示する
-            this.player?.notice('プレイヤーを再起動しました。', undefined, undefined, undefined);
+            if (player_store.live_stream_status !== 'Offline') {
+                this.player?.notice('プレイヤーを再起動しました。', undefined, undefined, undefined);
+            }
         });
 
         // Screen Wake Lock API を利用して画面の自動スリープを抑制する

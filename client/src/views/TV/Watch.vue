@@ -7,6 +7,7 @@ import { mapStores } from 'pinia';
 import { defineComponent } from 'vue';
 
 import Watch from '@/components/Watch/Watch.vue';
+import Message from '@/message';
 import PlayerController from '@/services/player/PlayerController';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
@@ -45,7 +46,6 @@ export default defineComponent({
 
         // チャンネル ID をセット
         this.channelsStore.display_channel_id = this.$route.params.display_channel_id as string;
-        this.playerStore.event_emitter.on('LivePlaybackRetry', this.retryPlayback);
 
         // 再生セッションを初期化
         this.init();
@@ -90,7 +90,6 @@ export default defineComponent({
     // 終了前に実行
     beforeUnmount() {
         this.is_leaving = true;
-        this.playerStore.event_emitter.off('LivePlaybackRetry', this.retryPlayback);
 
         // destroy() を実行
         // 別のページへ遷移するため、DPlayer のインスタンスを確実に破棄する
@@ -104,25 +103,12 @@ export default defineComponent({
     },
     methods: {
 
-        // 初期化失敗で DPlayer が存在しない場合も、画面自身が新しい再生を開始する。
-        async retryPlayback() {
-            if (this.playerStore.live_playback_error === null) return;
-            this.playerStore.live_playback_recovering = true;
-            this.playerStore.live_playback_error = null;
-            const destruction = this.destroy();
-            const generation = this.playback_generation;
-            await destruction;
-            if (this.is_leaving === false && generation === this.playback_generation) await this.init(true);
-        },
-
         // 再生セッションを初期化する
         async init(force = false) {
             const generation = ++this.playback_generation;
             const channel_id = this.channelsStore.display_channel_id;
             await player_destruction;
             if (generation !== this.playback_generation || this.is_leaving) return;
-            if (force === false) this.playerStore.live_playback_recovering = false;
-            this.playerStore.live_playback_error = null;
             this.playerStore.is_loading = true;
             this.playerStore.is_video_buffering = true;
 
@@ -162,8 +148,7 @@ export default defineComponent({
                 // 一時的な供給元の障害を 404 として扱わず、同じ視聴枠に復旧手段を残す。
                 if (channel_id.startsWith('jellyfin-')) {
                     const reason = this.channelsStore.source_errors.IPTV ?? '接続を確認してください。';
-                    this.playerStore.live_playback_error = `チャンネル情報を取得できませんでした。${reason} 再試行してください。 [LIVE_CHANNEL_UNAVAILABLE]`;
-                    this.playerStore.live_playback_recovering = false;
+                    Message.error(`チャンネル情報を取得できませんでした。${reason} 再試行してください。 [LIVE_CHANNEL_UNAVAILABLE]`);
                     this.playerStore.is_loading = false;
                     this.playerStore.is_video_buffering = false;
                     return;

@@ -29,7 +29,6 @@ export default class LiveSessionPlaybackManager implements PlayerManager {
         store.is_loading = false;
         store.is_video_buffering = false;
         store.is_background_display = false;
-        store.live_playback_recovering = false;
         store.live_stream_status = 'ONAir';
     };
 
