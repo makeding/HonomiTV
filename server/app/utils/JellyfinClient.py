@@ -159,7 +159,29 @@ class JellyfinClient:
         })
         payload = response.json()
         items = payload.get('Items', [])
-        return items if isinstance(items, list) else []
+        channels = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        return cls.sort_channels(channels)
+
+    @staticmethod
+    def sort_channels(channels: list[dict[str, object]]) -> list[dict[str, object]]:
+        """CCTV を数値順に並べ、他局の相対順序と位置は維持する。"""
+        cctv_positions: list[int] = []
+        cctv_channels: list[dict[str, object]] = []
+        for index, channel in enumerate(channels):
+            name = channel.get('Name')
+            if isinstance(name, str) and re.match(r'^CCTV-(\d+)(\+)?', name):
+                cctv_positions.append(index)
+                cctv_channels.append(channel)
+
+        def cctv_sort_key(channel: dict[str, object]) -> tuple[int, int]:
+            matched = re.match(r'^CCTV-(\d+)(\+)?', str(channel.get('Name', '')))
+            assert matched is not None
+            return (int(matched.group(1)), 1 if matched.group(2) == '+' else 0)
+
+        sorted_channels = channels.copy()
+        for position, channel in zip(cctv_positions, sorted(cctv_channels, key=cctv_sort_key), strict=True):
+            sorted_channels[position] = channel
+        return sorted_channels
 
     @classmethod
     async def get_programs(cls, start_time: datetime, end_time: datetime, channel_id: str | None) -> list[dict[str, object]]:
@@ -201,6 +223,9 @@ class JellyfinClient:
     @classmethod
     async def open_playback(cls, channel_id: str) -> JellyfinPlaybackSession:
         """Jellyfin の Live TV 再生を開き、代理用の不透明なセッションを作る。"""
+        # PlaybackInfo の UserId は認証後にしか確定しない。_request() 内だけで認証すると、
+        # コールドスタート時にクエリへ None が入り Jellyfin が 400 を返す。
+        await cls._authenticate()
         response = await cls._request(
             'POST',
             f'Items/{channel_id}/PlaybackInfo',
@@ -221,7 +246,10 @@ class JellyfinClient:
                         'VideoCodec': 'h264',
                         'AudioCodec': 'aac',
                         'Protocol': 'hls',
-                        'Context': 'Live',
+                        # Jellyfin EncodingContext の Live は有効な値ではなく、ストリーム再生は Streaming を使う。
+                        'Context': 'Streaming',
+                        'MinSegments': 1,
+                        'BreakOnNonKeyFrames': True,
                     }],
                     'SubtitleProfiles': [],
                 },

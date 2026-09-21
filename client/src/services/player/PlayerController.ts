@@ -112,6 +112,7 @@ class PlayerController {
     // このインスタンスが所有するライブセッションと初期化世代。切り替え後の応答は再利用しない。
     private readonly live_session = new LivePlaybackSession();
     private live_session_info: ILivePlaybackSession | null = null;
+    private live_session_required = false;
     private initialization_generation = 0;
     private disposed = false;
     private readonly display_channel_id: string;
@@ -394,9 +395,17 @@ class PlayerController {
         if (generation !== this.initialization_generation) return;
 
         // セッション対応チャンネルは共通 API で開く。応答待ちの退出も所有権を失わず解放する。
-        if (this.playback_mode === 'Live' && channels_store.channel.current.capabilities.live_stream_session) {
-            this.live_session_info = await this.live_session.open(this.display_channel_id);
-            if (generation !== this.initialization_generation || this.live_session_info === null) return;
+        let session_open_error: string | null = null;
+        this.live_session_required = this.playback_mode === 'Live' && channels_store.channel.current.capabilities.live_stream_session;
+        if (this.live_session_required) {
+            try {
+                this.live_session_info = await this.live_session.open(this.display_channel_id);
+            } catch (error) {
+                // 失敗時も DPlayer のコントロールと通知を作り、既存の再起動操作を利用する。
+                session_open_error = error instanceof Error ? error.message : 'ライブ再生を開始できませんでした。';
+            }
+            if (generation !== this.initialization_generation || this.disposed) return;
+            if (this.live_session_info === null && session_open_error === null) return;
             player_store.live_comment_init_failed_message = 'このチャンネルは実況コメントに対応していません。';
         }
 
@@ -621,6 +630,9 @@ class PlayerController {
 
                 // ライブ視聴: チャンネル情報がセットされているはず
                 if (this.playback_mode === 'Live') {
+                    if (this.live_session_required && this.live_session_info === null) {
+                        return {url: '', type: 'normal'};
+                    }
                     if (this.live_session_info !== null) {
                         return {
                             quality: [{
@@ -1414,7 +1426,7 @@ class PlayerController {
             console.warn('\u001b[31m[PlayerController] PlayerRestartRequired event received. Message: ', event.message);
 
             // ライブ視聴: iOS 17.0 以下で mpegts.js がサポートされていない場合は再起動できない
-            if (this.playback_mode === 'Live' && this.live_session_info === null && mpegts.isSupported() !== true) {  // mpegts.js 非対応環境では undefined が返る
+            if (this.playback_mode === 'Live' && this.live_session_required === false && mpegts.isSupported() !== true) {  // mpegts.js 非対応環境では undefined が返る
                 console.warn('\u001b[31m[PlayerController] PlayerRestartRequired event received, but mpegts.js is not supported. Ignored.');
                 // iOS 17.0 以下は mpegts.js がサポートされていないため、再生できない
                 this.player?.notice('iOS (Safari) 17.0 以下での視聴には対応していません。速やかに iOS を 17.1 以降に更新してください。', -1, undefined, '#FF6F6A');
@@ -1555,19 +1567,16 @@ class PlayerController {
             // ライブ視聴時に設定する PlayerManager
             this.player_managers = [
                 ...(this.live_session_info !== null ? [new LiveSessionPlaybackManager(this.player, (reason) => {
-                    const generation = this.initialization_generation;
-                    void this.destroy().then(() => {
-                        if (this.initialization_generation !== generation + 1 ||
-                            useChannelsStore().display_channel_id !== this.display_channel_id) return;
-                        player_store.live_playback_error = reason;
-                        player_store.live_playback_recovering = false;
-                        player_store.is_loading = false;
-                        player_store.is_video_buffering = false;
-                        player_store.live_stream_status = 'Offline';
-                    });
+                    // DPlayer 自体は残し、標準の通知と再起動ボタンを使う。
+                    void this.live_session.close();
+                    this.player?.pause();
+                    player_store.is_loading = false;
+                    player_store.is_video_buffering = false;
+                    player_store.live_stream_status = 'Offline';
+                    this.player?.notice(`${reason} プレイヤーの再起動ボタンで再試行できます。`, -1, undefined, '#FF6F6A');
                 })] : []),
-                ...(this.live_session_info === null ? [new LiveEventManager(this.player), new LiveCommentManager(this.player)] : []),
-                ...(this.live_session_info === null ? [this.player.quality?.type === 'tlv' ?
+                ...(this.live_session_required === false ? [new LiveEventManager(this.player), new LiveCommentManager(this.player)] : []),
+                ...(this.live_session_required === false ? [this.player.quality?.type === 'tlv' ?
                     new TLVDataBroadcastingManager(this.player, this.playback_mode) :
                     new LiveDataBroadcastingManager(this.player)] : []),
                 new CaptureManager(this.player, this.playback_mode),
@@ -1592,6 +1601,15 @@ class PlayerController {
         // 同期処理すると時間が掛かるので、並行して実行する
         await Promise.all(this.player_managers.map((player_manager) => player_manager.init()));
         if (generation !== this.initialization_generation) return;
+
+        if (session_open_error !== null) {
+            await this.live_session.close();
+            this.player.pause();
+            player_store.is_loading = false;
+            player_store.is_video_buffering = false;
+            player_store.live_stream_status = 'Offline';
+            this.player.notice(`${session_open_error} プレイヤーの再起動ボタンで再試行できます。`, -1, undefined, '#FF6F6A');
+        }
 
         console.log('\u001b[31m[PlayerController] Initialized.');
     }
@@ -1769,7 +1787,7 @@ class PlayerController {
 
                 // セッション再生の準備と失敗は LiveSessionPlaybackManager が所有する。
                 // 放送用のバッファ待機や ONAir イベント待機へ進まない。
-                if (this.live_session_info !== null) return;
+                if (this.live_session_required) return;
 
                 // mpeg2toh264 によるオリジナル画質再生時のみの専用処理
                 if (this.player.type === 'mpeg2toh264' && this.player.plugins.mpeg2toh264) {
@@ -2489,7 +2507,7 @@ class PlayerController {
         }
 
         // オフライン再生では通信節約モードや画質プロファイル切り替えは無関係なので、該当スイッチを設定パネルへ追加しない
-        if (is_offline_playback === false && this.live_session_info === null) {
+        if (is_offline_playback === false && this.live_session_required === false) {
             // モバイル回線プロファイルに切り替えるボタンを動的に追加する
             this.player.template.audio.insertAdjacentHTML('afterend', `
                 <div class="dplayer-setting-item dplayer-setting-mobile-profile">

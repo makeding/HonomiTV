@@ -117,14 +117,13 @@ async def ChannelsAPI(
     # データベースの生のコネクションを取得
     # 地デジ・BS・CS を合わせると 18000 件近くになる番組情報を SQLite かつ ORM で絞り込んで素早く取得するのは無理があるらしい
     # そこで、この部分だけは ORM の機能を使わず、直接クエリを叩いて取得する
-    connection = connections.get('default')
-
     # 現在と次の番組情報を取得する
     ## 一度に取得した方がパフォーマンスが向上するため敢えてそうしている
     ## SQL 文の時間比較は、左にいくほど時刻が小さく、右にいくほど時刻が大きくなるように統一している
     ## 番組時間は EPG の仕様上必ず24時間以下に収まるので、パフォーマンスを考慮して24時間以内に放送開始予定の番組のみに絞り込む
     pf_programs: list[dict[str, Any]] = []
     if include_broadcast is True:
+        connection = connections.get('default')
         tasks.append(connection.execute_query_dict(
         """
         SELECT *

@@ -203,15 +203,16 @@ const useChannelsStore = defineStore('channels', {
                 return a.channel_number.localeCompare(b.channel_number, 'ja');
             };
 
+
             // 事前に Map を定義しておく
             // Map にしていたのは、確か連想配列の順序を保証してくれるからだったはず
             const channels_list_with_pinned = new Map<ChannelTypePretty, ILiveChannel[]>();
             channels_list_with_pinned.set('ピン留め', []);
             channels_list_with_pinned.set('地デジ', []);
-            channels_list_with_pinned.set('ネット', []);
 
             // 初回のチャンネル情報更新がまだ実行されていない or 実行中のときは最低限の上記2つだけで返す
             if (this.is_channels_list_initial_updated === false && this.is_iptv_initial_updated === false) {
+                channels_list_with_pinned.set('ネット', []);
                 return channels_list_with_pinned;
             }
 
@@ -220,6 +221,7 @@ const useChannelsStore = defineStore('channels', {
             channels_list_with_pinned.set('CATV', []);
             channels_list_with_pinned.set('SKY', []);
             channels_list_with_pinned.set('BS4K', []);
+            channels_list_with_pinned.set('ネット', []);
 
             // channels_list に格納されているすべてのチャンネルに対しループを回し、
             // 順次 channels_list_with_pinned に追加していく
@@ -281,6 +283,7 @@ const useChannelsStore = defineStore('channels', {
                 const index_b = settings_store.settings.pinned_channel_ids.indexOf(b.id);
                 return index_a - index_b;
             }));
+
 
             // 「チャンネル一覧を実況勢いが強い順に並べる」がオンかつ、実況勢いが1つでも取得できている場合のみ、
             // ピン留めタブを含む全チャンネルリストを実況勢い順で並び替える

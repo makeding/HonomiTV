@@ -36,7 +36,7 @@ let css = `.ch-sprite {
     border-radius: calc(var(--ch-sprite-border-radius) / var(--ch-sprite-scale-ratio) * 1px);
     zoom: var(--ch-sprite-scale-ratio);
     transform-origin: top left;
-    background-image: url(/assets/images/channel-logo-sprite.webp);
+    background-image: var(--ch-sprite-image, none);
 }
 .ch-sprite>img {
     width: 100%;
@@ -94,7 +94,7 @@ async function run() {
             });
             Object.entries(channelXY).forEach(([id, xy]) => {
                 //                      with exploit LOL
-                css += `.ch-sprite[chid=${id}] {--ch-sprite-x: ${xy.x};--ch-sprite-y: ${xy.y};}`;
+                css += `.ch-sprite[chid=${id}] {--ch-sprite-image: url(/assets/images/channel-logo-sprite.webp);--ch-sprite-x: ${xy.x};--ch-sprite-y: ${xy.y};}`;
                 css += `.ch-sprite[chid=${id}] > img{display:none;}`;
                 css += '\n';
             });

@@ -5,8 +5,12 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from app.constants import JST
 from app.routers.ChannelsRouter import GetIPTVChannels
+from app.routers.ChannelsRouter import router as channels_router
 from app.routers.ProgramsRouter import GetIPTVTimeTable
 from app.utils.JellyfinClient import (
     JellyfinClient,
@@ -44,6 +48,32 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(client.post.await_args.kwargs['json'], {'Username': 'user', 'Pw': ''})
             self.assertEqual(JellyfinClient._access_token, 'test-token')  # pyright: ignore[reportPrivateUsage]
 
+    async def test_playback_info_authenticates_before_building_user_id_and_uses_streaming_context(self) -> None:
+        async def authenticate() -> None:
+            JellyfinClient._user_id = 'authenticated-user'  # pyright: ignore[reportPrivateUsage]
+
+        response = Mock()
+        response.json.return_value = {
+            'MediaSources': [{
+                'TranscodingUrl': '/Videos/live.m3u8',
+                'LiveStreamId': 'live-stream',
+            }],
+        }
+        request = AsyncMock(return_value=response)
+        with (
+            patch('app.utils.JellyfinClient.GetJellyfinConfig', return_value=self._config()),
+            patch.object(JellyfinClient, '_authenticate', AsyncMock(side_effect=authenticate)),
+            patch.object(JellyfinClient, '_request', request),
+            patch.object(JellyfinClient, '_user_id', None),
+        ):
+            session = await JellyfinClient.open_playback('channel')
+
+        self.assertEqual(session.stream_type, 'hls')
+        self.assertEqual(request.await_args.kwargs['params']['UserId'], 'authenticated-user')
+        profile = request.await_args.kwargs['json']['DeviceProfile']['TranscodingProfiles'][0]
+        self.assertEqual(profile['Context'], 'Streaming')
+        self.assertEqual(profile['MinSegments'], 1)
+
     def test_channel_and_program_keep_jellyfin_stable_ids_and_missing_broadcast_fields(self) -> None:
         channel = ToIPTVChannel({
             'Id': 'upstream-channel',
@@ -67,6 +97,17 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         assert channel.program_present is not None
         self.assertEqual(channel.program_present.id, 'jellyfin-upstream-program')
         self.assertEqual(channel.program_present.source, 'Jellyfin')
+
+    def test_cctv_channels_are_numerically_sorted_without_moving_other_channels(self) -> None:
+        channels = [
+            {'Name': '地方局'}, {'Name': 'CCTV-10'}, {'Name': 'CCTV-5+'}, {'Name': 'CCTV-1'},
+            {'Name': '国外局'}, {'Name': 'CCTV-5'}, {'Name': 'CCTV-2'},
+        ]
+        sorted_channels = JellyfinClient.sort_channels(channels)
+        self.assertEqual(
+            [channel['Name'] for channel in sorted_channels],
+            ['地方局', 'CCTV-1', 'CCTV-2', 'CCTV-5', '国外局', 'CCTV-5+', 'CCTV-10'],
+        )
 
     def test_invalid_incomplete_program_is_not_converted_to_a_broadcast_program(self) -> None:
         self.assertIsNone(ToIPTVProgram({'Id': 'missing-dates'}))
@@ -144,6 +185,20 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(error)
         self.assertEqual([channel.id for channel in channels], ['jellyfin-channel-a'])
+
+    def test_channels_http_body_contains_only_arrays_and_source_error_is_safe_header_json(self) -> None:
+        app = FastAPI()
+        app.include_router(channels_router)
+        with patch.object(JellyfinClient, 'is_configured', return_value=True), patch.object(
+            JellyfinClient, 'get_channels', AsyncMock(side_effect=JellyfinError('認証に失敗しました。')),
+        ):
+            response = TestClient(app).get('/api/channels?source=IPTV')
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(all(isinstance(value, list) for value in body.values()))
+        self.assertEqual(body['IPTV'], [])
+        self.assertEqual(response.headers['X-Channel-Source-Errors'], '{"IPTV":"\\u8a8d\\u8a3c\\u306b\\u5931\\u6557\\u3057\\u307e\\u3057\\u305f\\u3002"}')
 
     async def test_timetable_pinned_network_channels_keep_order_and_only_return_overlapping_programs(self) -> None:
         start = datetime(2026, 9, 21, 12, 0, tzinfo=JST)
