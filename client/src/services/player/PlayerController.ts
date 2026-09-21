@@ -397,6 +397,7 @@ class PlayerController {
         if (this.playback_mode === 'Live' && channels_store.channel.current.capabilities.live_stream_session) {
             this.live_session_info = await this.live_session.open(this.display_channel_id);
             if (generation !== this.initialization_generation || this.live_session_info === null) return;
+            player_store.live_comment_init_failed_message = 'このチャンネルは実況コメントに対応していません。';
         }
 
         // 再エンコード済みの MPEG-TS 録画は、ブラウザが元コーデックを再生できる場合だけ FFmpeg stream copy を利用できる

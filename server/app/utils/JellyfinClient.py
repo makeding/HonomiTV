@@ -104,8 +104,8 @@ class JellyfinClient:
                 raise JellyfinError('Jellyfin の認証応答が不正です。') from error
 
     @classmethod
-    async def _request(cls, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        if GetJellyfinConfig().enabled is False:
+    async def _request(cls, method: str, path: str, *, allow_disabled: bool = False, **kwargs: Any) -> httpx.Response:
+        if GetJellyfinConfig().enabled is False and allow_disabled is False:
             raise JellyfinError('Jellyfin 連携が設定で無効になっています。')
         await cls._authenticate()
         request_headers = kwargs.pop('headers', {})
@@ -254,11 +254,17 @@ class JellyfinClient:
         if session is None:
             return
         session.closing = True
-        if session.live_stream_id is None or cls.is_configured() is False:
+        if session.live_stream_id is None:
             cls._playback_sessions.pop(session_id, None)
             return
         try:
-            await cls._request('POST', 'LiveStreams/Close', json={'LiveStreamId': session.live_stream_id})
+            # 設定が無効化された後も、既に開いた上流 LiveStream は必ず閉じる。
+            await cls._request(
+                'POST',
+                'LiveStreams/Close',
+                allow_disabled=True,
+                json={'LiveStreamId': session.live_stream_id},
+            )
         except JellyfinError as error:
             logging.warning(f'[JellyfinClient] Failed to close live stream: {error}')
             return

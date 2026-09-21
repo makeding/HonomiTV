@@ -383,6 +383,11 @@ const useChannelsStore = defineStore('channels', {
                 // ref: https://speakerdeck.com/tbashiyy/shi-shu-mo-rekodoninai-euruvue-dot-jspuroziekutowoshi-xian-surutamenopahuomansutiyuningu
                 // ref: https://unyacat.net/2021/01/20/vue-freeze-faster/
                 const {source_errors, ...channel_groups} = channels_list;
+                // 個別ソースの失敗は、最後に正常取得したネットテレビのカードを消す理由にしない。
+                // 表示はエラー状態へ切り替えつつ、再試行までカードとピン留めの位置を保つ。
+                if (source_errors.IPTV !== null && this.channels_list.IPTV.length > 0) {
+                    channel_groups.IPTV = this.channels_list.IPTV;
+                }
                 this.channels_list = Utils.deepObjectFreeze(channel_groups);
                 this.source_errors = source_errors;
 
@@ -421,8 +426,9 @@ const useChannelsStore = defineStore('channels', {
             // 受信環境の変化などでピン留め中チャンネルのチャンネル情報が取得できなくなった場合に備える
             const settings_store = useSettingsStore();
             settings_store.settings.pinned_channel_ids = settings_store.settings.pinned_channel_ids.filter((channel_id) => {
-                // Jellyfin の一時障害時は、復旧後にカードを戻せるようネットチャンネルのピンを残す。
-                if (this.source_errors.IPTV !== null && channel_id.startsWith('jellyfin-')) {
+                // ネットテレビの無効化・空応答・一時障害では、復旧後にカードを戻せるようピンを残す。
+                // 上流に存在しないことをこのレスポンスだけで断定しない。
+                if (channel_id.startsWith('jellyfin-')) {
                     return true;
                 }
                 const result = this.channels_list_with_pinned.get('ピン留め')?.some((channel) => channel.id === channel_id);

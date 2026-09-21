@@ -121,7 +121,16 @@
                                 <div class="d-flex justify-center align-center flex-column">
                                     <h2>ネットテレビのチャンネルがありません。</h2>
                                     <div class="mt-2 text-text-darken-1">ネットテレビの接続設定を確認して、再試行してください。</div>
-                                    <v-btn class="mt-4" variant="flat" @click="channelsStore.update(true)">再試行</v-btn>
+                                    <v-btn class="mt-4" variant="flat" :loading="is_network_retrying" :disabled="is_network_retrying" @click="retryNetworkChannels">再試行</v-btn>
+                                </div>
+                            </div>
+                            <div class="pinned-container d-flex justify-center align-center w-100"
+                                v-if="channels_type === 'ネット' && channelsStore.source_errors.IPTV !== null">
+                                <div class="d-flex justify-center align-center flex-column">
+                                    <h2>ネットテレビのチャンネルを更新できませんでした。</h2>
+                                    <div class="mt-2 text-text-darken-1">{{ channelsStore.source_errors.IPTV }}</div>
+                                    <div v-if="channels.length > 0" class="mt-2 text-text-darken-1">前回取得したチャンネルを表示しています。</div>
+                                    <v-btn class="mt-4" variant="flat" :loading="is_network_retrying" :disabled="is_network_retrying" @click="retryNetworkChannels">再試行</v-btn>
                                 </div>
                             </div>
                         </div>
@@ -133,14 +142,6 @@
                         <h2>視聴可能なチャンネルが<br class="d-sm-none">ありません。</h2>
                         <div class="mt-4 text-text-darken-1">前回チャンネルスキャンしたときに<br class="d-sm-none">受信可能なチャンネルを見つけられませんでした。</div>
                         <div class="mt-1 text-text-darken-1">再度チャンネルスキャンを行ってください。</div>
-                    </div>
-                </div>
-                <div v-if="activeChannelType === 'ネット' && channelsStore.source_errors.IPTV !== null"
-                    class="channels-list pinned-container d-flex justify-center align-center w-100" style="flex-grow: 1;">
-                    <div class="d-flex justify-center align-center flex-column">
-                        <h2>ネットテレビのチャンネルを読み込めませんでした。</h2>
-                        <div class="mt-2 text-text-darken-1">{{ channelsStore.source_errors.IPTV }}</div>
-                        <v-btn class="mt-4" variant="flat" @click="channelsStore.update(true)">再試行</v-btn>
                     </div>
                 </div>
             </div>
@@ -215,6 +216,8 @@ export default defineComponent({
 
             // ローディング中かどうか
             is_loading: true,
+
+            is_network_retrying: false,
 
             // インターバル ID
             // ページ遷移時に setInterval(), setTimeout() の実行を止めるのに使う
@@ -596,6 +599,16 @@ export default defineComponent({
         // チャンネルがピン留めされているか
         isPinnedChannel(channel: ILiveChannel): boolean {
             return this.settingsStore.settings.pinned_channel_ids.includes(channel.id);
+        },
+
+        async retryNetworkChannels() {
+            if (this.is_network_retrying) return;
+            this.is_network_retrying = true;
+            try {
+                await this.channelsStore.update(true);
+            } finally {
+                this.is_network_retrying = false;
+            }
         }
     }
 });

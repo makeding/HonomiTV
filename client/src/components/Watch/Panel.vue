@@ -33,10 +33,12 @@
                 :class="{'watch-panel__content--active': panel_active_tab === 'Twitter'}" />
             <button v-ripple class="watch-panel__content-remocon-button elevation-8" v-if="show_remocon"
                 :class="{'watch-panel__content-remocon-button--active': remocon_panel_active}"
-                @click="playerStore.is_remocon_display = !playerStore.is_remocon_display">
+                :aria-disabled="!supports_data_broadcasting"
+                :title="supports_data_broadcasting ? 'リモコン' : 'ネットテレビはデータ放送に対応していません'"
+                @click="toggleRemocon">
                 <Icon class="panel-close-button__icon" icon="material-symbols:remote-gen" width="25px" />
             </button>
-            <Remocon class="watch-panel__remocon" v-if="show_remocon"
+            <Remocon class="watch-panel__remocon" v-if="show_remocon && supports_data_broadcasting"
                 :modelValue="remocon_panel_active && playerStore.is_remocon_display === true"
                 :dataBroadcasting="playerStore.is_data_broadcasting_display"
                 @update:modelValue="playerStore.is_remocon_display = $event" />
@@ -94,6 +96,7 @@ import RecordedProgram from '@/components/Watch/Panel/RecordedProgram.vue';
 import Remocon from '@/components/Watch/Panel/Remocon.vue';
 import Series from '@/components/Watch/Panel/Series.vue';
 import Twitter from '@/components/Watch/Panel/Twitter.vue';
+import Message from '@/message';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
 import Utils from '@/utils';
@@ -139,6 +142,10 @@ export default defineComponent({
                 this.playerStore.recorded_program?.recorded_video.container_format === 'MMT/TLV';
         },
 
+        supports_data_broadcasting(): boolean {
+            return this.playback_mode !== 'Live' || this.channelsStore.channel.current.capabilities.data_broadcasting;
+        },
+
         remocon_panel_active(): boolean {
             if (this.playback_mode === 'Live') {
                 return this.panel_active_tab === 'Program' || this.panel_active_tab === 'Channel';
@@ -147,6 +154,13 @@ export default defineComponent({
         }
     },
     methods: {
+        toggleRemocon(): void {
+            if (this.supports_data_broadcasting === false) {
+                Message.info('ネットテレビはデータ放送に対応していません。');
+                return;
+            }
+            this.playerStore.is_remocon_display = !this.playerStore.is_remocon_display;
+        },
         closePanel(): void {
             // データ放送中のパネル表示は通常のユーザー設定と分離し、アプリケーションを終了せずに折り畳む。
             if (this.playerStore.is_data_broadcasting_display) {

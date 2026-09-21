@@ -347,7 +347,20 @@ const useTimeTableStore = defineStore('timetable', () => {
 
         // 番組表データを更新
         // shallowRef でリアクティブ化の負荷を抑えつつ差し替えのみ検知する
-        channels_data.value = response.channels;
+        // Jellyfin だけが失敗した場合も、既に表示しているネットテレビの番組を空配列で置き換えない。
+        // 同じリクエスト範囲の放送波データは常に最新レスポンスを採用する。
+        if (response.source_errors.IPTV !== null) {
+            const cached_iptv_channels = channels_data.value.filter((channel) => channel.channel.type === 'IPTV');
+            const response_iptv_channel_ids = new Set(response.channels
+                .filter((channel) => channel.channel.type === 'IPTV')
+                .map((channel) => channel.channel.id));
+            channels_data.value = [
+                ...response.channels,
+                ...cached_iptv_channels.filter((channel) => !response_iptv_channel_ids.has(channel.channel.id)),
+            ];
+        } else {
+            channels_data.value = response.channels;
+        }
         source_errors.value = response.source_errors;
 
         // 日付範囲を更新 (API から返される文字列を Dayjs に変換)

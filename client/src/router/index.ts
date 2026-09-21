@@ -3,7 +3,9 @@
 import { createRouter, createWebHistory } from 'vue-router';
 
 import Message from '@/message';
+import Channels from '@/services/Channels';
 import RemoteControl, { type RemoteCommand } from '@/services/RemoteControl';
+import useChannelsStore from '@/stores/ChannelsStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils from '@/utils';
 
@@ -227,6 +229,16 @@ router.beforeResolve(async (to, from, next) => {
     const selectedDeviceId = useSettingsStore().settings.selected_remote_device_id;
     let remoteCommand: Extract<RemoteCommand, {type: 'OpenLive' | 'OpenRecording'}> | null = null;
     if (selectedDeviceId !== null && to.name === 'TV Watch' && typeof to.params.display_channel_id === 'string') {
+        // 選択中テレビへ未対応のチャンネルを送信しない。元のカードとフォーカスを保持する。
+        const channel = Object.values(useChannelsStore().channels_list).flat()
+            .find(item => item.display_channel_id === to.params.display_channel_id)
+            ?? await Channels.fetch(to.params.display_channel_id);
+        if (channel === null || channel.capabilities.remote_playback === false) {
+            Message.warning(channel === null ? 'チャンネル情報を確認できませんでした。再試行してください。' :
+                'このチャンネルはテレビへの送信に対応していません。テレビ操作メニューで接続を解除するとブラウザで視聴できます。');
+            next(false);
+            return;
+        }
         remoteCommand = {type: 'OpenLive', display_channel_id: to.params.display_channel_id};
     } else if (selectedDeviceId !== null && to.name === 'Videos Watch' && typeof to.params.video_id === 'string') {
         const recordedProgramId = Number(to.params.video_id);

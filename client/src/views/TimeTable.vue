@@ -115,10 +115,10 @@
         <TimeTableSettingsDialog v-model:isOpen="isSettingsDialogOpen" />
         <v-dialog v-model="isNetworkProgramDialogOpen" max-width="640">
             <v-card v-if="networkProgram !== null">
-                <v-card-title class="pt-5 px-6">{{ networkProgram.title }}</v-card-title>
+                <v-card-title class="pt-5 px-6"><span v-html="ProgramUtils.decorateProgramInfo(networkProgram, 'title')"></span></v-card-title>
                 <v-card-text class="px-6">
                     <div class="text-text-darken-1 mb-3">{{ networkProgramChannel?.name }}・{{ networkProgram.start_time }} ～ {{ networkProgram.end_time }}</div>
-                    <div class="mb-4">{{ networkProgram.description }}</div>
+                    <div class="mb-4" v-html="ProgramUtils.decorateProgramInfo(networkProgram, 'description')"></div>
                     <v-alert type="info" variant="tonal" density="compact">ネットテレビでは録画予約を利用できません。</v-alert>
                 </v-card-text>
                 <v-card-actions class="px-6 pb-5"><v-spacer /><v-btn variant="text" @click="isNetworkProgramDialogOpen = false">閉じる</v-btn></v-card-actions>
@@ -155,7 +155,7 @@ import { IProgram, ITimeTableProgram } from '@/services/Programs';
 import Reservations, { IReservation, IRecordSettings, IRecordSettingsDefault } from '@/services/Reservations';
 import useServerSettingsStore from '@/stores/ServerSettingsStore';
 import useTimeTableStore, { CHANNEL_TYPE_DISPLAY_ORDER } from '@/stores/TimeTableStore';
-import Utils, { dayjs } from '@/utils';
+import Utils, { dayjs, ProgramUtils } from '@/utils';
 
 
 // ストア
