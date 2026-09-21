@@ -1782,11 +1782,14 @@ class PlayerController {
 
         // 今回 (DPlayer 初期化直後) と画質切り替え開始時の両方のタイミングで実行する必要がある処理
         // mpegts.js などの DPlayer のプラグインは画質切り替え時に一旦破棄されるため、再度イベントハンドラーを登録する必要がある
-        const on_init_or_quality_change = async () => {
+        const on_init_or_quality_change = async (is_initial: boolean) => {
             assert(this.player !== null);
 
-            // ローディング中の背景写真をランダムに変更
-            player_store.background_url = PlayerUtils.generatePlayerBackgroundURL();
+            // ライブの初回背景はセッション作成前に設定済みなので、ここでは変更しない。
+            // 録画の初期化と実際の画質切り替え時のみ、新しい背景写真を選ぶ。
+            if (this.playback_mode !== 'Live' || !is_initial) {
+                player_store.background_url = PlayerUtils.generatePlayerBackgroundURL();
+            }
 
             // Raw MMTS とネットテレビも放送イベントに依存せず同じ背景表示を開始する。
             if (this.playback_mode === 'Live') {
@@ -2265,10 +2268,10 @@ class PlayerController {
         };
 
         // 初回実行
-        on_init_or_quality_change();
+        on_init_or_quality_change(true);
 
         // 画質切り替え開始時のイベント
-        this.player.on('quality_start', on_init_or_quality_change);
+        this.player.on('quality_start', () => on_init_or_quality_change(false));
 
         // 動画の統計情報の表示/非表示を切り替える隠しコマンドのイベントハンドラーを登録
         // iOS / iPadOS Safari では DPlayer 側の contextmenu が長押ししても発火しないため、代替の表示手段として用意

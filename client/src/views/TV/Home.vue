@@ -132,7 +132,7 @@
                                 </div>
                             </div>
                             <div class="pinned-container d-flex justify-center align-center w-100"
-                                v-if="channels_type === 'ネット' && channelsStore.source_errors.IPTV !== null">
+                                v-else-if="channels_type === 'ネット' && channelsStore.source_errors.IPTV !== null">
                                 <div class="d-flex justify-center align-center flex-column">
                                     <h2>ネットテレビのチャンネルを更新できませんでした。</h2>
                                     <div class="mt-2 text-text-darken-1">{{ channelsStore.source_errors.IPTV }}</div>
@@ -767,6 +767,8 @@ export default defineComponent({
         .swiper-slide {
             display: flex;
             flex-direction: column;
+            // 空・失敗時もスライド全体を覆い、隣のタブのカードや進捗バーを透過させない。
+            background: rgb(var(--v-theme-background));
             min-height: calc(100vh - var(--header-height) - var(--channels-tab-height) - var(--channels-list-padding-bottom) - var(--bottom-navigation-height));
             min-height: calc(100dvh - var(--header-height) - var(--channels-tab-height) - var(--channels-list-padding-bottom) - var(--bottom-navigation-height));
         }
@@ -813,7 +815,8 @@ export default defineComponent({
             }
 
             // ピン留めされているチャンネルがないとき
-            &.channels--length-0.channels--tab-ピン留め {
+            &.channels--length-0.channels--tab-ピン留め,
+            &.channels--length-0.channels--tab-ネット {
                 display: flex;
                 justify-content: center !important;
                 flex-grow: 1;
@@ -1356,6 +1359,12 @@ export default defineComponent({
     }
 
     .pinned-container {
+        // 読み込み・失敗のメッセージをチャンネルカード一枚分の列へ押し込まない。
+        grid-column: 1 / -1;
+        min-width: 0;
+        padding: 24px 16px;
+        text-align: center;
+        overflow-wrap: anywhere;
         br {
             display: none;
         }

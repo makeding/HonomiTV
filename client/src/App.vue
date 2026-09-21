@@ -327,13 +327,14 @@ body .route-container {
     }
 }
 
-// カーソルをポインターにする
+// 白い文字を含む透過ロゴも判読できるよう、中間色の背景に原寸比で収める。
 .channel-logo--iptv,
 .channel-logo--iptv > img {
-    background-color: #fff !important;
+    background-color: #707070 !important;
     object-fit: contain !important;
 }
 
+// カーソルをポインターにする
 .cursor-pointer {
     cursor: pointer;
 }
