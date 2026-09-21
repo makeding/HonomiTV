@@ -491,6 +491,7 @@ def LoadConfig(bypass_validation: bool = False) -> ServerSettings:
         sys.exit(1)
 
     # 設定ファイルからサーバー設定をロードする
+    jellyfin_config_dict: dict[str, Any] = {}
     try:
         with open(_CONFIG_YAML_PATH, encoding='utf-8') as file:
             config_raw = ruamel.yaml.YAML().load(file)
@@ -508,15 +509,8 @@ def LoadConfig(bypass_validation: bool = False) -> ServerSettings:
         # config.yaml に存在しない設定値はデフォルト値で補完する
         config_dict = MergeConfigWithDefaults(config_dict)
 
-        # Jellyfin は放送バックエンドと同じ general 配下で管理する。
-        # トップレベルの旧設定は受け付けず、誤った設定でネットテレビが静かに無効化されることを防ぐ。
-        if 'jellyfin' in config_dict:
-            logging.error('Jellyfin の設定は general.jellyfin に移動されました。config.yaml を更新してください。')
-            sys.exit(1)
-
         # Jellyfin の認証情報はクライアント設定 API のレスポンスへ含めない。
         # ServerSettings の公開モデルへ混ぜるとパスワードがブラウザへ返るため、専用のサーバー内キャッシュへ分離する。
-        jellyfin_config_dict: dict[str, Any] = {}
         if type(config_dict.get('general')) is dict:
             jellyfin_config_dict = config_dict['general'].pop('jellyfin', {})
 

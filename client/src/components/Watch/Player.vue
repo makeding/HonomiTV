@@ -96,6 +96,7 @@ const handleSettingCoverClick = () => {
     .dplayer-setting-danunlimit,
     .dplayer-setting-danmaku,
     .dplayer-comment-box,
+    .dplayer-comment-capture-icon,
     .dplayer-comment-icon {
         display: none !important;
     }

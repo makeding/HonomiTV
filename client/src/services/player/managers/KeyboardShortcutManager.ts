@@ -278,6 +278,7 @@ class KeyboardShortcutManager implements PlayerManager {
 
             // D: コメントの表示切り替え
             {mode: 'Both', key: 'KeyD', repeat: false, ctrl: false, shift: false, alt: false, handler: () => {
+                if (this.player.danmaku == null) return;
                 this.player.template.showDanmaku.click();
                 if (this.player.template.showDanmakuToggle.checked) {
                     this.player.notice(`${this.player.tran('Show comment')}`);
@@ -293,14 +294,16 @@ class KeyboardShortcutManager implements PlayerManager {
 
             // V: 映像をコメントを付けてキャプチャする
             {mode: 'Both', key: 'KeyV', repeat: false, ctrl: false, shift: false, alt: false, handler: () => {
+                if (this.player.danmaku == null) return;
                 comment_capture_button_element.click();
             }},
 
             // M: ライブ視聴: コメント入力フォームにフォーカスする
             // ビデオ視聴ではコメント送信自体ができないため有効化しない
             {mode: 'Live', key: 'KeyM', repeat: false, ctrl: false, shift: false, alt: false, handler: () => {
+                if (this.player.comment == null) return;
                 this.player.controller.show();
-                this.player.comment!.show();
+                this.player.comment.show();
                 player_store.event_emitter.emit('SetControlDisplayTimer', {});
                 window.setTimeout(() => this.player.template.commentInput.focus(), 100);
             }},
@@ -520,7 +523,7 @@ class KeyboardShortcutManager implements PlayerManager {
                 (is_form_focused === false || document.activeElement === this.player.template.commentInput)) {
 
                 // コメント入力フォームを閉じる
-                this.player.comment!.hide();
+                this.player.comment?.hide();
 
                 // 既定のキーボードショートカットイベントをキャンセルして終了
                 event.preventDefault();

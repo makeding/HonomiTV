@@ -82,6 +82,8 @@ class LiveCommentManager implements PlayerManager {
      * ニコニコ実況または NX-Jikkyo に接続し、セッションを初期化する
      */
     public async init(): Promise<void> {
+        // ネット分類ではユーザー情報取得も実況 API 接続も開始しない。
+        if (useChannelsStore().channel.current.type === 'IPTV') return;
         const player_store = usePlayerStore();
         const user_store = useUserStore();
 

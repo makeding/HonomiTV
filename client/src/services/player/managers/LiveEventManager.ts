@@ -240,7 +240,7 @@ class LiveEventManager implements PlayerManager {
                     };
 
                     // 既に描画されたコメントをクリア
-                    this.player.danmaku!.clear();
+                    this.player.danmaku?.clear();
 
                     // 動画を停止する
                     this.player.video.pause();
