@@ -103,7 +103,7 @@ class RemoteControl {
         );
         if (response.type === 'error') {
             if (response.status === 409) {
-                Message.error('選択したテレビはオフラインです。');
+                Message.error('選択したテレビはオフラインです。テレビの接続を確認して、もう一度送信してください。');
             } else {
                 APIClient.showGenericError(response, 'テレビへ送信できませんでした。');
             }

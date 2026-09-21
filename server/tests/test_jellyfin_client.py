@@ -96,6 +96,9 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(channel.viewer_count)
         self.assertEqual(channel.source, 'Jellyfin')
         self.assertTrue(channel.capabilities.live_stream_session)
+        self.assertTrue(channel.capabilities.remote_playback)
+        self.assertFalse(channel.capabilities.recording)
+        self.assertFalse(channel.capabilities.data_broadcasting)
         assert channel.program_present is not None
         self.assertEqual(channel.program_present.id, 'jellyfin-upstream-program')
         self.assertEqual(channel.program_present.source, 'Jellyfin')
@@ -262,6 +265,10 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listing.status_code, 200)
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(listing.json()['IPTV'][0], detail.json())
+        self.assertEqual(detail.json()['capabilities'], {
+            'live_stream': True, 'live_stream_session': True, 'remote_playback': True,
+            'recording': False, 'data_broadcasting': False,
+        })
         self.assertEqual(detail.json()['program_following']['id'], 'jellyfin-following')
         for response, channel in [(failed, failed.json()['IPTV'][0]), (timeout, timeout.json())]:
             self.assertEqual(response.status_code, 200)

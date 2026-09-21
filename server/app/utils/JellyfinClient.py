@@ -488,7 +488,7 @@ def ToIPTVChannel(item: dict[str, object], now: datetime | None = None) -> schem
             live_stream_session=True,
             data_broadcasting=False,
             recording=False,
-            remote_playback=False,
+            remote_playback=True,
         ),
         program_present=present,
     )

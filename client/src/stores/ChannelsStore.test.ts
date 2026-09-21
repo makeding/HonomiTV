@@ -14,7 +14,7 @@ const jellyfinChannel: ILiveChannel = {
     id: 'jellyfin-1', display_channel_id: 'jellyfin-1', network_id: null, service_id: null,
     transport_stream_id: null, remocon_id: null, channel_number: '---', type: 'IPTV', name: 'Test IPTV',
     terrestrial_regions: null, jikkyo_force: null, is_subchannel: false, is_radiochannel: false, is_watchable: true,
-    source: 'Jellyfin', capabilities: {live_stream: true, live_stream_session: true, data_broadcasting: false, recording: false, remote_playback: false},
+    source: 'Jellyfin', capabilities: {live_stream: true, live_stream_session: true, data_broadcasting: false, recording: false, remote_playback: true},
     is_display: true, viewer_count: null, program_present: null, program_following: null,
 };
 
