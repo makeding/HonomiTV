@@ -5,8 +5,8 @@ import os
 import signal
 import sys
 import threading
-from collections.abc import AsyncGenerator, Coroutine
-from typing import Annotated, Any, Literal, TextIO, cast
+from collections.abc import AsyncGenerator
+from typing import Annotated, Literal, TextIO, cast
 
 import anyio
 import psutil
@@ -33,6 +33,8 @@ from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
+from app.utils.DriveIOLimiter import DriveIOLimiter
+from app.utils.ProcessLimiter import ProcessLimiter
 
 
 # ルーター
@@ -291,9 +293,7 @@ async def BackgroundAnalysisAPI():
             'cm_sections',
         )
 
-        # 各録画ファイルに対して直列にバックグラウンド解析タスクを実行
-        ## HDD は並列アクセスが遅いため、随時直列に実行していった方が結果的に早いことが多い
-        ## すべて直列なので ProcessLimiter や DriveIOLimiter での制限は掛けていない
+        # 手動処理も自動解析・サムネイル再生成と同じ枠を使い、同時起動で負荷が増えないようにする。
         for video_row in video_rows:
             file_path = anyio.Path(video_row['file_path'])
             try:
@@ -301,48 +301,39 @@ async def BackgroundAnalysisAPI():
                     logging.warning(f'{file_path}: File not found. Skipping...')
                     continue
 
-                # CM 区間検出とサムネイル生成を同時に実行
-                tasks: list[Coroutine[Any, Any, None]] = []
+                async with ProcessLimiter.getSemaphore('RecordedScanTask', max_concurrency=1):
+                    async with await DriveIOLimiter.getSemaphore(file_path):
+                        # CM 区間情報が未解析の場合だけ検出する。
+                        ## [] は「正常に解析したが CM 区間がなかった」ことを表す。
+                        container_format = cast(Literal['MPEG-TS', 'MPEG-4', 'MMT/TLV'], video_row['container_format'])
+                        if (
+                            video_row['cm_sections'] is None and
+                            CMSectionsDetector.shouldAnalyze(
+                                container_format,
+                                Config().video.enable_mmt_tlv_cm_analysis,
+                            )
+                        ):
+                            db_recorded_program = await RecordedProgram.all() \
+                                .select_related('recorded_video') \
+                                .get_or_none(id=video_row['recorded_program_id'])
+                            await CMSectionsDetector(
+                                file_path = file_path,
+                                duration_sec = video_row['duration'],
+                                container_format = container_format,
+                                service_id = db_recorded_program.service_id if db_recorded_program is not None else None,
+                            ).detectAndSave()
 
-                # CM 区間情報が未解析の場合、タスクに追加
-                ## cm_sections が [] の時は「正常に解析したが CM 区間がなかった」ことを表す。
-                ## None は未解析または解析失敗なので、ランタイム導入・修復後に再実行できる。
-                container_format = cast(Literal['MPEG-TS', 'MPEG-4', 'MMT/TLV'], video_row['container_format'])
-                if (
-                    video_row['cm_sections'] is None and
-                    CMSectionsDetector.shouldAnalyze(
-                        container_format,
-                        Config().video.enable_mmt_tlv_cm_analysis,
-                    )
-                ):
-                    db_recorded_program = await RecordedProgram.all() \
-                        .select_related('recorded_video') \
-                        .get_or_none(id=video_row['recorded_program_id'])
-                    tasks.append(CMSectionsDetector(
-                        file_path = anyio.Path(video_row['file_path']),
-                        duration_sec = video_row['duration'],
-                        container_format = container_format,
-                        service_id = db_recorded_program.service_id if db_recorded_program is not None else None,
-                    ).detectAndSave())
-
-                # サムネイルが未生成の場合、タスクに追加
-                # どちらか片方だけがないパターンも考えられるので、その場合もサムネイル生成を実行する
-                thumbnail_tile_path = anyio.Path(str(THUMBNAILS_DIR)) / f'{video_row["file_hash"]}_tile.webp'
-                thumbnail_path = anyio.Path(str(THUMBNAILS_DIR)) / f'{video_row["file_hash"]}.webp'
-                if (not await thumbnail_tile_path.is_file()) or (not await thumbnail_path.is_file()):
-                    # 録画番組情報を取得
-                    db_recorded_program = await RecordedProgram.all() \
-                        .select_related('recorded_video') \
-                        .select_related('channel') \
-                        .get_or_none(id=video_row['recorded_program_id'])
-                    if db_recorded_program is not None:
-                        # RecordedProgram モデルを schemas.RecordedProgram に変換
-                        recorded_program = schemas.RecordedProgram.model_validate(db_recorded_program, from_attributes=True)
-                        tasks.append(ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave())
-
-                # タスクが存在する場合、同時実行
-                if tasks:
-                    await asyncio.gather(*tasks)
+                        # どちらかのサムネイルが未生成の場合は再生成する。
+                        thumbnail_tile_path = anyio.Path(str(THUMBNAILS_DIR)) / f'{video_row["file_hash"]}_tile.webp'
+                        thumbnail_path = anyio.Path(str(THUMBNAILS_DIR)) / f'{video_row["file_hash"]}.webp'
+                        if (not await thumbnail_tile_path.is_file()) or (not await thumbnail_path.is_file()):
+                            db_recorded_program = await RecordedProgram.all() \
+                                .select_related('recorded_video') \
+                                .select_related('channel') \
+                                .get_or_none(id=video_row['recorded_program_id'])
+                            if db_recorded_program is not None:
+                                recorded_program = schemas.RecordedProgram.model_validate(db_recorded_program, from_attributes=True)
+                                await ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave()
 
             except Exception as ex:
                 logging.error(f'{file_path}: Error in background analysis:', exc_info=ex)

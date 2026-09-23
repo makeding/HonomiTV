@@ -71,7 +71,7 @@ class DriveIOLimiter:
 
 
     @classmethod
-    def getSemaphore(cls, path: anyio.Path) -> asyncio.Semaphore:
+    async def getSemaphore(cls, path: anyio.Path) -> asyncio.Semaphore:
         """
         指定されたパスの HDD 用の Semaphore を取得する
         同一 HDD に対して同時に1つまでしかバックグラウンドタスクを実行できないようにする
@@ -83,8 +83,9 @@ class DriveIOLimiter:
             asyncio.Semaphore: 対応する HDD 用の Semaphore
         """
 
-        # ドライブの識別子を取得
-        drive_id = cls.getDriveID(path)
+        # disk_partitions() はマウント情報の取得中に待機することがある。
+        # 解析開始時にイベントループを止めないよう、ドライブの識別はワーカースレッドで行う。
+        drive_id = await asyncio.to_thread(cls.getDriveID, path)
 
         # HDD ごとのセマフォがなければ作成
         if drive_id not in cls._drive_semaphores:

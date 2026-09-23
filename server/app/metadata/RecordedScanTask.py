@@ -1091,12 +1091,15 @@ class RecordedScanTask:
                 ## コンテキストマネージャーはキャンセル時にも子プロセス終了を同期的に待つため、イベントループ上では使わない
                 ## 正常完了時は明示的に待ってクリーンアップし、リクエスト切断時だけ待機なしで解放処理へ進める
                 ## メタデータ解析は一括スキャン・ファイル監視・録画完了チェック・API 経由の単体スキャンの4経路から呼ばれ、
-                ## それぞれが独立したループのため同時に複数の解析プロセスが fork され得る。ProcessLimiter で同時実行数を CPU コア数の 50% に制限する
+                ## それぞれが独立したループのため同時に複数の解析プロセスが fork され得る。API の応答性を守るため、メタデータ解析は全経路で同時に1件までに制限する
                 ## なお __runBackgroundAnalysis() とは意図的に別のキーを使っている。同じキーを共有すると、
                 ## 数十秒〜数分掛かるサムネイル生成タスクがセマフォを占有し続け、一括スキャンによる DB への録画番組の反映が
                 ## サムネイル生成の速度に律速されてしまうため
                 analyzer = MetadataAnalyzer(pathlib.Path(str(file_path)), selected_service_id)  # anyio.Path -> pathlib.Path に変換
-                async with ProcessLimiter.getSemaphore('RecordedScanTask.MetadataAnalyzer'):
+                async with ProcessLimiter.getSemaphore('RecordedScanTask.MetadataAnalyzer', max_concurrency=1):
+                    # 停止時のスレッドダンプと照合できるよう、子プロセスの開始・完了をファイル単位で記録する。
+                    analysis_started_at = asyncio.get_running_loop().time()
+                    logging.info(f'{file_path}: Starting metadata analysis.')
                     executor = concurrent.futures.ProcessPoolExecutor(
                         max_workers = 1,
                         # 子プロセス側で CPU / ディスク I/O 優先度を下げ、ライブ視聴や録画の処理を妨げないようにする
@@ -1120,6 +1123,10 @@ class RecordedScanTask:
                     finally:
                         if should_wait_executor is True:
                             await ShutdownProcessPoolExecutor(executor, is_cancelled=False)
+                    logging.info(
+                        f'{file_path}: Metadata analysis finished. '
+                        f'[elapsed: {asyncio.get_running_loop().time() - analysis_started_at:.2f}s]'
+                    )
                 if recorded_program is None:
                     logging.error(f'{file_path}: Failed to analyze metadata.')
                     # メタデータ解析に失敗したがこの時点ですでに DB にエントリが存在している場合は、UI から判別できるようステータスを更新する
@@ -1643,28 +1650,25 @@ class RecordedScanTask:
 
         try:
             logging.info(f'{file_path}: Starting background analysis task...')
-            # ProcessLimiter で稼働中のバックグラウンドタスクの同時実行数を CPU コア数の 50% に制限
-            async with ProcessLimiter.getSemaphore('RecordedScanTask'):
+            # メタデータ解析とは独立した1枠を確保しつつ、バックグラウンド解析が複数録画へ拡散するのを防ぐ。
+            async with ProcessLimiter.getSemaphore('RecordedScanTask', max_concurrency=1):
                 # DriveIOLimiter で同一 HDD に対してのバックグラウンドタスクの同時実行数を原則1セッションに制限
-                async with DriveIOLimiter.getSemaphore(file_path):
-                    # サムネイル生成と CM 区間検出を並列実行する。
-                    background_tasks = [
-                        ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave(),
-                    ]
+                async with await DriveIOLimiter.getSemaphore(file_path):
+                    # 1録画の中でも重い処理を重ねず、メタデータ解析と API のためのリソースを残す。
+                    await ThumbnailGenerator.fromRecordedProgram(recorded_program).generateAndSave()
                     # MMT/TLV の CM 解析は非常に高負荷なので、明示的に有効化された環境だけで実行する。
                     if CMSectionsDetector.shouldAnalyze(
                         recorded_program.recorded_video.container_format,
                         self.config.video.enable_mmt_tlv_cm_analysis,
                     ):
-                        background_tasks.append(CMSectionsDetector(
+                        await CMSectionsDetector(
                             file_path,
                             recorded_program.recorded_video.duration,
                             recorded_program.recorded_video.container_format,
                             recorded_program.service_id,
-                        ).detectAndSave())
+                        ).detectAndSave()
                     else:
                         logging.info(f'{file_path}: Skipping MMT/TLV CM analysis because it is disabled.')
-                    await asyncio.gather(*background_tasks)
             logging.info(f'{file_path}: Background analysis task completed.')
 
             # バックグラウンド解析完了後に通知を送信（サムネイル生成完了後）

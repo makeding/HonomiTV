@@ -137,7 +137,9 @@ class CMSectionsDetector:
         ## 録画ファイルの隣には一時ディレクトリも解析結果も作成しない。
         ## 映像は FFmpeg で Matroska へ stream-copy し、音声だけ固定 PCM へ正規化してから
         ## chapter_exe / logoframe / join_logo_scp に渡すため、サーバー側で映像エンコードは行わない。
-        work_directory = pathlib.Path(tempfile.mkdtemp(
+        # 一時領域の作成もディスク I/O を伴うため、イベントループ上で待たない。
+        work_directory = pathlib.Path(await asyncio.to_thread(
+            tempfile.mkdtemp,
             prefix=f'.{self.file_path.stem}.konomitv-cm-',
         ))
         hardware_devices = GetVAAPIHardwareDevices()

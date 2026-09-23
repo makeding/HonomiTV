@@ -200,7 +200,8 @@ class LiveEncodingTask:
 
         ## BS4K は 60p (プログレッシブ) で放送されているので、インターレース解除を行わず 60fps でエンコードする
         if channel_type == "BS4K":
-            options.append(f'-vf scale={video_width}:{video_height}')
+            # BS4K の 10-bit 入力を H.264 High / H.265 Main が受け付ける 8-bit へ明示的に変換する
+            options.append(f'-vf scale={video_width}:{video_height},format=yuv420p')
             options.append(f'-r 60000/1001 -g {int(gop_length_second * 60)}')
         else:
             ## インターレース解除 (60i → 60p (フレームレート: 60fps))
@@ -493,12 +494,10 @@ class LiveEncodingTask:
         BACKEND_TYPE = GetBackendForReceiving()
         assert BACKEND_TYPE == 'Mirakurun', 'This method is only for Mirakurun backend.'
 
-        # Mirakurun / mirakc は通常チャンネルタイプが GR, BS, CS, SKY しかないので、
-        # フォールバックとして BS4K を BS に、CATV を CS に変換する
+        # CATV だけ CS にフォールバックする。BS4K を BS 扱いすると PT3 などを誤って表示する
+        # この確認はチューナー予約ではなく、実際の選局は後続の Service Stream API が行う
         fallback_channel_type = channel_type
-        if channel_type == 'BS4K':
-            fallback_channel_type = 'BS'
-        elif channel_type == 'CATV':
+        if channel_type == 'CATV':
             fallback_channel_type = 'CS'
 
         mirakurun_or_mirakc = 'Mirakurun'
@@ -535,7 +534,7 @@ class LiveEncodingTask:
                             f'Type: {channel_type} / Acquired in {round(time.time() - start_time, 2)} seconds'
                         )
                         return True
-                    if tuner['isAvailable'] is True and tuner['isFree'] is True and fallback_channel_type in tuner['types']:
+                    if fallback_channel_type != channel_type and tuner['isAvailable'] is True and tuner['isFree'] is True and fallback_channel_type in tuner['types']:
                         logging.info(f'{self.live_stream.log_prefix} Acquired a tuner from {mirakurun_or_mirakc}. ({channel_type} -> {fallback_channel_type})')
                         logging.info(
                             f'{self.live_stream.log_prefix} Tuner: {tuner["name"]} / '
