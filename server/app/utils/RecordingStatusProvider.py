@@ -108,16 +108,24 @@ def _ExpandRecordingPathCandidates(path: str, config: ServerSettings) -> set[str
     # EPGStation は録画ファイル名や録画ルートからの相対パスだけを返す構成があるため、
     # KonomiTV 側の recorded_folders を録画ルート候補として総当たりで展開する。
     # 絶対パスらしい値はそのまま保持し、相対パスだけを recorded_folders 配下に展開する。
+    relative_path: PurePosixPath | None = None
     if _IsAbsolutePathLikeString(normalized_path) is False:
         relative_path = PurePosixPath(normalized_path)
+    elif len(normalized_path) >= 3 and normalized_path[1] == ':':
+        # Windows のドライブレター付き絶対パス (EDCB-Wine の "D:\TV-Record\foo.ts" や、Windows 上の EDCB を
+        # Linux 側の KonomiTV から参照する構成) は、そのままでは KonomiTV 側に存在しない。
+        # ドライブ部分を除いた残りを相対パスとみなし、recorded_folders 配下に展開する。
+        relative_path = PurePosixPath(normalized_path[3:])
+
+    if relative_path is not None and len(relative_path.parts) > 0:
         for recorded_folder in config.video.recorded_folders:
             recorded_folder_path = _NormalizePathLikeString(str(recorded_folder))
-            candidates.add(_NormalizePathLikeString(str(PurePosixPath(recorded_folder_path) / relative_path)))
 
-            # EPGStation 側の相対パスが録画フォルダ名を含む場合に備え、先頭要素を削った候補も作る。
+            # 相対パスが録画フォルダ名を含む場合に備え、先頭要素を順に削った候補も作る。
             # 例: EPGStation が "recorded/foo.ts"、KonomiTV が "/mnt/recorded/foo.ts" として見ている場合。
-            if len(relative_path.parts) >= 2:
-                candidates.add(_NormalizePathLikeString(str(PurePosixPath(recorded_folder_path).joinpath(*relative_path.parts[1:]))))
+            # 例: EDCB-Wine が "D:/TV-Record/foo.ts"、KonomiTV が "/mnt/tv-record/TV-Record/foo.ts" として見ている場合。
+            for start_index in range(len(relative_path.parts)):
+                candidates.add(_NormalizePathLikeString(str(PurePosixPath(recorded_folder_path).joinpath(*relative_path.parts[start_index:]))))
 
     return candidates
 
@@ -439,7 +447,15 @@ async def GetActiveRecordingFilePaths(config: ServerSettings) -> ActiveRecording
     """
 
     if config.general.backend == 'EDCB':
-        return await _GetActiveRecordingFilePathsFromEDCB()
+        # EDCB は Windows 形式 ("D:\TV-Record\foo.ts") や別ホスト基準のパスを返すため、
+        # KonomiTV 側の recorded_folders に対する候補パスへ展開してから返す。
+        # 展開後の候補のうち実在するものだけが RecordedScanTask 側の存在チェックを通る。
+        active_recording_file_paths = await _GetActiveRecordingFilePathsFromEDCB()
+        return ActiveRecordingFilePaths(
+            paths = _ExpandRecordingPathCandidatesSet(active_recording_file_paths.paths, config),
+            backend = active_recording_file_paths.backend,
+            is_reliable = active_recording_file_paths.is_reliable,
+        )
     if config.general.backend == 'EPGStation':
         return await _GetActiveRecordingFilePathsFromEPGStation(config)
     return ActiveRecordingFilePaths(paths=set(), backend='FileSystem', is_reliable=False)
