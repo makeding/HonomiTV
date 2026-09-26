@@ -965,6 +965,12 @@ class JikkyoComments(BaseModel):
     comments: list[JikkyoComment]
     detail: str
 
+class VideoSeekPosition(BaseModel):
+    # 指定時刻の直前にあるキーフレームの録画ファイル内バイト位置
+    position: int
+    # そのキーフレームの録画先頭からの相対時刻 (秒)
+    time: float
+
 class ThirdpartyAuthURL(BaseModel):
     authorization_url: str
 

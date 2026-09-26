@@ -1788,3 +1788,95 @@ async def VideoDeleteAPI(
             status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail = f'Failed to delete recorded program: {ex!s}',
         )
+
+
+# 録画ファイルのシーク位置解決用キャッシュ (ファイルパス → (ストリーム情報, 先頭キーフレーム DTS))
+## PAT/PMT と先頭キーフレームの探索結果は同じファイルなら変わらないため、プロセス内で使い回す
+_seek_position_cache: dict[str, tuple[object, int]] = {}
+SEEK_POSITION_CACHE_MAX_ENTRIES = 64
+# 指定時刻から遡って採用するキーフレームの最大古さ (90kHz 単位, 30秒)
+SEEK_POSITION_MAX_KEYFRAME_AGE_TICKS = 30 * 90000
+
+
+@router.get(
+    '/{video_id}/seek-position',
+    summary = '録画ファイル シーク位置解決 API',
+    response_description = '指定時刻の直前にあるキーフレームのファイル位置と時刻。',
+    response_model = schemas.VideoSeekPosition,
+)
+async def VideoSeekPositionAPI(
+    recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
+    time: Annotated[float, Query(description='録画先頭からの相対時刻 (秒) 。', ge=0.0)],
+):
+    """
+    MPEG-TS の録画ファイルについて、指定した相対時刻の直前にあるキーフレームのファイル位置 (バイト) と
+    その実際の時刻 (秒) を返す。<br>
+    録画ファイルを直接 (HTTP Range で) 再生するクライアントが、ファイルサイズ比例の推定ではなく
+    正確な位置へシークするために利用する。位置解決には TSKeyFrameSeeker (PCR 二分探索) を使う。
+    """
+
+    import pathlib
+    from app.utils.TSKeyFrameSeeker import TSKeyFrameNotFoundError, TSKeyFrameSeeker
+
+    recorded_video = recorded_program.recorded_video
+    if recorded_video.container_format != 'MPEG-TS':
+        raise HTTPException(
+            status_code = status.HTTP_400_BAD_REQUEST,
+            detail = 'Seek position resolution is only available for MPEG-TS recordings',
+        )
+    file_path = pathlib.Path(recorded_video.file_path)
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code = status.HTTP_404_NOT_FOUND,
+            detail = 'Recorded file does not exist',
+        )
+
+    # 録画済みファイルでは、録画時間を超える時刻を指定されても末尾付近のキーフレームを返す
+    ## (超過した時刻をそのまま探索すると PCR の折り返し判定を誤り、無関係な位置を返すことがある)
+    if recorded_video.status == 'Recorded' and recorded_video.duration > 0:
+        time = min(time, max(0.0, recorded_video.duration - 1.0))
+
+    try:
+        cache_key = str(file_path)
+        cached = _seek_position_cache.get(cache_key)
+        if cached is None:
+            stream_info = await asyncio.to_thread(TSKeyFrameSeeker.findStreamInfo, file_path)
+            base_dts = await asyncio.to_thread(TSKeyFrameSeeker.findBaseDTS, file_path, stream_info)
+            if len(_seek_position_cache) >= SEEK_POSITION_CACHE_MAX_ENTRIES:
+                _seek_position_cache.clear()
+            cached = (stream_info, base_dts)
+            _seek_position_cache[cache_key] = cached
+        stream_info, base_dts = cached
+        key_frame = await asyncio.to_thread(
+            TSKeyFrameSeeker.seek,
+            file_path,
+            stream_info,  # type: ignore[arg-type]
+            time,
+            base_dts,
+            SEEK_POSITION_MAX_KEYFRAME_AGE_TICKS,
+        )
+    except TSKeyFrameNotFoundError:
+        logging.warning(f'[VideosRouter][VideoSeekPositionAPI] Keyframe was not found near the specified time. [video_id: {recorded_program.id}, time: {time}]')
+        raise HTTPException(
+            status_code = status.HTTP_404_NOT_FOUND,
+            detail = 'Keyframe was not found near the specified time',
+        )
+    except Exception as ex:
+        logging.error(f'[VideosRouter][VideoSeekPositionAPI] Failed to resolve seek position. [video_id: {recorded_program.id}, time: {time}]', exc_info=ex)
+        raise HTTPException(
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = 'Failed to resolve seek position',
+        )
+
+    resolved_time = max(0.0, (key_frame.source_start_dts - base_dts) / 90000)
+    if resolved_time > time + 5.0:
+        # 指定時刻より明らかに後ろのキーフレームが返った場合は解決失敗として扱う (クライアントは比例シークへフォールバック)
+        logging.warning(f'[VideosRouter][VideoSeekPositionAPI] Resolved keyframe is later than the specified time. [video_id: {recorded_program.id}, time: {time}, resolved: {resolved_time}]')
+        raise HTTPException(
+            status_code = status.HTTP_404_NOT_FOUND,
+            detail = 'Keyframe was not found near the specified time',
+        )
+    return schemas.VideoSeekPosition(
+        position = key_frame.source_file_position,
+        time = resolved_time,
+    )
