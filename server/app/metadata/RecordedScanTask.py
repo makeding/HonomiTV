@@ -1660,12 +1660,14 @@ class RecordedScanTask:
                     if CMSectionsDetector.shouldAnalyze(
                         recorded_program.recorded_video.container_format,
                         self.config.video.enable_mmt_tlv_cm_analysis,
+                        self.config.video.cm_detect_mode,
                     ):
                         await CMSectionsDetector(
                             file_path,
                             recorded_program.recorded_video.duration,
                             recorded_program.recorded_video.container_format,
                             recorded_program.service_id,
+                            cm_detect_mode = self.config.video.cm_detect_mode,
                         ).detectAndSave()
                     else:
                         logging.info(f'{file_path}: Skipping MMT/TLV CM analysis because it is disabled.')

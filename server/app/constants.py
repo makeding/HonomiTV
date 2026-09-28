@@ -209,6 +209,12 @@ class Quality(BaseModel):
     video_bitrate_max: str  # 映像の最大ビットレート
     audio_bitrate: str  # 音声のビットレート
 
+# CM 検出方式の種類 (型定義)
+## JoinLogoScp: join_logo_scp (with chapter_exe / logoframe) による高精度な CM 検出
+## OpenCV: FFmpeg + OpenCV で局ロゴと無音 (ノンモン) から自前検出する軽量方式 (外部ツール不要)
+## Fallback: JoinLogoScp を優先し、解析に失敗した場合だけ OpenCV 方式で再解析する
+CM_DETECT_MODES = Literal['JoinLogoScp', 'OpenCV', 'Fallback']
+
 # 品質の種類 (型定義)
 QUALITY_TYPES = Literal[
     '1080p-60fps',

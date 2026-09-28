@@ -118,6 +118,14 @@ video:
     # MMT/TLV の CM 解析は非常に大きな CPU・GPU・ストレージ負荷が掛かるため、デフォルトでは無効です。
     enable_mmt_tlv_cm_analysis: false
 
+    # CM 検出方式
+    # JoinLogoScp: join_logo_scp (with chapter_exe / logoframe) による高精度な CM 検出
+    # OpenCV:      FFmpeg + OpenCV で局ロゴと無音 (ノンモン) から自前検出する軽量方式 (外部ツール不要)
+    #              ※ 放送 TS (MPEG-TS) のみ対応。無音区間や局ロゴを手掛かりにするため、MPEG-4 や MMT/TLV には使えません。
+    # Fallback:    JoinLogoScp を優先し、解析に失敗した場合だけ OpenCV 方式で再解析します (デフォルト)。
+    #              join_logo_scp まわりの外部ツールが不安定な環境でも CM 検出を完了させやすくなります。
+    cm_detect_mode: Fallback
+
 # =============================== キャプチャの設定 ===============================
 capture:
 

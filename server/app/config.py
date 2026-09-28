@@ -30,6 +30,7 @@ from pydantic_core import Url
 from app.constants import (
     API_REQUEST_HEADERS,
     BASE_DIR,
+    CM_DETECT_MODES,
     LIBRARY_PATH,
 )
 from app.utils.TSInformation import TerrestrialRegion
@@ -377,6 +378,9 @@ class _ServerSettingsVideo(BaseModel):
     recorded_folders: list[DirectoryPath] = []
     exclude_scan_paths: list[str] = []
     enable_mmt_tlv_cm_analysis: bool = False
+    # CM 検出方式 (JoinLogoScp / OpenCV / Fallback)
+    ## Fallback は join_logo_scp が解析に失敗した場合のみ、外部ツール不要の OpenCV 方式で再解析する
+    cm_detect_mode: CM_DETECT_MODES = 'Fallback'
     # チャンネル選択設定
     channel_selection_mode: Literal['auto', 'prefer_main', 'first_found', 'filename_based'] = 'auto'
     enable_filename_based_channel_selection: bool = True

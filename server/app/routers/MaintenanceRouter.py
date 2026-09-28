@@ -311,6 +311,7 @@ async def BackgroundAnalysisAPI():
                             CMSectionsDetector.shouldAnalyze(
                                 container_format,
                                 Config().video.enable_mmt_tlv_cm_analysis,
+                                Config().video.cm_detect_mode,
                             )
                         ):
                             db_recorded_program = await RecordedProgram.all() \
@@ -321,6 +322,7 @@ async def BackgroundAnalysisAPI():
                                 duration_sec = video_row['duration'],
                                 container_format = container_format,
                                 service_id = db_recorded_program.service_id if db_recorded_program is not None else None,
+                                cm_detect_mode = Config().video.cm_detect_mode,
                             ).detectAndSave()
 
                         # どちらかのサムネイルが未生成の場合は再生成する。

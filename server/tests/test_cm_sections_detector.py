@@ -25,6 +25,21 @@ class CMSectionsDetectorPolicyTest(unittest.TestCase):
         self.assertTrue(CMSectionsDetector.shouldAnalyze('MPEG-TS', False))
 
 
+    def test_opencv_mode_skips_non_mpeg_ts(self) -> None:
+        """OpenCV 方式は放送 TS のみを対象とし、MPEG-4 / MMT/TLV は解析しない。"""
+
+        self.assertTrue(CMSectionsDetector.shouldAnalyze('MPEG-TS', False, 'OpenCV'))
+        self.assertFalse(CMSectionsDetector.shouldAnalyze('MPEG-4', False, 'OpenCV'))
+        self.assertFalse(CMSectionsDetector.shouldAnalyze('MMT/TLV', True, 'OpenCV'))
+
+
+    def test_fallback_mode_keeps_mmt_tlv_policy(self) -> None:
+        """Fallback 方式は join_logo_scp を優先するため、MMT/TLV の解析可否は従来通り設定に従う。"""
+
+        self.assertFalse(CMSectionsDetector.shouldAnalyze('MMT/TLV', False, 'Fallback'))
+        self.assertTrue(CMSectionsDetector.shouldAnalyze('MMT/TLV', True, 'Fallback'))
+
+
 class CMSectionsDetectorConcurrencyTest(unittest.IsolatedAsyncioTestCase):
     """CM 区間検出のサーバー全体における独占実行を検証する。"""
 
@@ -50,6 +65,8 @@ class CMSectionsDetectorConcurrencyTest(unittest.IsolatedAsyncioTestCase):
             file_path=anyio.Path(file_name),
             duration_sec=60.0,
             container_format='MPEG-TS',
+            # 並行制御だけを検証したいので、外部ツール不要の OpenCV 方式にはフォールバックさせず join_logo_scp 経路に固定する
+            cm_detect_mode='JoinLogoScp',
         )
 
 
