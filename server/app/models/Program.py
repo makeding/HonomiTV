@@ -218,7 +218,7 @@ class Program(TortoiseModel):
             try:
                 mirakurun_programs_api_url = GetMirakurunAPIEndpointURL('/api/programs')
                 async with HTTPX_CLIENT() as client:
-                    mirakurun_programs_api_response = await client.get(mirakurun_programs_api_url, timeout=10)
+                    mirakurun_programs_api_response = await client.get(mirakurun_programs_api_url, timeout=15)
                 if mirakurun_programs_api_response.status_code != 200:
                     logging.error(f'Failed to get programs from Mirakurun / mirakc. (HTTP Error {mirakurun_programs_api_response.status_code})')
                     raise Exception(f'Failed to get programs from Mirakurun / mirakc. (HTTP Error {mirakurun_programs_api_response.status_code})')
