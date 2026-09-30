@@ -486,6 +486,10 @@ class VideoEncodingTask:
             start_sequence (int): エンコードを開始するセグメントのシーケンス番号
         """
 
+        # 実行開始前に破棄されたタスクでは、設定の取得や入力ファイルへのアクセスも行わない
+        if self._is_cancelled is True:
+            return
+
         # エンコーダーの種類を取得
         CONFIG = Config()
         ENCODER_TYPE = CONFIG.general.encoder
@@ -546,6 +550,9 @@ class VideoEncodingTask:
                 await self.video_stream.ensureTSKeyFrameContext()
             except Exception as ex:
                 logging.warning(f'{self.video_stream.log_prefix} Failed to initialize input keyframe collector context:', exc_info=ex)
+            # コンテキストの準備中にキャンセルされた場合は、入力ファイルを開く前に終了する
+            if self._is_cancelled is True:
+                return
             file = open(recorded_video.file_path, 'rb')
 
         # 入力 TS を tsreadex に渡すついでに見つけたキーフレームを保持する
@@ -715,6 +722,10 @@ class VideoEncodingTask:
             # 最大 MAX_RETRY_COUNT 回までリトライする
             while self._retry_count < self.MAX_RETRY_COUNT:
 
+                # 前の試行の終了待機中にキャンセルされても、新しい子プロセスは起動しない
+                if self._is_cancelled is True:
+                    break
+
                 # MPEG-TS セクションパーサーを初期化
                 pat_parser: SectionParser[PATSection] = SectionParser(PATSection)
                 pmt_parser: SectionParser[PMTSection] = SectionParser(PMTSection)
@@ -795,6 +806,10 @@ class VideoEncodingTask:
                     finally:
                         # psisimux の書き込み用パイプは子プロセスに渡したので、親プロセス側ではクローズする
                         os.close(psisimux_write_pipe)
+                    # 起動を await している間は cancel() からプロセスを参照できないため、
+                    # 戻ってきたプロセスを保持した後に再確認し、後段を起動せず finally で回収する
+                    if self._is_cancelled is True:
+                        break
                 else:
                     tsreadex_service_id = f'{self.video_stream.recorded_program.channel.service_id}' \
                         if self.video_stream.recorded_program.channel is not None else '-1'
@@ -1083,6 +1098,10 @@ class VideoEncodingTask:
                             # これを忘れるとファイルディスクリプタがリークする
                             os.close(tsreadex_stdin_read)
 
+                        # tsreadex の起動中にキャンセルされた場合は、入力スレッドを作らず回収する
+                        if self._is_cancelled is True:
+                            break
+
                         # tsreadex に PAT/PMT を先頭に付加した TS ストリームを流し込むタスクを ThreadPoolExecutor で実行
                         # 同期関数のため run_in_executor() を使ってスレッドプールに投げることで、非同期で実行する
                         loop = asyncio.get_running_loop()
@@ -1106,6 +1125,10 @@ class VideoEncodingTask:
                     # tsreadex の書き込み用パイプは子プロセスに渡したので、親プロセス側では必ずクローズする
                     if tsreadex_write_pipe is not None:
                         os.close(tsreadex_write_pipe)
+
+                # ファイル直結経路でも、起動中に戻ってきた tsreadex を回収して後段の起動を止める
+                if self._is_cancelled is True:
+                    break
 
                 # FFmpeg
                 if ENCODER_TYPE == 'FFmpeg':
@@ -1190,6 +1213,11 @@ class VideoEncodingTask:
                 ))
                 encoder_stderr_observer_tasks.add(encoder_stderr_observer_task)
                 encoder_stderr_observer_task.add_done_callback(OnEncoderStderrObserverDone)
+
+                # エンコーダーの起動中にキャンセルされても、stderr を排出できる状態で回収する
+                # PID の取得や失敗判定には進まず、finally の既存の終了順序を維持する
+                if self._is_cancelled is True:
+                    break
 
                 # 最新の PAT と PMT を保持
                 latest_pat: PATSection | None = None
@@ -1551,6 +1579,11 @@ class VideoEncodingTask:
                     except Exception as ex:
                         logging.error(f'{self.video_stream.log_prefix} Failed to terminate psisimux process:', exc_info=ex)
                     self._psisimux_process = None
+
+                # PID を取得する前のキャンセルは正常な終了理由であり、エンコード失敗として再起動しない
+                # 子プロセスの終了待機中にも cancel() が呼ばれるため、後片付け後に改めて確認する
+                if self._is_cancelled is True:
+                    break
 
                 # この時点で video_pid と audio_pid が取得できていない場合、正常にエンコード済み TS が出力されていないと考えられるため、
                 # エンコーダー起動をリトライする

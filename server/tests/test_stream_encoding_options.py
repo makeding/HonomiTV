@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from app.streams.StreamEncodingOptions import SplitLiveQualityAndEncodingOptions
 from app.streams.LiveEncodingTask import LiveEncodingTask
+from app.streams.StreamEncodingOptions import SplitLiveQualityAndEncodingOptions
 
 
 class LiveStreamEncodingOptionsTest(unittest.TestCase):
@@ -62,6 +62,7 @@ class BS4KLiveEncodingTest(unittest.IsolatedAsyncioTestCase):
         context = AsyncMock()
         context.__aenter__.return_value = client
         with patch('app.streams.LiveEncodingTask.GetBackendForReceiving', return_value='Mirakurun'), \
+                patch('app.streams.LiveEncodingTask.GetMirakurunAPIEndpointURL', return_value='http://mirakurun/api/tuners'), \
                 patch('app.streams.LiveEncodingTask.HTTPX_CLIENT', return_value=context), \
                 patch('app.streams.LiveEncodingTask.asyncio.sleep', new_callable=AsyncMock):
             self.assertFalse(await task.acquireMirakurunTuner('BS4K'))
