@@ -38,15 +38,16 @@
                 <v-list-item-subtitle>Komorebi を起動してペアリングしてください</v-list-item-subtitle>
             </v-list-item>
 
-            <template v-if="selectedDevice !== null && selectedPlaybackState.content_type !== 'Idle'">
+            <template v-if="selectedDevice !== null">
                 <v-divider class="my-2" />
                 <div class="remote-device-menu__now-playing">
-                    <div v-if="selectedPlaybackState.artwork_url" class="remote-device-menu__artwork">
-                        <img :src="selectedPlaybackState.artwork_url" alt="" />
-                    </div>
+                    <button class="remote-device-menu__artwork" type="button" aria-label="N〇K除外モードを操作"
+                        :disabled="temporaryNHKHideFeedback === 'Waiting'" @click="onArtworkClick">
+                        <img v-if="selectedPlaybackState.artwork_url" :src="selectedPlaybackState.artwork_url" alt="" />
+                    </button>
                     <div class="remote-device-menu__media-info">
                         <div class="remote-device-menu__section-title">
-                            {{ selectedPlaybackState.content_type === 'Live' ? 'ライブ再生中' : '録画番組を再生中' }}
+                            {{ selectedPlaybackState.content_type === 'Idle' ? '待機中' : selectedPlaybackState.content_type === 'Live' ? 'ライブ再生中' : '録画番組を再生中' }}
                         </div>
                         <div v-if="selectedPlaybackState.title" class="remote-device-menu__media-title">
                             {{ selectedPlaybackState.title }}
@@ -56,6 +57,16 @@
                         </div>
                     </div>
                 </div>
+                <div class="remote-device-menu__nhk-exclusion-feedback" aria-live="polite">
+                    <template v-if="temporaryNHKHideFeedback !== 'Idle'">
+                        <span>{{ temporaryNHKHideFeedbackMessage }}</span>
+                        <v-btn v-if="temporaryNHKHideCanRetry" size="x-small" variant="text" color="primary"
+                            @click="retryTemporaryNHKHide">
+                            {{ temporaryNHKHideFeedback === 'Unsupported' ? '状態を更新' : '再試行' }}
+                        </v-btn>
+                    </template>
+                </div>
+                <template v-if="selectedPlaybackState.content_type !== 'Idle'">
                 <div v-if="isSeekBarAvailable" class="remote-device-menu__seek-bar" :style="{'--remote-cm-track': cmTrackGradient}">
                     <v-slider :model-value="seekBarPositionSeconds" :min="0" :max="totalDurationSeconds" :step="1"
                         color="primary" hide-details density="compact" aria-label="再生位置"
@@ -109,6 +120,7 @@
                         この録画には CM 区間の判定結果がありません。
                     </div>
                 </div>
+                </template>
             </template>
 
             <template v-if="selectedDevice !== null">
@@ -161,6 +173,11 @@ import {
     remoteDeviceMenuOpenRequest,
     selectedRemoteDeviceName,
 } from '@/services/RemoteControlUI';
+import {
+    TemporaryNHKHideAcknowledgement,
+    TemporaryNHKHideGesture,
+    type TemporaryNHKHideFeedback,
+} from '@/services/RemoteNHKExclusion';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils from '@/utils';
 
@@ -172,6 +189,7 @@ const PENDING_SEEK_TIMEOUT_MS = 5000;
 // シーク先と報告された位置がこの秒数以内なら、要求が反映されたとみなして楽観的表示をやめる。
 // TS のキーフレーム単位でしか着地できないため、完全一致では待ち続けてしまう
 const PENDING_SEEK_SETTLED_TOLERANCE_SECONDS = 5;
+const TEMPORARY_NHK_HIDE_ACKNOWLEDGEMENT_TIMEOUT_MS = 10_000;
 
 const CM_SKIP_MODE_LABELS: {mode: RemoteCMSkipMode; label: string;}[] = [
     {mode: 'Off', label: 'オフ'},
@@ -189,8 +207,54 @@ const isPinned = computed(() => settingsStore.settings.remote_control_menu_pinne
 const selectedDevice = computed(() => devices.value.find((device) => device.device_id === selectedDeviceId.value) ?? null);
 const selectedDeviceName = computed(() => selectedDevice.value?.device_name ?? null);
 const selectedPlaybackState = computed<IRemotePlaybackState>(() => {
-    return selectedDevice.value?.state as unknown as IRemotePlaybackState ?? {content_type: 'Idle'};
+    return selectedDevice.value?.state as unknown as IRemotePlaybackState ?? {
+        content_type: 'Idle',
+        supports_nhk_exclusion: false,
+        nhk_exclusion_mode: 'OFF',
+        nhk_exclusion_expires_at: null,
+        nhk_exclusion_command_result: null,
+    };
 });
+
+// ***** N〇K 除外モード *****
+
+// 五連続クリックとテレビからの実行結果を、選択中のテレビのメニュー寿命だけ保持する。
+const temporaryNHKHideGesture = new TemporaryNHKHideGesture();
+const temporaryNHKHideAcknowledgement = new TemporaryNHKHideAcknowledgement();
+const temporaryNHKHideFeedback = ref<TemporaryNHKHideFeedback | 'Unsupported' | 'Offline'>('Idle');
+const temporaryNHKHideErrorCode = ref<string | null>(null);
+let temporaryNHKHideAcknowledgementTimer: number | null = null;
+let temporaryNHKHideRequestSequence = 0;
+
+const temporaryNHKHideFeedbackMessage = computed(() => {
+    switch (temporaryNHKHideFeedback.value) {
+        case 'Waiting':
+            return 'テレビで N〇K除外モードを切り替えています。';
+        case 'Applied':
+            return selectedPlaybackState.value.nhk_exclusion_mode === 'ON'
+                ? 'N〇K除外モードは ON のままです。'
+                : 'N〇K除外モードを一時的に有効にしました。';
+        case 'Failed':
+            return temporaryNHKHideErrorCode.value === null
+                ? 'テレビで N〇K除外モードを有効にできませんでした。'
+                : `テレビで N〇K除外モードを有効にできませんでした（${temporaryNHKHideErrorCode.value}）。`;
+        case 'Unconfirmed':
+            return 'テレビから N〇K除外モードの結果を確認できませんでした。';
+        case 'Unsupported':
+            return 'このテレビは N〇K除外モードに対応していません。';
+        case 'Offline':
+            return '選択したテレビはオフラインです。テレビの接続を確認してください。';
+        default:
+            return '';
+    }
+});
+
+const temporaryNHKHideCanRetry = computed(() => (
+    temporaryNHKHideFeedback.value === 'Failed' ||
+    temporaryNHKHideFeedback.value === 'Unconfirmed' ||
+    temporaryNHKHideFeedback.value === 'Unsupported' ||
+    temporaryNHKHideFeedback.value === 'Offline'
+));
 
 // ***** 進捗バー *****
 
@@ -285,6 +349,78 @@ function onCMSkipModeSelect(mode: RemoteCMSkipMode | null | undefined): void {
     // 同じモードを選び直したときも送らない (テレビ側でトーストが無駄に出るため)
     if (mode === null || mode === undefined || mode === cmSkipMode.value) return;
     void sendControl({type: 'SetCMSkipMode', mode});
+}
+
+function clearTemporaryNHKHideAcknowledgementTimer(): void {
+    if (temporaryNHKHideAcknowledgementTimer !== null) {
+        window.clearTimeout(temporaryNHKHideAcknowledgementTimer);
+        temporaryNHKHideAcknowledgementTimer = null;
+    }
+}
+
+function resetTemporaryNHKHide(): void {
+    temporaryNHKHideRequestSequence += 1;
+    temporaryNHKHideGesture.reset();
+    temporaryNHKHideAcknowledgement.reset();
+    clearTemporaryNHKHideAcknowledgementTimer();
+    temporaryNHKHideFeedback.value = 'Idle';
+    temporaryNHKHideErrorCode.value = null;
+}
+
+async function requestTemporaryNHKHide(): Promise<void> {
+    // コマンドを送る時点で同じ五連続クリックを次の要求へ持ち越さない。
+    temporaryNHKHideGesture.reset();
+    if (temporaryNHKHideFeedback.value === 'Waiting' || selectedDeviceId.value === null) return;
+    if (selectedPlaybackState.value.supports_nhk_exclusion !== true) {
+        temporaryNHKHideFeedback.value = 'Unsupported';
+        return;
+    }
+
+    temporaryNHKHideFeedback.value = 'Waiting';
+    temporaryNHKHideErrorCode.value = null;
+    const deviceId = selectedDeviceId.value;
+    const requestSequence = ++temporaryNHKHideRequestSequence;
+    const submission = await RemoteControl.sendTemporaryNHKHideCommand(deviceId);
+    // 閉じたメニューや切り替え済みテレビに、遅れて届いた HTTP の結果を表示・登録しない。
+    if (requestSequence !== temporaryNHKHideRequestSequence || selectedDeviceId.value !== deviceId || isOpen.value === false) return;
+    if (submission.type === 'Offline') {
+        temporaryNHKHideFeedback.value = 'Offline';
+        return;
+    }
+    if (submission.type === 'Failed') {
+        temporaryNHKHideFeedback.value = 'Failed';
+        return;
+    }
+
+    // HTTP の受理では成功にせず、同じ command_id を含むテレビの State だけを待つ。
+    temporaryNHKHideAcknowledgement.begin(submission.command_id);
+    const existingResult = temporaryNHKHideAcknowledgement.consume(selectedPlaybackState.value);
+    if (existingResult !== null) {
+        temporaryNHKHideFeedback.value = existingResult;
+        temporaryNHKHideErrorCode.value = selectedPlaybackState.value.nhk_exclusion_command_result?.error_code ?? null;
+        return;
+    }
+    temporaryNHKHideAcknowledgementTimer = window.setTimeout(() => {
+        if (requestSequence !== temporaryNHKHideRequestSequence) return;
+        if (temporaryNHKHideAcknowledgement.expire()) {
+            temporaryNHKHideFeedback.value = 'Unconfirmed';
+        }
+        temporaryNHKHideAcknowledgementTimer = null;
+    }, TEMPORARY_NHK_HIDE_ACKNOWLEDGEMENT_TIMEOUT_MS);
+}
+
+function onArtworkClick(): void {
+    if (temporaryNHKHideGesture.registerTap(window.performance.now())) {
+        void requestTemporaryNHKHide();
+    }
+}
+
+function retryTemporaryNHKHide(): void {
+    if (temporaryNHKHideFeedback.value === 'Unsupported') {
+        void refreshDevices();
+        return;
+    }
+    void requestTemporaryNHKHide();
 }
 
 function onSeekBarScrubStart(): void {
@@ -401,6 +537,15 @@ function startPlaybackPositionInterpolation(): void {
 
 // テレビから新しい再生状態が届くたびに補間の基点を取り直す。
 watch(selectedPlaybackState, (state) => {
+    // 同じ State 内の command_id が一致したときだけ、HTTP 配達待ちをテレビでの実行成功・失敗へ遷移させる。
+    const acknowledgement = temporaryNHKHideAcknowledgement.consume(state);
+    if (acknowledgement !== null) {
+        clearTemporaryNHKHideAcknowledgementTimer();
+        temporaryNHKHideFeedback.value = acknowledgement;
+        temporaryNHKHideErrorCode.value = acknowledgement === 'Failed'
+            ? state.nhk_exclusion_command_result?.error_code ?? null
+            : null;
+    }
     const positionSeconds = state.position_seconds;
     if (positionSeconds === undefined) {
         playbackPositionAnchor.value = null;
@@ -425,12 +570,14 @@ watch(selectedPlaybackState, (state) => {
 
 // 選択中のテレビを切り替えたときは、前のテレビの再生位置を引きずらないように基点を捨てる。
 watch(selectedDeviceId, () => {
+    resetTemporaryNHKHide();
     playbackPositionAnchor.value = null;
     pendingSeek.value = null;
     isScrubbing.value = false;
 });
 
 onBeforeUnmount(() => {
+    resetTemporaryNHKHide();
     disconnectDeviceSubscription();
     stopPlaybackPositionInterpolation();
 });
@@ -448,6 +595,7 @@ watch(isOpen, (visible) => {
         // 進捗バーの補間もメニューが開いている間だけ動かす。閉じている間は誰も見ていない
         startPlaybackPositionInterpolation();
     } else {
+        resetTemporaryNHKHide();
         disconnectDeviceSubscription();
         stopPlaybackPositionInterpolation();
     }
@@ -483,10 +631,23 @@ watch(remoteDeviceMenuOpenRequest, () => {
     &__artwork {
         width: 96px;
         height: 54px;
+        padding: 0;
         overflow: hidden;
         flex: 0 0 auto;
+        border: 0;
         border-radius: 4px;
         background: rgb(var(--v-theme-background));
+        cursor: pointer;
+        touch-action: manipulation;
+
+        &:focus-visible {
+            outline: 2px solid rgb(var(--v-theme-primary));
+            outline-offset: 2px;
+        }
+
+        &:disabled {
+            cursor: wait;
+        }
 
         img {
             width: 100%;
@@ -497,6 +658,16 @@ watch(remoteDeviceMenuOpenRequest, () => {
 
     &__media-info {
         min-width: 0;
+    }
+
+    &__nhk-exclusion-feedback {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        min-height: 64px;
+        padding: 0 12px 4px;
+        color: rgb(var(--v-theme-text-darken-1));
+        font-size: 12px;
     }
 
     &__media-title,

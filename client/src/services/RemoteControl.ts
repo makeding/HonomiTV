@@ -18,6 +18,7 @@ export type RemoteCommand =
     | {type: 'SkipChapter'; direction: 'Next' | 'Previous';}
     | {type: 'SkipCM';}
     | {type: 'SetCMSkipMode'; mode: RemoteCMSkipMode;}
+    | {type: 'EnableTemporaryNHKHide'; duration_seconds: 1800;}
     | {type: 'VolumeUp' | 'VolumeDown' | 'VolumeMute';};
 
 export type RemoteCMSkipMode = 'Off' | 'Manual' | 'Auto';
@@ -54,7 +55,20 @@ export interface IRemotePlaybackState {
     is_chase_playback?: boolean;
     chapters?: IRemoteChapter[];
     cm_skip_mode?: RemoteCMSkipMode;
+    supports_nhk_exclusion: boolean;
+    nhk_exclusion_mode: 'OFF' | 'ON' | 'TEMPORARY';
+    nhk_exclusion_expires_at: number | null;
+    nhk_exclusion_command_result: {
+        command_id: string;
+        status: 'Applied' | 'Failed';
+        error_code?: string;
+    } | null;
 }
+
+export type RemoteTemporaryNHKHideSubmission =
+    | {type: 'Accepted'; command_id: string;}
+    | {type: 'Offline';}
+    | {type: 'Failed';};
 
 class RemoteControl {
     static subscribeDevices(
@@ -110,6 +124,22 @@ class RemoteControl {
             return false;
         }
         return true;
+    }
+
+    /**
+     * 一時的な N〇K 除外の配達結果を取得する。
+     *
+     * HTTP の受理はテレビでの実行完了を意味しないため、呼び出し元は command_id と State の結果を照合してから成功を表示する。
+     */
+    static async sendTemporaryNHKHideCommand(deviceId: string): Promise<RemoteTemporaryNHKHideSubmission> {
+        const response = await APIClient.post<{command_id: string;}>(
+            `/remote/devices/${encodeURIComponent(deviceId)}/commands`,
+            {type: 'EnableTemporaryNHKHide', duration_seconds: 1800},
+        );
+        if (response.type === 'error') {
+            return response.status === 409 ? {type: 'Offline'} : {type: 'Failed'};
+        }
+        return {type: 'Accepted', command_id: response.data.command_id};
     }
 
     static async sendOpenCommand(deviceId: string, command: Extract<RemoteCommand, {type: 'OpenLive' | 'OpenRecording'}>): Promise<boolean> {

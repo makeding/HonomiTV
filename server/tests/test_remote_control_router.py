@@ -63,6 +63,23 @@ class RemoteControlRouterTest(unittest.TestCase):
             command = remote_command_adapter.validate_python({'type': command_type})
             self.assertEqual(command.type, command_type)
 
+    def test_temporary_nhk_exclusion_command_requires_the_contract_duration(self) -> None:
+        """一時除外は固定の 30 分だけを認証済みリモート経路へ渡す。"""
+
+        remote_command_adapter = TypeAdapter(schemas.RemoteCommand)
+        command = remote_command_adapter.validate_python({
+            'type': 'EnableTemporaryNHKHide',
+            'duration_seconds': 1800,
+        })
+
+        self.assertEqual(command.type, 'EnableTemporaryNHKHide')
+        self.assertEqual(command.duration_seconds, 1800)
+        with self.assertRaises(ValidationError):
+            remote_command_adapter.validate_python({
+                'type': 'EnableTemporaryNHKHide',
+                'duration_seconds': 1799,
+            })
+
     def test_progress_bar_and_chapter_commands_are_accepted_by_remote_command_schema(self) -> None:
         """進捗バー操作・チャプター送り・CM スキップのコマンドを識別子付き Union として受け付ける。"""
 
@@ -243,6 +260,29 @@ class RemoteControlRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
             'type': 'Command',
             'command_id': response.command_id,
             'command': {'type': 'VolumeUp'},
+        })
+
+    async def test_temporary_nhk_exclusion_command_is_forwarded_with_literal_duration(self) -> None:
+        """ジェスチャー起点の一時除外も既存の認証済み WebSocket で転送する。"""
+
+        websocket = AsyncMock()
+        REMOTE_DEVICE_CONNECTIONS[(1, 'living-room')] = RemoteDeviceConnection(
+            device_id='living-room',
+            device_name='リビング',
+            user_id=1,
+            websocket=websocket,
+        )
+        command = TypeAdapter(schemas.RemoteCommand).validate_python({
+            'type': 'EnableTemporaryNHKHide',
+            'duration_seconds': 1800,
+        })
+
+        response = await RemoteCommandAPI(command, MagicMock(id=1), 'living-room')
+
+        websocket.send_json.assert_awaited_once_with({
+            'type': 'Command',
+            'command_id': response.command_id,
+            'command': {'type': 'EnableTemporaryNHKHide', 'duration_seconds': 1800},
         })
 
     async def test_seek_to_command_is_forwarded_with_its_payload(self) -> None:

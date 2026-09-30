@@ -550,9 +550,17 @@ class RemoteCommandSetCMSkipMode(BaseModel):
 class RemoteCommandVolume(BaseModel):
     type: Literal['VolumeUp', 'VolumeDown', 'VolumeMute']
 
+
+# テレビ側へ一時的な N〇K 除外の実行を依頼する。
+# 有効期間は製品契約で 30 分に固定されているため、ブラウザから任意の秒数を渡せないよう Literal で制約する。
+class RemoteCommandEnableTemporaryNHKHide(BaseModel):
+    type: Literal['EnableTemporaryNHKHide']
+    duration_seconds: Literal[1800]
+
 RemoteCommand = Annotated[
     RemoteCommandOpenLive | RemoteCommandOpenRecording | RemoteCommandPlayback | RemoteCommandSeekRelative |
-    RemoteCommandSeekTo | RemoteCommandSkipChapter | RemoteCommandSkipCM | RemoteCommandSetCMSkipMode | RemoteCommandVolume,
+    RemoteCommandSeekTo | RemoteCommandSkipChapter | RemoteCommandSkipCM | RemoteCommandSetCMSkipMode | RemoteCommandVolume |
+    RemoteCommandEnableTemporaryNHKHide,
     Field(discriminator='type'),
 ]
 
