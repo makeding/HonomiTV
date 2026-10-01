@@ -2304,6 +2304,8 @@ class PlayerController {
                 if (!this.player || !this.player.video) {
                     return;
                 }
+                // テレビへの再生引き継ぎ (RemoteHandoff) が視聴画面の外から現在位置を読めるよう、随時 PlayerStore へも反映する
+                player_store.video_playback_position = this.player.video.currentTime;
                 player_store.event_emitter.emit('PlaybackPositionChanged', {
                     playback_position: this.player.video.currentTime,
                 });

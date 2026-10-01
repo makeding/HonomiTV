@@ -15,6 +15,7 @@
             {{ProgramUtils.getProgramTime(playback_mode === 'Live' ? channelsStore.channel.current.program_present : playerStore.recorded_program, true)}}
         </span>
         <v-spacer></v-spacer>
+        <RemoteDeviceActivator class="watch-header__cast" />
         <span class="watch-header__now">
             <Icon v-if="is_showing_original_broadcast_time" class="watch-header__timeshift-icon" icon="fluent:history-16-regular" width="16px" />
             {{time}}
@@ -28,6 +29,7 @@ import { defineComponent, PropType } from 'vue';
 
 import type { Dayjs } from 'dayjs';
 
+import RemoteDeviceActivator from '@/components/RemoteDeviceActivator.vue';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
 import useSettingsStore from '@/stores/SettingsStore';
@@ -35,6 +37,9 @@ import Utils, { dayjs, ProgramUtils } from '@/utils';
 
 export default defineComponent({
     name: 'Watch-Header',
+    components: {
+        RemoteDeviceActivator,
+    },
     props: {
         playback_mode: {
             type: String as PropType<'Live' | 'Video'>,
@@ -309,6 +314,23 @@ export default defineComponent({
             flex-shrink: 0;
             margin-right: 4px;
             opacity: 0.8;
+        }
+    }
+
+    // テレビ操作メニュー (Cast) の起動ボタン
+    // ホーム画面のヘッダー右上と同じ位置 (時刻表示の隣) に置き、視聴画面からでもテレビへ再生を引き継げるようにする
+    .watch-header__cast {
+        flex-shrink: 0;
+        margin-right: 6px;
+
+        @include smartphone-horizontal {
+            margin-right: 2px;
+        }
+        // スマホ縦画面はヘッダーの高さが 50px しかないため、ボタンを縮小する
+        @include smartphone-vertical {
+            width: 36px !important;
+            height: 36px !important;
+            margin-right: 0px;
         }
     }
 }

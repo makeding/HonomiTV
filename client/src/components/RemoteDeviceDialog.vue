@@ -161,6 +161,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 
 import RemoteControl, {
     type IRemoteDevice,
@@ -173,6 +174,7 @@ import {
     remoteDeviceMenuOpenRequest,
     selectedRemoteDeviceName,
 } from '@/services/RemoteControlUI';
+import { handoffCurrentPlaybackToDevice } from '@/services/RemoteHandoff';
 import {
     TemporaryNHKHideAcknowledgement,
     TemporaryNHKHideGesture,
@@ -198,6 +200,8 @@ const CM_SKIP_MODE_LABELS: {mode: RemoteCMSkipMode; label: string;}[] = [
 ];
 
 const settingsStore = useSettingsStore();
+const route = useRoute();
+const router = useRouter();
 const isOpen = ref(false);
 const isLoading = ref(false);
 const devices = ref<IRemoteDevice[]>([]);
@@ -496,6 +500,15 @@ function connectDeviceSubscription(): void {
 
 function selectDevice(device: IRemoteDevice): void {
     settingsStore.settings.selected_remote_device_id = device.device_id;
+    // 視聴画面 (TV Watch / Videos Watch) でブラウザが再生中の場合は、テレビの選択をそのまま
+    // 「いま見ているものをテレビへ移す」動作 (ハンドオフ) にする。視聴画面以外では従来どおり、
+    // 操作対象のテレビを選ぶだけの動作になる。
+    // 送信に成功したら視聴画面から一覧ページへ遷移するため、それに合わせてメニューを閉じる
+    void handoffCurrentPlaybackToDevice(device.device_id, route, router)
+        .then((result) => {
+            if (result === 'Success') isOpen.value = false;
+        })
+        .catch(() => undefined);
 }
 
 async function sendControl(command: Exclude<RemoteCommand, {type: 'OpenLive' | 'OpenRecording'}>): Promise<boolean> {

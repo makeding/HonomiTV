@@ -83,6 +83,11 @@ const usePlayerStore = defineStore('player', {
         // 視聴中の録画番組がない場合は IRecordedProgramDefault を設定すべき (初期値も IRecordedProgramDefault にしている)
         recorded_program: structuredClone(IRecordedProgramDefault) as IRecordedProgram,
 
+        // ビデオ視聴: PlayerController が timeupdate のたびに随時更新する、録画先頭基準の最新の再生位置 (秒)
+        // UI は再生位置を PlaybackPositionChanged イベントで受けるため、この値はテレビへの再生引き継ぎ (RemoteHandoff) のように
+        // 視聴画面の外から現在位置を参照する用途に限定する
+        video_playback_position: 0,
+
         // 仮想キーボードが表示されているか
         // 既定で表示されていない想定
         is_virtual_keyboard_display: false,
@@ -229,6 +234,7 @@ const usePlayerStore = defineStore('player', {
             this.is_watching = false;
             this.is_player_initialized = false;
             this.recorded_program = structuredClone(IRecordedProgramDefault);
+            this.video_playback_position = 0;
             this.is_virtual_keyboard_display = false;
             this.is_fullscreen = false;
             this.is_document_pip = false;
