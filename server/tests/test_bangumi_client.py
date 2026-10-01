@@ -3,11 +3,12 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app import schemas
 from app.utils.BangumiClient import BangumiClient
 
 
 class BangumiClientTest(unittest.TestCase):
-    """Bangumi 收藏候補の一括照合と視聴完了判定を検証する。"""
+    """Bangumi コレクション候補の一括照合と視聴完了判定を検証する。"""
 
     def test_only_single_positive_integer_episode_is_accepted(self) -> None:
         """単一の正整数以外の話数は自動同期しない。"""
@@ -20,7 +21,7 @@ class BangumiClientTest(unittest.TestCase):
 
 
     def test_long_title_matches_collection_subject_without_search(self) -> None:
-        """長い EPG 作品名でも收藏一覧内の同名条目へ完全一致できる。"""
+        """長い EPG 作品名でもコレクション一覧内の同名作品へ完全一致できる。"""
 
         expected_subject: dict[str, Any] = {
             'id': 590786,
@@ -46,7 +47,7 @@ class BangumiClientTest(unittest.TestCase):
 
 
     def test_trailing_period_difference_is_ignored(self) -> None:
-        """EPG だけが長い作品名の末尾句点を省略しても同じ收藏条目として扱う。"""
+        """EPG だけが長い作品名の末尾句点を省略しても同じコレクション作品として扱う。"""
 
         subject = {
             'id': 590786,
@@ -63,7 +64,7 @@ class BangumiClientTest(unittest.TestCase):
 
 
     def test_ambiguous_collection_titles_are_not_matched(self) -> None:
-        """同点の收藏条目が複数ある場合は誤って自動確定しない。"""
+        """同点のコレクション作品が複数ある場合は誤って自動確定しない。"""
 
         subjects = [
             {'id': 1, 'type': 2, 'name': '同名作品', 'name_cn': ''},
@@ -71,6 +72,87 @@ class BangumiClientTest(unittest.TestCase):
         ]
 
         self.assertIsNone(BangumiClient.findSubject('同名作品', subjects))
+
+
+    def test_japanese_main_title_matches_space_delimited_subtitle(self) -> None:
+        """短い EPG 主題と空白区切りの正式作品名を、リモート検索なしで照合する。"""
+
+        subject = {
+            'id': 602733,
+            'type': 2,
+            'name': '才女のお世話 高嶺の花だらけな名門校で、学院一のお嬢様（生活能力皆無）を陰ながらお世話することになりました',
+            'name_cn': '',
+        }
+        for series_title in ('才女のお世話', subject['name']):
+            with self.subTest(series_title=series_title):
+                self.assertEqual(BangumiClient.findSubject(series_title, [subject]), subject)
+
+
+    def test_space_delimited_subtitle_matches_in_reverse(self) -> None:
+        """正式名の EPG と短縮名の Bangumi 作品も同じ弱い候補として比較する。"""
+
+        subject = {'id': 602733, 'type': 2, 'name': '才女のお世話', 'name_cn': ''}
+        self.assertEqual(BangumiClient.findSubject('才女のお世話 高嶺の花だらけな名門校で', [subject]), subject)
+
+
+    def test_remastered_ultraman_matches_original_subject(self) -> None:
+        """リマスターの品質表記だけを比較から外し、原作の実写作品へ照合する。"""
+
+        subject = {'id': 38652, 'type': 6, 'name': '帰ってきたウルトラマン', 'name_cn': '归来的奥特曼'}
+        for suffix in ('4Kリマスター版', '４Ｋリマスター版', 'HDリマスター版', 'デジタルリマスター版'):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(BangumiClient.findSubject(f'帰ってきたウルトラマン {suffix}', [subject]), subject)
+
+
+    def test_main_title_does_not_match_sequel_or_movie(self) -> None:
+        """数字・期・劇場版を空白で追加した別作品を主題へ誤照合しない。"""
+
+        for suffix in ('2', '第2期', '第２期', '第2部', 'II', 'Season 2', '2nd Season', 'Final Season', '劇場版', '映画'):
+            with self.subTest(suffix=suffix):
+                subject = {'id': 1, 'type': 2, 'name': f'才女のお世話 {suffix}', 'name_cn': ''}
+                self.assertIsNone(BangumiClient.findSubject('才女のお世話', [subject]))
+                subject['name'] = '才女のお世話'
+                self.assertIsNone(BangumiClient.findSubject(f'才女のお世話 {suffix}', [subject]))
+
+
+    def test_arbitrary_prefix_and_english_word_boundary_do_not_match(self) -> None:
+        """境界なしの接頭辞・短すぎる主題・英語の単語間空白を副題扱いしない。"""
+
+        for short_title, long_title in (
+            ('才女のお世話', '才女のお世話係'),
+            ('作品', '作品 完全な別作品'),
+            ('One', 'One Piece'),
+            ('One Piece', 'One Piece Film Red'),
+        ):
+            with self.subTest(short_title=short_title, long_title=long_title):
+                subject = {'id': 1, 'type': 2, 'name': long_title, 'name_cn': ''}
+                self.assertIsNone(BangumiClient.findSubject(short_title, [subject]))
+
+
+    def test_ambiguous_subtitles_do_not_match_but_exact_title_wins(self) -> None:
+        """副題省略で複数候補が残る場合は拒否し、完全一致がある場合はそれを優先する。"""
+
+        subjects = [
+            {'id': 1, 'type': 2, 'name': '才女のお世話 高嶺の花だらけな名門校で', 'name_cn': ''},
+            {'id': 2, 'type': 2, 'name': '才女のお世話 別の物語', 'name_cn': ''},
+        ]
+        self.assertIsNone(BangumiClient.findSubject('才女のお世話', subjects))
+        exact_subject = {'id': 3, 'type': 2, 'name': '才女のお世話', 'name_cn': ''}
+        self.assertEqual(BangumiClient.findSubject('才女のお世話', [*subjects, exact_subject]), exact_subject)
+
+
+    def test_remaster_normalization_preserves_work_identity(self) -> None:
+        """品質表記を吸収しても期・劇場版を消さず、空の作品名も確定しない。"""
+
+        for local_title, subject_title in (
+            ('帰ってきたウルトラマン 劇場版 4Kリマスター版', '帰ってきたウルトラマン'),
+            ('才女のお世話 第2期 4Kリマスター版', '才女のお世話'),
+            ('4Kリマスター版', '4Kリマスター版'),
+            ('', '才女のお世話'),
+        ):
+            with self.subTest(local_title=local_title):
+                subject = {'id': 1, 'type': 2, 'name': subject_title, 'name_cn': ''}
+                self.assertIsNone(BangumiClient.findSubject(local_title, [subject]))
 
 
     def test_playback_completion_is_decided_at_ninety_percent(self) -> None:
@@ -119,8 +201,8 @@ class BangumiClientTest(unittest.TestCase):
 class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
     """Bangumi API を呼び出す前のローカル対象判定を検証する。"""
 
-    async def test_collection_api_is_not_called_without_anime_series(self) -> None:
-        """アニメ・特撮の Series がない環境では收藏一覧を取得しない。"""
+    async def test_collection_api_is_not_called_without_eligible_series(self) -> None:
+        """照合対象の Series がない環境ではコレクション一覧を取得しない。"""
 
         series_query: asyncio.Future[list[Any]] = asyncio.Future()
         series_query.set_result([])
@@ -135,8 +217,111 @@ class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
         get_collection_subjects.assert_not_awaited()
 
 
+    async def test_collection_pages_include_anime_and_live_action_only(self) -> None:
+        """アニメ・実写の視聴中・視聴済みを全ページから取得し、他の種別・コレクション状態は除外する。"""
+
+        anime = {'id': 602733, 'type': 2, 'name': '才女のお世話'}
+        live_action = {'id': 38652, 'type': 6, 'name': '帰ってきたウルトラマン'}
+        first_response = MagicMock()
+        first_response.json.return_value = {
+            'total': 6,
+            'data': [
+                {'type': 3, 'subject': anime},
+                {'type': 2, 'subject': {'id': 7, 'type': 1, 'name': '書籍'}},
+                {'type': 1, 'subject': {'id': 8, 'type': 6, 'name': '未視聴'}},
+            ],
+        }
+        second_response = MagicMock()
+        second_response.json.return_value = {
+            'total': 6,
+            'data': [
+                {'type': 2, 'subject': live_action},
+                {'type': 3, 'subject': anime},
+                {'type': 4, 'subject': {'id': 9, 'type': 6, 'name': '中断'}},
+            ],
+        }
+        httpx_client = AsyncMock()
+        httpx_client.get.side_effect = [first_response, second_response]
+        httpx_client.__aenter__.return_value = httpx_client
+        user = MagicMock()
+        user.bangumi_user_name = 'test-user'
+        user.decryptBangumiAccessToken.return_value = 'test-token'
+        with patch('app.utils.BangumiClient.HTTPX_CLIENT', return_value=httpx_client):
+            subjects = await BangumiClient._getCollectionSubjects(user)  # pyright: ignore[reportPrivateUsage]
+
+        self.assertEqual(subjects, [anime, live_action])
+        self.assertEqual(httpx_client.get.await_count, 2)
+        for request, offset in zip(httpx_client.get.await_args_list, (0, 3), strict=True):
+            self.assertNotIn('subject_type', request.kwargs['params'])
+            self.assertEqual(request.kwargs['params']['offset'], offset)
+            self.assertEqual(request.kwargs['headers']['Authorization'], 'Bearer test-token')
+
+
+    async def test_live_action_series_reaches_existing_merge_pipeline(self) -> None:
+        """特撮・連続ドラマ等を既存の統合経路へ渡し、同名アニメは実写候補から除外する。"""
+
+        subject = {'id': 38652, 'type': 6, 'name': '帰ってきたウルトラマン', 'name_cn': ''}
+        for major, middle in (
+            ('アニメ・特撮', '特撮'),
+            ('ドラマ', '国内ドラマ'),
+            ('ドラマ', '海外ドラマ'),
+            ('ドキュメンタリー・教養', '歴史・紀行'),
+            ('バラエティ', 'トークバラエティ'),
+            ('音楽', '国内ロック・ポップス'),
+        ):
+            with self.subTest(major=major, middle=middle):
+                series = MagicMock()
+                series.id = 238
+                series.title = '帰ってきたウルトラマン 4Kリマスター版'
+                series.genres = [schemas.Genre(major=major, middle=middle)]
+                series.bangumi_subject_id = None
+                series_query: asyncio.Future[list[Any]] = asyncio.Future()
+                series_query.set_result([series])
+                existence_query = MagicMock()
+                existence_query.exists = AsyncMock(return_value=True)
+                recorded_query = MagicMock()
+                recorded_query.all = AsyncMock(return_value=[])
+                user = MagicMock()
+                user.decryptBangumiAccessToken.return_value = 'test-token'
+                subjects = [subject]
+                if major != 'アニメ・特撮':
+                    subjects.append({**subject, 'id': 77, 'type': 2})
+                merge = AsyncMock(return_value=series)
+                with (
+                    patch('app.utils.BangumiClient.Series.all', return_value=series_query),
+                    patch('app.utils.BangumiClient.Series.filter', return_value=existence_query),
+                    patch.object(BangumiClient, '_getCollectionSubjects', AsyncMock(return_value=subjects)),
+                    patch('app.utils.BangumiClient.SeriesMerger.mergeByBangumiSubject', merge),
+                    patch('app.utils.BangumiClient.RecordedProgram.filter', return_value=recorded_query),
+                ):
+                    matched_count = await BangumiClient.syncUserCollections(user)
+
+                self.assertEqual(matched_count, 1)
+                merge.assert_awaited_once()
+                self.assertEqual(merge.await_args.kwargs['subject_id'], 38652)
+                self.assertEqual(series.title, '帰ってきたウルトラマン 4Kリマスター版')
+
+
+    async def test_news_series_does_not_expand_matching_scope(self) -> None:
+        """ニュースなど対象外の Series は、同名作品があっても取得・照合しない。"""
+
+        series = MagicMock()
+        series.genres = [schemas.Genre(major='ニュース・報道', middle='定時・総合')]
+        series_query: asyncio.Future[list[Any]] = asyncio.Future()
+        series_query.set_result([series])
+        get_collection_subjects = AsyncMock()
+        with (
+            patch('app.utils.BangumiClient.Series.all', return_value=series_query),
+            patch.object(BangumiClient, '_getCollectionSubjects', get_collection_subjects),
+        ):
+            matched_count = await BangumiClient.syncUserCollections(MagicMock())
+
+        self.assertEqual(matched_count, 0)
+        get_collection_subjects.assert_not_awaited()
+
+
     async def test_nsfw_episode_request_uses_bearer_token(self) -> None:
-        """NSFW 条目の episode 取得にも連携済みユーザーの Bearer token を渡す。"""
+        """NSFW 作品の episode 取得にも連携済みユーザーの Bearer token を渡す。"""
 
         response = MagicMock()
         response.status_code = 404

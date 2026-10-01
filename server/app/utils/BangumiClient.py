@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import unicodedata
 from difflib import SequenceMatcher
 from typing import Any, cast
 
@@ -17,11 +19,28 @@ from app.models.User import User
 
 
 class BangumiClient:
-    """KonomiTV の録画番組を Bangumi の条目とエピソードへ照合する。"""
+    """KonomiTV の録画番組を Bangumi の作品とエピソードへ照合する。"""
 
     API_BASE_URL = 'https://api.bgm.tv/v0'
     COLLECTION_PAGE_SIZE = 100
     EPISODE_PAGE_SIZE = 200
+    # EPG の大分類と Bangumi の作品種別は一致しないため、特撮をアニメ・実写の両方から照合する。
+    ## 既に Series として整理された連続番組だけを対象とし、ニュース・スポーツ等へは拡張しない。
+    SUBJECT_TYPES_BY_GENRE = {
+        'アニメ・特撮': {2, 6},
+        'ドラマ': {6},
+        'ドキュメンタリー・教養': {6},
+        'バラエティ': {6},
+        '音楽': {6},
+    }
+    # 放送版の品質差だけを比較キーから取り除き、作品の期・劇場版などの識別情報は保持する。
+    REMASTER_SUFFIX_PATTERN = re.compile(r'\s*(?:(?:[248]K|HD|デジタル)\s*)?リマスター版?\s*$', re.IGNORECASE)
+    SEQUEL_PREFIX_PATTERN = re.compile(
+        r'^(?:第\s*[0-9一二三四五六七八九十]+\s*(?:期|部|章|シーズン|クール)|'
+        r'[0-9]+(?:\b|期|部|章)|(?:season|part)\s*[0-9]+|[0-9]+(?:st|nd|rd|th)\b|'
+        r'[ivx]+\b|続編|続・|劇場版|映画|the\s+movie\b|final\s+season\b)',
+        re.IGNORECASE,
+    )
     _sync_tasks: set[asyncio.Task[None]] = set()
     _subject_merge_locks: dict[int, asyncio.Lock] = {}
 
@@ -47,51 +66,85 @@ class BangumiClient:
     @staticmethod
     def _normalizeSubjectTitle(title: str) -> str:
         """
-        ローカル Series と Bangumi 条目のタイトル比較キーを生成する。
+        ローカル Series と Bangumi 作品のタイトル比較キーを生成する。
 
         Args:
-            title (str): ローカル Series または Bangumi 条目のタイトル。
+            title (str): ローカル Series または Bangumi 作品のタイトル。
 
         Returns:
-            str: Unicode・空白・末尾句読点の表記差を吸収した比較キー。
+            str: Unicode・空白・末尾句読点・リマスター表記の差を吸収した比較キー。
         """
 
         # EPG と Bangumi では長い作品名の末尾句点だけが欠けることがあるため、その差だけを追加で吸収する。
-        return NormalizeSeriesTitle(title).rstrip('。.!！?？')
+        normalized_title = unicodedata.normalize('NFKC', title)
+        normalized_title = BangumiClient.REMASTER_SUFFIX_PATTERN.sub('', normalized_title)
+        return NormalizeSeriesTitle(normalized_title).rstrip('。.!！?？')
+
+
+    @classmethod
+    def _isSubjectTitlePrefix(cls, short_title: str, long_title: str) -> bool:
+        """
+        Bangumi 照合に限り、記号または空白で副題を区切る短縮名を比較する。
+
+        Args:
+            short_title (str): 副題を省略した作品名。
+            long_title (str): 副題を含む作品名。
+
+        Returns:
+            bool: 続編ではない明示的な副題境界が確認できた場合に True。
+        """
+
+        short_key = cls._normalizeSubjectTitle(short_title)
+        long_key = cls._normalizeSubjectTitle(long_title)
+        if not short_key:
+            return False
+        if IsStrictSeriesTitlePrefix(short_key, long_key):
+            return True
+
+        # 空白を消す前に日本語主題の終わりを確認し、英語作品名の単語間空白を副題と誤認しない。
+        ## 短すぎる汎用名と、数字・期・劇場版を後置した別作品は弱い候補にも含めない。
+        title_parts = unicodedata.normalize('NFKC', long_title).strip().split(maxsplit=1)
+        return (
+            len(title_parts) == 2 and len(short_key) >= 4 and
+            re.search(r'[ぁ-んァ-ヶ一-龯]', short_key) is not None and
+            cls._normalizeSubjectTitle(title_parts[0]) == short_key and
+            cls.SEQUEL_PREFIX_PATTERN.match(title_parts[1]) is None
+        )
 
 
     @classmethod
     def _scoreSubjectTitle(cls, series_title: str, subject: dict[str, Any]) -> int:
         """
-        ユーザーの收藏済みアニメからローカル Series の条目候補を採点する。
+        ユーザーのコレクションに登録されたアニメ・実写からローカル Series の作品候補を採点する。
 
         Args:
             series_title (str): ローカル Series の表示タイトル。
-            subject (dict[str, Any]): Bangumi 收藏一覧に含まれる条目概要。
+            subject (dict[str, Any]): Bangumi コレクション一覧に含まれる作品概要。
 
         Returns:
             int: タイトル一致度。候補外の場合は 0。
         """
 
         local_title = cls._normalizeSubjectTitle(series_title)
-        subject_titles = {
-            cls._normalizeSubjectTitle(str(subject.get('name', ''))),
-            cls._normalizeSubjectTitle(str(subject.get('name_cn', ''))),
-        } - {''}
-        if len(subject_titles) == 0:
+        original_subject_titles = [
+            str(subject.get('name', '')),
+            str(subject.get('name_cn', '')),
+        ]
+        subject_titles = {cls._normalizeSubjectTitle(title) for title in original_subject_titles} - {''}
+        if not local_title or len(subject_titles) == 0:
             return 0
         if local_title in subject_titles:
             return 100
 
         # 放送局が副題を省略した表記は、安全な副題境界を持つ場合だけ弱い候補として認める。
         if any(
-            IsStrictSeriesTitlePrefix(local_title, subject_title) or
-            IsStrictSeriesTitlePrefix(subject_title, local_title)
-            for subject_title in subject_titles
+            cls._isSubjectTitlePrefix(series_title, subject_title) or
+            cls._isSubjectTitlePrefix(subject_title, series_title)
+            for subject_title in original_subject_titles
         ):
             return 80
 
-        # 收藏一覧に絞った後も僅かな記号・転写差が残るため、長いタイトル同士だけ保守的に類似判定する。
+        # コレクション一覧に絞った後も僅かな記号・転写差が残るため、長いタイトル同士だけ保守的に類似判定する。
         similarity = max(
             (SequenceMatcher(None, local_title, subject_title).ratio() for subject_title in subject_titles),
             default = 0.0,
@@ -125,11 +178,11 @@ class BangumiClient:
     @classmethod
     def findSubject(cls, series_title: str, subjects: list[dict[str, Any]]) -> dict[str, Any] | None:
         """
-        用户の在看・看過收藏からローカル Series に対応する条目を一意に選ぶ。
+        ユーザーの視聴中・視聴済みのコレクションからローカル Series に対応する作品を一意に選ぶ。
 
         Args:
             series_title (str): ローカル Series の表示タイトル。
-            subjects (list[dict[str, Any]]): 在看・看過のアニメ条目一覧。
+            subjects (list[dict[str, Any]]): 視聴中・視聴済みのアニメ・実写作品一覧。
 
         Returns:
             dict[str, Any] | None: 十分に一意な最高得点候補。
@@ -153,13 +206,13 @@ class BangumiClient:
     @classmethod
     async def _getCollectionSubjects(cls, user: User) -> list[dict[str, Any]]:
         """
-        連携ユーザーの「在看」「看過」アニメ条目を收藏一覧から一括取得する。
+        連携ユーザーの「視聴中」「視聴済み」アニメ・実写作品をコレクション一覧から一括取得する。
 
         Args:
             user (User): Bangumi アカウント連携済みの KonomiTV ユーザー。
 
         Returns:
-            list[dict[str, Any]]: 条目 ID ごとに重複を除いた收藏済みアニメ概要。
+            list[dict[str, Any]]: 作品 ID ごとに重複を除いたコレクションに登録されたアニメ・実写概要。
 
         Raises:
             httpx.HTTPError: Bangumi API への接続または HTTP エラーが発生した場合。
@@ -172,13 +225,12 @@ class BangumiClient:
         offset = 0
         async with HTTPX_CLIENT() as httpx_client:
             while True:
-                # 收藏状態を API 側で分割せず全件取得し、在看・看過だけをローカルで選ぶ。
+                # コレクション状態・作品種別を API 側で分割せず全件取得し、視聴中・視聴済みのアニメ・実写だけをローカルで選ぶ。
                 ## これにより、ユーザーごとの候補一覧はページ数分のリクエストだけで揃う。
                 response = await httpx_client.get(
                     url = f'{cls.API_BASE_URL}/users/{user.bangumi_user_name}/collections',
                     headers = headers,
                     params = {
-                        'subject_type': 2,
                         'limit': cls.COLLECTION_PAGE_SIZE,
                         'offset': offset,
                     },
@@ -190,7 +242,7 @@ class BangumiClient:
                     if int(collection.get('type', -1)) not in {2, 3}:
                         continue
                     subject = collection.get('subject')
-                    if not isinstance(subject, dict) or int(subject.get('type', -1)) != 2:
+                    if not isinstance(subject, dict) or int(subject.get('type', -1)) not in {2, 6}:
                         continue
                     subjects[int(subject['id'])] = cast(dict[str, Any], subject)
 
@@ -203,14 +255,14 @@ class BangumiClient:
     @classmethod
     async def _getEpisodes(cls, subject_id: int, access_token: str) -> list[dict[str, Any]]:
         """
-        照合済み Bangumi 条目の通常エピソードを全ページ取得する。
+        照合済み Bangumi 作品の通常エピソードを全ページ取得する。
 
         Args:
-            subject_id (int): Bangumi 条目 ID。
+            subject_id (int): Bangumi 作品 ID。
             access_token (str): Bangumi 個人アクセストークン。
 
         Returns:
-            list[dict[str, Any]]: 条目に属する通常エピソード。
+            list[dict[str, Any]]: 作品に属する通常エピソード。
 
         Raises:
             httpx.HTTPError: Bangumi API への接続または HTTP エラーが発生した場合。
@@ -222,7 +274,7 @@ class BangumiClient:
             while True:
                 response = await httpx_client.get(
                     url = f'{cls.API_BASE_URL}/episodes',
-                    # NSFW 条目は匿名アクセスを 404 に偽装するため、收藏一覧と同じ認証を必ず引き継ぐ。
+                    # NSFW 作品は匿名アクセスを 404 に偽装するため、コレクション一覧と同じ認証を必ず引き継ぐ。
                     headers = {**API_REQUEST_HEADERS, 'Authorization': f'Bearer {access_token}'},
                     params = {
                         'subject_id': subject_id,
@@ -231,7 +283,7 @@ class BangumiClient:
                         'offset': offset,
                     },
                 )
-                # 認証後も閲覧できない条目、または削除済み条目だけ episode 未照合として扱う。
+                # 認証後も閲覧できない作品、または削除済み作品だけ episode 未照合として扱う。
                 if response.status_code == 404:
                     logging.warning(
                         f'[BangumiClient][_getEpisodes] Bangumi subject was not found. '
@@ -251,24 +303,24 @@ class BangumiClient:
     @classmethod
     async def syncUserCollections(cls, user: User) -> int:
         """
-        連携ユーザーの收藏一覧を候補プールとしてローカル Series と全録画を照合する。
+        連携ユーザーのコレクション一覧を候補プールとしてローカル Series と全録画を照合する。
 
         Args:
             user (User): Bangumi アカウント連携済みの KonomiTV ユーザー。
 
         Returns:
-            int: 今回 Bangumi 条目へ照合できた Series 数。
+            int: 今回 Bangumi 作品へ照合できた Series 数。
 
         Raises:
             httpx.HTTPError: Bangumi API への接続または HTTP エラーが発生した場合。
         """
 
-        anime_series = [
+        eligible_series = [
             series for series in await Series.all()
-            if any(genre['major'] == 'アニメ・特撮' for genre in series.genres)
+            if any(genre['major'] in cls.SUBJECT_TYPES_BY_GENRE for genre in series.genres)
         ]
-        # ローカルにアニメ・特撮の Series が一件もなければ、Bangumi API 自体へアクセスしない。
-        if len(anime_series) == 0:
+        # ローカルに照合対象の Series が一件もなければ、Bangumi API 自体へアクセスしない。
+        if len(eligible_series) == 0:
             return 0
 
         subjects = await cls._getCollectionSubjects(user)
@@ -276,22 +328,27 @@ class BangumiClient:
         episodes_by_subject_id: dict[int, list[dict[str, Any]]] = {}
         matched_series_ids: set[int] = set()
 
-        for series in anime_series:
+        for series in eligible_series:
             # 先行する同期処理がこの Series を最古の主レコードへ統合済みの場合は、
             ## 取得済みリストに残る削除済みオブジェクトを再処理しない。
             if await Series.filter(id=series.id).exists() is False:
                 continue
 
-            # すでに条目が確定している Series は、別ユーザーの收藏表記で上書きしない。
+            # すでに作品が確定している Series は、別ユーザーのコレクション表記で上書きしない。
+            subject_types = {
+                subject_type for genre in series.genres
+                for subject_type in cls.SUBJECT_TYPES_BY_GENRE.get(genre['major'], set())
+            }
+            candidate_subjects = [subject for subject in subjects if int(subject.get('type', -1)) in subject_types]
             subject = next(
                 (subject for subject in subjects if int(subject['id']) == series.bangumi_subject_id),
                 None,
-            ) if series.bangumi_subject_id is not None else cls.findSubject(series.title, subjects)
+            ) if series.bangumi_subject_id is not None else cls.findSubject(series.title, candidate_subjects)
             if subject is None:
                 continue
             subject_id = int(subject['id'])
 
-            # 收藏一覧が返す SlimSubject を永続化すると同時に、同じ条目 ID に照合済みの Series を統合する。
+            # コレクション一覧が返す SlimSubject を永続化すると同時に、同じ作品 ID に照合済みの Series を統合する。
             ## ロック中に外部 API は呼ばず、異なるユーザーの定期同期が重なっても subject ごとに直列化する。
             images = subject.get('images')
             image_url = str(images.get('large') or images.get('common') or '') if isinstance(images, dict) else ''
@@ -326,8 +383,8 @@ class BangumiClient:
                 episodes_by_subject_id[subject_id] = await cls._getEpisodes(subject_id, access_token)
             episodes = episodes_by_subject_id.get(subject_id, [])
 
-            # Series 全体が同じ条目と確定したため、特別編や複数話録画にも subject ID までは保存する。
-            ## 自然話数が一意な録画だけ、一覧取得時に確定した条目内の episode ID へ追加で結び付ける。
+            # Series 全体が同じ作品と確定したため、特別編や複数話録画にも subject ID までは保存する。
+            ## 自然話数が一意な録画だけ、一覧取得時に確定した作品内の episode ID へ追加で結び付ける。
             for recorded_program in recorded_programs:
                 update_fields: list[str] = []
                 subject_changed = recorded_program.bangumi_subject_id != subject_id
@@ -351,7 +408,7 @@ class BangumiClient:
     @classmethod
     async def syncAllLinkedUsers(cls) -> None:
         """
-        Bangumi 連携済みユーザーごとに收藏一覧を取得し、ローカル Series へ反映する。
+        Bangumi 連携済みユーザーごとにコレクション一覧を取得し、ローカル Series へ反映する。
 
         Returns:
             None
@@ -376,7 +433,7 @@ class BangumiClient:
     @classmethod
     def scheduleUserCollectionSync(cls, user: User) -> None:
         """
-        アカウント連携直後の收藏一覧同期を API レスポンスと切り離して開始する。
+        アカウント連携直後のコレクション一覧同期を API レスポンスと切り離して開始する。
 
         Args:
             user (User): Bangumi アカウント連携済みの KonomiTV ユーザー。
@@ -408,10 +465,10 @@ class BangumiClient:
     @staticmethod
     def _findEpisode(episodes: list[dict[str, Any]], episode_number: int) -> dict[str, Any] | None:
         """
-        Bangumi の対象条目から EPG 話数に対応する通常エピソードを取得する。
+        Bangumi の対象作品から EPG 話数に対応する通常エピソードを取得する。
 
         Args:
-            episodes (list[dict[str, Any]]): Bangumi 条目のエピソード。
+            episodes (list[dict[str, Any]]): Bangumi 作品のエピソード。
             episode_number (int): EPG から抽出した話数。
 
         Returns:
