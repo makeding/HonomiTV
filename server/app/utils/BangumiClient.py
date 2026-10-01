@@ -37,8 +37,8 @@ class BangumiClient:
     REMASTER_SUFFIX_PATTERN = re.compile(r'\s*(?:(?:[248]K|HD|デジタル)\s*)?リマスター版?\s*$', re.IGNORECASE)
     SEQUEL_PREFIX_PATTERN = re.compile(
         r'^(?:第\s*[0-9一二三四五六七八九十]+\s*(?:期|部|章|シーズン|クール)|'
-        r'[0-9]+(?:\b|期|部|章)|(?:season|part)\s*[0-9]+|[0-9]+(?:st|nd|rd|th)\b|'
-        r'[ivx]+\b|続編|続・|劇場版|映画|the\s+movie\b|final\s+season\b)',
+        r'[0-9]+|(?:season|part)\s*[0-9]+|'
+        r'[ivx]+\b|続編|続・|劇場版|映画|the\s*movie\b|final\s*season\b|ova\b|oad\b)',
         re.IGNORECASE,
     )
     _sync_tasks: set[asyncio.Task[None]] = set()
@@ -135,6 +135,14 @@ class BangumiClient:
             return 0
         if local_title in subject_titles:
             return 100
+
+        # 長い主題は期や劇場版の追加後も類似率が高いため、明示的な別作品表記を fuzzy 判定より先に拒否する。
+        for subject_title in subject_titles:
+            short_key, long_key = sorted((local_title, subject_title), key=len)
+            if long_key.startswith(short_key):
+                edition_suffix = long_key[len(short_key):].lstrip('~～-―—:：「『【')
+                if cls.SEQUEL_PREFIX_PATTERN.match(edition_suffix) is not None:
+                    return 0
 
         # 放送局が副題を省略した表記は、安全な副題境界を持つ場合だけ弱い候補として認める。
         if any(

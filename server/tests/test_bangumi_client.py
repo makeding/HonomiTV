@@ -129,6 +129,18 @@ class BangumiClientTest(unittest.TestCase):
                 self.assertIsNone(BangumiClient.findSubject(short_title, [subject]))
 
 
+    def test_long_main_title_cannot_fuzzy_match_a_sequel(self) -> None:
+        """長い主題の類似率が高くても、期・劇場版などの違いを曖昧一致で覆さない。"""
+
+        main_title = 'ここは俺に任せて先に行けと言ってから10年がたったら伝説になっていた'
+        for suffix in ('第2期', 'Season 2', 'Final Season', 'II', '劇場版', 'OVA', ': 第2期'):
+            with self.subTest(suffix=suffix):
+                subject = {'id': 1, 'type': 2, 'name': f'{main_title} {suffix}', 'name_cn': ''}
+                self.assertIsNone(BangumiClient.findSubject(main_title, [subject]))
+                subject['name'] = main_title
+                self.assertIsNone(BangumiClient.findSubject(f'{main_title} {suffix}', [subject]))
+
+
     def test_ambiguous_subtitles_do_not_match_but_exact_title_wins(self) -> None:
         """副題省略で複数候補が残る場合は拒否し、完全一致がある場合はそれを優先する。"""
 
