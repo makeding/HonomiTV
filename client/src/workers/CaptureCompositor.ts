@@ -100,6 +100,10 @@ class CaptureCompositor implements ICaptureCompositor {
     // フォントをロード済みかどうか
     private static is_loaded_fonts: boolean = false;
 
+    // 初期化とコメント付きキャプチャが同時に要求したフォントのロードを共有する
+    // 完了後は解放し、失敗した場合も次のキャプチャ操作で再試行できるようにする
+    private static loading_fonts: Promise<void> | null = null;
+
     // CaptureCompositor の合成オプション
     private readonly options: ICaptureCompositorOptions;
 
@@ -123,21 +127,49 @@ class CaptureCompositor implements ICaptureCompositor {
             return;
         }
 
-        // コメント描画に関しては Bold しか利用しない
-        const font_faces: FontFace[] = [
-            new FontFace('Open Sans', 'url(/assets/fonts/OpenSans-Bold.woff2)', {weight: 'bold'}),
-            new FontFace('YakuHanJPs', 'url(/assets/fonts/YakuHanJPs-Bold.woff2)', {weight: 'bold'}),
-            new FontFace('Twemoji', 'url(/assets/fonts/Twemoji.woff2)', {weight: 'bold'}),
-            new FontFace('Noto Sans JP', 'url(/assets/fonts/NotoSansJP-Bold.woff2)', {weight: 'bold'}),
-        ];
-
-        // フォントを一括ロード
-        // Web Worker では document.fonts ではなく self.fonts を使う必要がある (落とし穴)
-        await Promise.all(font_faces.map((font_face) => font_face.load()));
-        for (const font_face of font_faces) {
-            self.fonts.add(font_face);
+        // 進行中のロードを待ち、同じフォントを重複してダウンロードしない
+        if (this.loading_fonts !== null) {
+            return this.loading_fonts;
         }
-        this.is_loaded_fonts = true;
+
+        this.loading_fonts = (async () => {
+            // コメント描画に関しては Bold しか利用しない
+            const fonts = [
+                {family: 'Open Sans', url: '/assets/fonts/OpenSans-Bold.woff2'},
+                {family: 'YakuHanJPs', url: '/assets/fonts/YakuHanJPs-Bold.woff2'},
+                {family: 'Twemoji', url: '/assets/fonts/Twemoji.woff2'},
+                {family: 'Noto Sans JP', url: '/assets/fonts/NotoSansJP-Bold.woff2'},
+            ];
+
+            // Firefox の Worker 内の FontFace(url) は同一オリジンでも Cookie を送らない
+            // 認証付き fetch で取得したバイナリを渡し、ログインページへのリダイレクトは追跡しない
+            const font_faces = await Promise.all(fonts.map(async (font) => {
+                const response = await fetch(font.url, {
+                    credentials: 'same-origin',
+                    mode: 'same-origin',
+                    redirect: 'error',
+                });
+                if (response.ok === false) {
+                    throw new Error(`Capture font download failed: ${font.family} (HTTP ${response.status}).`);
+                }
+                const font_face = new FontFace(font.family, await response.arrayBuffer(), {weight: 'bold'});
+                return font_face.load();
+            }));
+
+            // 全フォントのデコード成功後に登録する
+            // Web Worker では document.fonts ではなく self.fonts を使う必要がある (落とし穴)
+            for (const font_face of font_faces) {
+                self.fonts.add(font_face);
+            }
+            this.is_loaded_fonts = true;
+        })();
+
+        // 失敗した Promise を保持してしまうと認証・通信が復旧しても再試行できないため必ず解放する
+        try {
+            await this.loading_fonts;
+        } finally {
+            this.loading_fonts = null;
+        }
     }
 
 

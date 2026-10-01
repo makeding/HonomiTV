@@ -92,7 +92,12 @@ class CaptureManager implements PlayerManager {
         this.comment_capture_button.addEventListener('click', () => this.captureAndSave(true));
 
         // 事前に CaptureCompositor 側でフォントをロードしておく
-        await CaptureCompositorProxy.loadFonts();
+        // キャプチャ専用のフォント読み込み失敗で PlayerController 全体の初期化を中断しない
+        try {
+            await CaptureCompositorProxy.loadFonts();
+        } catch (error) {
+            console.warn('[CaptureManager] Capture font preload failed. Will retry on comment capture.', error);
+        }
 
         console.log('[CaptureManager] Initialized.');
     }
@@ -344,6 +349,19 @@ class CaptureManager implements PlayerManager {
         if (is_comment_composite === true && this.player.danmaku?.showing === false) {
             this.player.notice('コメントを付けてキャプチャするには、コメント表示をオンにしてください。', undefined, undefined, '#FF6F6A');
             return;
+        }
+
+        // コメントを描画する場合だけフォントが必要なため、事前ロードの失敗はこの操作で再試行する
+        // 字幕は既存 Canvas を合成するので、フォントが読み込めなくても通常のキャプチャは継続できる
+        if (is_comment_composite === true) {
+            try {
+                await CaptureCompositorProxy.loadFonts();
+            } catch (error) {
+                console.error('[CaptureManager] Capture font loading failed.', error);
+                this.player.notice('コメント付きキャプチャの文字データを読み込めませんでした。ログイン状態と通信接続を確認し、もう一度キャプチャしてください。 (CAPTURE_FONT_LOAD_FAILED)',
+                    undefined, undefined, '#FF6F6A');
+                return;
+            }
         }
 
         // ***** キャプチャの事前準備 *****
