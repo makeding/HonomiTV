@@ -7,6 +7,7 @@ from app.constants import JST
 from app.routers.SeriesRouter import (
     ON_AIR_SERIES_GENRES,
     ExtractOfficialWebsiteURL,
+    GetOnAirFinalExpiry,
     GetSeriesSummaries,
     OnAirSeriesListAPI,
     SeriesListPositionAPI,
@@ -45,6 +46,18 @@ class SeriesRouterTest(unittest.TestCase):
 
         self.assertEqual(ON_AIR_SERIES_GENRES, {'アニメ・特撮', 'ドラマ', 'バラエティ', '音楽'})
         self.assertNotIn('ドキュメンタリー・教養', ON_AIR_SERIES_GENRES)
+
+    def test_on_air_final_expiry_uses_seven_days_or_next_month(self) -> None:
+        """最終回は 7 日後と翌月初日のうち早い時刻で掲載を終える。"""
+
+        self.assertEqual(
+            GetOnAirFinalExpiry(datetime(2026, 6, 20, 23, 30, tzinfo=JST)),
+            datetime(2026, 6, 27, 23, 30, tzinfo=JST),
+        )
+        self.assertEqual(
+            GetOnAirFinalExpiry(datetime(2026, 6, 29, 23, 30, tzinfo=JST)),
+            datetime(2026, 7, 1, 0, 0, tzinfo=JST),
+        )
 
 
 class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
@@ -120,42 +133,42 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
             {
                 'series_id': 1, 'series_title': '新番組', 'genres': anime_genres,
                 'program_title': '新番組 #1', 'id': 101, 'channel_id': 'gr011',
-                'start_time': (now - timedelta(days=1)).isoformat(), 'episode_number': '1',
+                'start_time': (now - timedelta(days=1)).isoformat(), 'end_time': now.isoformat(), 'episode_number': '1',
                 'is_partially_recorded': True, 'has_thumbnail': True,
             },
             {
                 'series_id': 1, 'series_title': '新番組', 'genres': anime_genres,
                 'program_title': '新番組 #1 [再]', 'id': 102, 'channel_id': 'gr011',
-                'start_time': now.isoformat(), 'episode_number': '1',
+                'start_time': now.isoformat(), 'end_time': (now + timedelta(minutes=30)).isoformat(), 'episode_number': '1',
                 'is_partially_recorded': False, 'has_thumbnail': False,
             },
             {
                 'series_id': 2, 'series_title': '8K紀行', 'genres': documentary_genres,
                 'program_title': '8K紀行 第1回', 'id': 201, 'channel_id': 'bs811',
-                'start_time': (now - timedelta(days=1)).isoformat(), 'episode_number': '1',
+                'start_time': (now - timedelta(days=1)).isoformat(), 'end_time': now.isoformat(), 'episode_number': '1',
                 'is_partially_recorded': False, 'has_thumbnail': False,
             },
             {
                 'series_id': 3, 'series_title': '週刊バラエティ', 'genres': variety_genres,
                 'program_title': '週刊バラエティ #2', 'id': 302, 'channel_id': 'gr041',
-                'start_time': (now - timedelta(days=1)).isoformat(), 'episode_number': '2',
+                'start_time': (now - timedelta(days=1)).isoformat(), 'end_time': now.isoformat(), 'episode_number': '2',
                 'is_partially_recorded': True, 'has_thumbnail': False,
             },
             {
                 'series_id': 3, 'series_title': '週刊バラエティ', 'genres': variety_genres,
                 'program_title': '週刊バラエティ #2', 'id': 303, 'channel_id': 'gr051',
-                'start_time': (now - timedelta(days=1)).isoformat(), 'episode_number': '2',
+                'start_time': (now - timedelta(days=1)).isoformat(), 'end_time': now.isoformat(), 'episode_number': '2',
                 'is_partially_recorded': False, 'has_thumbnail': True,
             },
             {
                 'series_id': 3, 'series_title': '週刊バラエティ', 'genres': variety_genres,
                 'program_title': '週刊バラエティ #1', 'id': 301, 'channel_id': 'gr041',
-                'start_time': (now - timedelta(days=8)).isoformat(), 'episode_number': '1',
+                'start_time': (now - timedelta(days=8)).isoformat(), 'end_time': (now - timedelta(days=8) + timedelta(minutes=30)).isoformat(), 'episode_number': '1',
                 'is_partially_recorded': False, 'has_thumbnail': True,
             },
         ]
         future_rows = [{
-            'title': '新番組 #2', 'description': '', 'genres': anime_genres,
+            'title': '新番組 #2', 'description': '', 'genres': anime_genres, 'channel_id': 'gr011',
             'start_time': (now + timedelta(days=6)).isoformat(),
         }]
         connection = AsyncMock()
@@ -165,15 +178,218 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual({series.id for series in result.series_list}, {1, 3})
         anime = next(series for series in result.series_list if series.id == 1)
-        next_broadcast = now + timedelta(days=6)
-        self.assertEqual(anime.weekday, next_broadcast.weekday())
-        self.assertEqual(anime.broadcast_time, f'{next_broadcast.hour:02d}:{(next_broadcast.minute // 5) * 5:02d}')
+        first_broadcast = now - timedelta(days=1)
+        self.assertEqual(anime.weekday, first_broadcast.weekday())
+        self.assertEqual(anime.broadcast_time, f'{first_broadcast.hour:02d}:{(first_broadcast.minute // 5) * 5:02d}')
         # 完全録画の再放送があれば、同じ話数の部分録画は警告対象にしない。
         self.assertEqual(anime.partially_recorded_episodes_count, 0)
         self.assertEqual(anime.thumbnail_recorded_program_ids, [101])
         weekly_variety = next(series for series in result.series_list if series.id == 3)
         self.assertEqual(weekly_variety.partially_recorded_episodes_count, 0)
         self.assertEqual(weekly_variety.thumbnail_recorded_program_ids, [303, 301])
+
+    async def test_on_air_uses_current_cycle_final_expiry_and_resumes_for_new_cycle(self) -> None:
+        """別局の最終回再録画で期限を延ばさず、現シーズンの完結と新シーズンを分ける。"""
+
+        now = datetime.now(JST)
+        anime_genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
+        recorded_rows = [
+            {
+                'series_id': 1, 'series_title': '完結作品', 'genres': anime_genres,
+                'program_title': '完結作品 #12 [完]', 'id': 101, 'channel_id': 'gr011',
+                'start_time': (now - timedelta(days=8, hours=1)).isoformat(),
+                'end_time': (now - timedelta(days=8)).isoformat(), 'episode_number': '12',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 1, 'series_title': '完結作品', 'genres': anime_genres,
+                'program_title': '完結作品 #12', 'id': 102, 'channel_id': 'bs211',
+                'start_time': (now - timedelta(days=2, hours=1)).isoformat(),
+                'end_time': (now - timedelta(days=2)).isoformat(), 'episode_number': '12',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 2, 'series_title': '続編作品', 'genres': anime_genres,
+                'program_title': '続編作品 #12 [終]', 'id': 201, 'channel_id': 'gr021',
+                'start_time': (now - timedelta(days=40, hours=1)).isoformat(),
+                'end_time': (now - timedelta(days=40)).isoformat(), 'episode_number': '12',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 2, 'series_title': '続編作品', 'genres': anime_genres,
+                'program_title': '続編作品 #1', 'id': 202, 'channel_id': 'gr021',
+                'start_time': (now - timedelta(days=8)).isoformat(),
+                'end_time': (now - timedelta(days=8) + timedelta(minutes=30)).isoformat(), 'episode_number': '1',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 2, 'series_title': '続編作品', 'genres': anime_genres,
+                'program_title': '続編作品 #6 ［終］', 'id': 203, 'channel_id': 'gr021',
+                'start_time': (now - timedelta(days=8, hours=1)).isoformat(),
+                'end_time': (now - timedelta(days=8)).isoformat(), 'episode_number': '6',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 3, 'series_title': '新シーズン作品', 'genres': anime_genres,
+                'program_title': '新シーズン作品 #12 [完]', 'id': 301, 'channel_id': 'gr031',
+                'start_time': (now - timedelta(days=40, hours=1)).isoformat(),
+                'end_time': (now - timedelta(days=40)).isoformat(), 'episode_number': '12',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 3, 'series_title': '新シーズン作品', 'genres': anime_genres,
+                'program_title': '新シーズン作品 #1', 'id': 302, 'channel_id': 'gr031',
+                'start_time': (now - timedelta(days=8)).isoformat(),
+                'end_time': (now - timedelta(days=8) + timedelta(minutes=30)).isoformat(), 'episode_number': '1',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 3, 'series_title': '新シーズン作品', 'genres': anime_genres,
+                'program_title': '新シーズン作品 #2', 'id': 303, 'channel_id': 'gr031',
+                'start_time': (now - timedelta(days=1)).isoformat(),
+                'end_time': (now - timedelta(days=1) + timedelta(minutes=30)).isoformat(), 'episode_number': '2',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 4, 'series_title': '通算続編作品', 'genres': anime_genres,
+                'program_title': '通算続編作品 #12 [完]', 'id': 401, 'channel_id': 'gr041',
+                'start_time': (now - timedelta(days=40, hours=1)).isoformat(),
+                'end_time': (now - timedelta(days=40)).isoformat(), 'episode_number': '12',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 4, 'series_title': '通算続編作品', 'genres': anime_genres,
+                'program_title': '通算続編作品 #13 [新]', 'id': 402, 'channel_id': 'gr041',
+                'start_time': (now - timedelta(days=1)).isoformat(),
+                'end_time': (now - timedelta(days=1) + timedelta(minutes=30)).isoformat(), 'episode_number': '13',
+                'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+        ]
+        connection = AsyncMock()
+        connection.execute_query.side_effect = [(len(recorded_rows), recorded_rows), (0, [])]
+        with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
+            result = await OnAirSeriesListAPI()
+
+        self.assertEqual([series.id for series in result.series_list], [3, 4])
+
+    async def test_on_air_uses_earliest_broadcast_of_latest_episode(self) -> None:
+        """過去話を多く録画した局ではなく、最新話を最初に放送した局の枠を表示する。"""
+
+        now = datetime.now(JST)
+        anime_genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
+        bs11_first = (now - timedelta(days=15)).replace(hour=23, minute=0, second=0, microsecond=0)
+        bs11_second = (now - timedelta(days=8)).replace(hour=23, minute=0, second=0, microsecond=0)
+        mx1_latest = (now - timedelta(days=1)).replace(hour=0, minute=30, second=0, microsecond=0)
+        mx1_first = (now - timedelta(days=15)).replace(hour=0, minute=30, second=0, microsecond=0)
+        mx1_second = (now - timedelta(days=8)).replace(hour=0, minute=30, second=0, microsecond=0)
+        bs11_latest = (now - timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0)
+        recorded_rows = [
+            {
+                'series_id': 1, 'series_title': 'MX1最新話', 'genres': anime_genres,
+                'program_title': 'MX1最新話 #1', 'id': 101, 'channel_id': 'bs11',
+                'start_time': bs11_first.isoformat(), 'end_time': (bs11_first + timedelta(minutes=30)).isoformat(),
+                'episode_number': '1', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 1, 'series_title': 'MX1最新話', 'genres': anime_genres,
+                'program_title': 'MX1最新話 #2', 'id': 102, 'channel_id': 'bs11',
+                'start_time': bs11_second.isoformat(), 'end_time': (bs11_second + timedelta(minutes=30)).isoformat(),
+                'episode_number': '2', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 1, 'series_title': 'MX1最新話', 'genres': anime_genres,
+                'program_title': 'MX1最新話 #3', 'id': 103, 'channel_id': 'mx1',
+                'start_time': mx1_latest.isoformat(), 'end_time': (mx1_latest + timedelta(minutes=30)).isoformat(),
+                'episode_number': '3', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 1, 'series_title': 'MX1最新話', 'genres': anime_genres,
+                'program_title': 'MX1最新話 #3', 'id': 104, 'channel_id': 'bs11',
+                'start_time': bs11_latest.isoformat(), 'end_time': (bs11_latest + timedelta(minutes=30)).isoformat(),
+                'episode_number': '3', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 2, 'series_title': 'BS11最新話', 'genres': anime_genres,
+                'program_title': 'BS11最新話 #1', 'id': 201, 'channel_id': 'mx1',
+                'start_time': mx1_first.isoformat(), 'end_time': (mx1_first + timedelta(minutes=30)).isoformat(),
+                'episode_number': '1', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 2, 'series_title': 'BS11最新話', 'genres': anime_genres,
+                'program_title': 'BS11最新話 #2', 'id': 202, 'channel_id': 'mx1',
+                'start_time': mx1_second.isoformat(), 'end_time': (mx1_second + timedelta(minutes=30)).isoformat(),
+                'episode_number': '2', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 2, 'series_title': 'BS11最新話', 'genres': anime_genres,
+                'program_title': 'BS11最新話 #3', 'id': 203, 'channel_id': 'bs11',
+                'start_time': bs11_latest.isoformat(), 'end_time': (bs11_latest + timedelta(minutes=30)).isoformat(),
+                'episode_number': '3', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+        ]
+        connection = AsyncMock()
+        connection.execute_query.side_effect = [(len(recorded_rows), recorded_rows), (0, [])]
+        with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
+            result = await OnAirSeriesListAPI()
+
+        mx1_series = next(series for series in result.series_list if series.id == 1)
+        self.assertEqual(mx1_series.weekday, mx1_latest.weekday())
+        self.assertEqual(mx1_series.broadcast_time, '00:30')
+        bs11_series = next(series for series in result.series_list if series.id == 2)
+        self.assertEqual(bs11_series.weekday, bs11_latest.weekday())
+        self.assertEqual(bs11_series.broadcast_time, '23:00')
+
+    async def test_on_air_first_episode_uses_epg_only_for_listing_eligibility(self) -> None:
+        """初回だけの作品は未来 EPG で掲載可否を確認し、録画した初回枠を表示する。"""
+
+        now = datetime.now(JST)
+        anime_genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
+        local_sunday = now - timedelta(days=(now.weekday() + 1) % 7 + 7)
+        local_sunday = local_sunday.replace(hour=2, minute=50, second=0, microsecond=0)
+        fallback_sunday = local_sunday + timedelta(days=7)
+        recorded_rows = [
+            {
+                'series_id': 1, 'series_title': '同局次回あり', 'genres': anime_genres,
+                'program_title': '同局次回あり #1', 'id': 101, 'channel_id': 'gr011',
+                'start_time': local_sunday.isoformat(), 'end_time': (local_sunday + timedelta(minutes=30)).isoformat(),
+                'episode_number': '1', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+            {
+                'series_id': 2, 'series_title': '他局のみ', 'genres': anime_genres,
+                'program_title': '他局のみ #1', 'id': 201, 'channel_id': 'gr021',
+                'start_time': fallback_sunday.isoformat(), 'end_time': (fallback_sunday + timedelta(minutes=30)).isoformat(),
+                'episode_number': '1', 'is_partially_recorded': False, 'has_thumbnail': True,
+            },
+        ]
+        local_next_sunday = now + timedelta(days=(6 - now.weekday()) % 7 or 7)
+        local_next_sunday = local_next_sunday.replace(hour=1, minute=30, second=0, microsecond=0)
+        other_monday = now + timedelta(days=(0 - now.weekday()) % 7 or 7)
+        other_monday = other_monday.replace(hour=1, minute=0, second=0, microsecond=0)
+        future_rows = [
+            {
+                'title': '同局次回あり #2', 'description': '', 'genres': anime_genres, 'channel_id': 'gr011',
+                'start_time': local_next_sunday.isoformat(),
+            },
+            {
+                'title': '同局次回あり #2', 'description': '', 'genres': anime_genres, 'channel_id': 'bs211',
+                'start_time': other_monday.isoformat(),
+            },
+            {
+                'title': '他局のみ #2', 'description': '', 'genres': anime_genres, 'channel_id': 'bs221',
+                'start_time': other_monday.isoformat(),
+            },
+        ]
+        connection = AsyncMock()
+        connection.execute_query.side_effect = [(len(recorded_rows), recorded_rows), (len(future_rows), future_rows)]
+        with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
+            result = await OnAirSeriesListAPI()
+
+        next_local = next(series for series in result.series_list if series.id == 1)
+        self.assertEqual(next_local.weekday, 6)
+        self.assertEqual(next_local.broadcast_time, '02:50')
+        fallback_local = next(series for series in result.series_list if series.id == 2)
+        self.assertEqual(fallback_local.weekday, 6)
+        self.assertEqual(fallback_local.broadcast_time, '02:50')
 
 
 if __name__ == '__main__':

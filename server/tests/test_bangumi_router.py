@@ -1,13 +1,15 @@
 import unittest
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
 from app import schemas
 from app.models.User import User
 from app.routers.BangumiRouter import BangumiAccountLogoutAPI, BangumiAuthAPI
+from app.routers.BangumiRouter import router as bangumi_router
+from app.routers.UsersRouter import GetCurrentUser
 
 
 class FakeBangumiResponse:
@@ -130,6 +132,70 @@ class FakeUser:
 
 class BangumiRouterTest(unittest.IsolatedAsyncioTestCase):
     """Bangumi 個人アクセストークンの検証、保存、連携解除を検証する。"""
+
+    async def test_progress_http_revalidates_before_completion_deduplication(self) -> None:
+        """HTTP 入口で誤照合を直してから、正しい章の完了記録を確認・更新する。"""
+
+        application = FastAPI()
+        application.include_router(bangumi_router)
+        user = MagicMock()
+        user.id = 1
+        user.bangumi_user_id = 123
+        user.bangumi_access_token = 'encrypted-token'
+        user.decryptBangumiAccessToken.return_value = 'test-token'
+        application.dependency_overrides[GetCurrentUser] = lambda: user
+        recording = MagicMock()
+        recording.id = 2781
+        recording.series_id = 90
+        recording.episode_number = '13'
+        recording.bangumi_subject_id = 509355
+        recording.bangumi_episode_id = 1559556
+        recording.recorded_video.duration = 1800.0
+        recording.recorded_video.cm_sections = []
+        recording.recorded_video.status = 'Recorded'
+        query = MagicMock()
+        query.prefetch_related = AsyncMock(return_value=recording)
+        completed_query = MagicMock()
+        completed_query.exists = AsyncMock(return_value=False)
+
+        async def Resolve(*args: Any) -> None:
+            recording.bangumi_subject_id = 616808
+            recording.bangumi_episode_id = 1746074
+
+        with (
+            patch('app.routers.BangumiRouter.RecordedProgram.get_or_none', return_value=query),
+            patch('app.routers.BangumiRouter.Series.get_or_none', AsyncMock(return_value=MagicMock())),
+            patch('app.routers.BangumiRouter.BangumiClient.resolveRecordedEpisode', AsyncMock(side_effect=Resolve)),
+            patch('app.routers.BangumiRouter.BangumiEpisodeCompletion.filter', return_value=completed_query) as completed_filter,
+            patch('app.routers.BangumiRouter.UpdateBangumiEpisodeCollection', AsyncMock()) as update_collection,
+            patch('app.routers.BangumiRouter.BangumiEpisodeCompletion.get_or_create', AsyncMock()) as completion,
+        ):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url='http://test') as client:
+                response = await client.post('/api/bangumi/videos/2781/progress', json={
+                    'playback_position': 1700.0, 'duration': 1800.0,
+                })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'status': 'Completed'})
+        completed_filter.assert_called_once_with(user_id=1, bangumi_episode_id=1746074)
+        update_collection.assert_awaited_once_with('test-token', 616808, 1746074)
+        self.assertEqual(completion.await_args.kwargs['bangumi_episode_id'], 1746074)
+
+        # 外部検証が失敗したときは、古い完了記録を成功扱いせず再試行できる Pending を返す。
+        with (
+            patch('app.routers.BangumiRouter.RecordedProgram.get_or_none', return_value=query),
+            patch('app.routers.BangumiRouter.Series.get_or_none', AsyncMock(return_value=MagicMock())),
+            patch('app.routers.BangumiRouter.BangumiClient.resolveRecordedEpisode', AsyncMock(side_effect=httpx.NetworkError('network error'))),
+            patch('app.routers.BangumiRouter.BangumiEpisodeCompletion.filter') as completed_filter,
+            patch('app.routers.BangumiRouter.UpdateBangumiEpisodeCollection', AsyncMock()) as update_collection,
+        ):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url='http://test') as client:
+                response = await client.post('/api/bangumi/videos/2781/progress', json={
+                    'playback_position': 1700.0, 'duration': 1800.0,
+                })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'status': 'Pending'})
+        completed_filter.assert_not_called()
+        update_collection.assert_not_awaited()
 
     async def test_access_token_is_encrypted_and_not_exposed_by_user_schema(self) -> None:
         """保存用トークンは暗号化され、User API のレスポンス構造には含まれない。"""

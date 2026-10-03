@@ -7,6 +7,7 @@ from app import logging, schemas
 from app.constants import API_REQUEST_HEADERS, HTTPX_CLIENT
 from app.models.BangumiEpisodeCompletion import BangumiEpisodeCompletion
 from app.models.RecordedProgram import RecordedProgram
+from app.models.Series import Series
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentUser
 from app.utils.BangumiClient import BangumiClient
@@ -241,6 +242,17 @@ async def BangumiPlaybackProgressAPI(
     if BangumiClient.parseEpisodeNumber(recorded_program.episode_number) is None:
         return schemas.BangumiPlaybackProgressResponse(status='NotEligible')
 
+    # 保存済み ID を先に再検証し、旧章の完了記録で正しい章の更新が抑止されないようにする。
+    ## タイトル検索やコレクション全件同期はせず、既知の主条目と続編関係だけを参照する。
+    access_token = current_user.decryptBangumiAccessToken()
+    series = await Series.get_or_none(id=recorded_program.series_id) if recorded_program.series_id is not None else None
+    if series is not None:
+        try:
+            await BangumiClient.resolveRecordedEpisode(recorded_program, series, access_token)
+        except (httpx.HTTPError, ValueError) as ex:
+            logging.warning('[BangumiRouter][BangumiPlaybackProgressAPI] Episode validation failed.', exc_info=ex)
+            return schemas.BangumiPlaybackProgressResponse(status='Pending')
+
     # 過去の同期済み記録があれば、重播や複数タブからの重複更新を避ける
     if recorded_program.bangumi_episode_id is not None:
         is_completed = await BangumiEpisodeCompletion.filter(
@@ -250,7 +262,7 @@ async def BangumiPlaybackProgressAPI(
         if is_completed:
             return schemas.BangumiPlaybackProgressResponse(status='AlreadyCompleted')
 
-    # 条目・話数照合は收藏一覧同期だけが担当し、再生 API から作品ごとの検索を発生させない。
+    # 一意に解決できない章は外部更新せず、次回の進捗送信で再検証する。
     if recorded_program.bangumi_subject_id is None or recorded_program.bangumi_episode_id is None:
         logging.info(
             f'[BangumiRouter][BangumiPlaybackProgressAPI] Bangumi episode is not mapped. [video_id: {video_id}]',
@@ -258,7 +270,6 @@ async def BangumiPlaybackProgressAPI(
         return schemas.BangumiPlaybackProgressResponse(status='Pending')
 
     # 外部更新に成功した後で完了記録を作り、失敗を成功として扱わない
-    access_token = current_user.decryptBangumiAccessToken()
     await UpdateBangumiEpisodeCollection(
         access_token,
         recorded_program.bangumi_subject_id,

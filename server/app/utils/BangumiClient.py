@@ -380,36 +380,13 @@ class BangumiClient:
             matched_series_ids.add(canonical_series.id)
 
             recorded_programs = await RecordedProgram.filter(series_id=canonical_series.id).all()
-            needs_episode_mapping = any(
-                cls.parseEpisodeNumber(recorded_program.episode_number) is not None and (
-                    recorded_program.bangumi_subject_id != subject_id or
-                    recorded_program.bangumi_episode_id is None
-                )
-                for recorded_program in recorded_programs
-            )
-            if needs_episode_mapping and subject_id not in episodes_by_subject_id:
+            # 保存済み ID も再検証し、旧 sort + 1 規則の誤照合を次の同期で収束させる。
+            if recorded_programs and subject_id not in episodes_by_subject_id:
                 episodes_by_subject_id[subject_id] = await cls._getEpisodes(subject_id, access_token)
-            episodes = episodes_by_subject_id.get(subject_id, [])
 
-            # Series 全体が同じ作品と確定したため、特別編や複数話録画にも subject ID までは保存する。
-            ## 自然話数が一意な録画だけ、一覧取得時に確定した作品内の episode ID へ追加で結び付ける。
+            # Series の主条目を上書きせず、録画ごとに実際の放送期の条目と章を保存する。
             for recorded_program in recorded_programs:
-                update_fields: list[str] = []
-                subject_changed = recorded_program.bangumi_subject_id != subject_id
-                if subject_changed:
-                    recorded_program.bangumi_subject_id = subject_id
-                    update_fields.append('bangumi_subject_id')
-
-                episode_number = cls.parseEpisodeNumber(recorded_program.episode_number)
-                if episode_number is not None and (subject_changed or recorded_program.bangumi_episode_id is None):
-                    episode = cls._findEpisode(episodes, episode_number)
-                    resolved_episode_id = int(episode['id']) if episode is not None else None
-                    if recorded_program.bangumi_episode_id != resolved_episode_id:
-                        recorded_program.bangumi_episode_id = resolved_episode_id
-                        update_fields.append('bangumi_episode_id')
-
-                if update_fields:
-                    await recorded_program.save(update_fields=update_fields)
+                await cls.resolveRecordedEpisode(recorded_program, canonical_series, access_token, episodes_by_subject_id)
         return len(matched_series_ids)
 
 
@@ -480,17 +457,115 @@ class BangumiClient:
             episode_number (int): EPG から抽出した話数。
 
         Returns:
-            dict[str, Any] | None: ep または通し番号 sort + 1 が一致する通常エピソード。
+            dict[str, Any] | None: 通算 sort を優先し、なければ ep が一意に一致する通常エピソード。
         """
 
-        # 分割クールでは ep が 1 に戻る一方、sort が前クールから続く場合がある
-        matched_episodes = [
-            episode for episode in episodes
-            if int(episode.get('type', -1)) == 0 and (
-                float(episode.get('ep', -1)) == episode_number or
-                float(episode.get('sort', -2)) + 1 == episode_number
-            )
-        ]
+        # sort は 1 始まりの通算話数であり、配列インデックスではない。
+        regular_episodes = [episode for episode in episodes if int(episode.get('type', -1)) == 0]
+        matched_episodes = [episode for episode in regular_episodes if float(episode.get('sort') or -1) == episode_number]
+        if not matched_episodes:
+            matched_episodes = [episode for episode in regular_episodes if float(episode.get('ep') or -1) == episode_number]
         if len(matched_episodes) != 1:
             return None
         return matched_episodes[0]
+
+
+    @classmethod
+    async def resolveRecordedEpisode(
+        cls,
+        recorded_program: RecordedProgram,
+        series: Series,
+        access_token: str,
+        episodes_by_subject_id: dict[int, list[dict[str, Any]]] | None = None,
+    ) -> None:
+        """
+        主条目と明示的な続編から録画の正しい章を解決し、既存の誤照合も更新する。
+
+        Args:
+            recorded_program (RecordedProgram): 再検証する録画。
+            series (Series): ローカル Series の主条目。
+            access_token (str): 連携ユーザーのトークン。
+            episodes_by_subject_id (dict | None): 一括同期中だけ共有する章キャッシュ。
+
+        Returns:
+            None: 録画単位の照合結果を保存する。外部視聴状態は更新しない。
+        """
+
+        subject_id = series.bangumi_subject_id
+        if subject_id is None:
+            return
+        cache = episodes_by_subject_id if episodes_by_subject_id is not None else {}
+        episode_number = cls.parseEpisodeNumber(recorded_program.episode_number)
+        resolved_subject_id = subject_id
+        resolved_episode_id: int | None = None
+        if episode_number is not None:
+            if subject_id not in cache:
+                cache[subject_id] = await cls._getEpisodes(subject_id, access_token)
+            episode = cls._findEpisode(cache[subject_id], episode_number)
+            if episode is not None:
+                resolved_episode_id = int(episode['id'])
+            elif not any(
+                int(candidate.get('type', -1)) == 0 and (
+                    float(candidate.get('sort') or -1) == episode_number
+                    or float(candidate.get('ep') or -1) == episode_number
+                )
+                for candidate in cache[subject_id]
+            ):
+                # 続編の局所話数 ep=1 は主条目の第 1 話とは異なるため、続編では sort だけを比較する。
+                matches: list[tuple[int, int]] = []
+                pending = [subject_id]
+                visited = {subject_id}
+                season_suffix_pattern = r'\s*(?:第\s*\d+\s*期|season\s*\d+)\s*$'
+                main_name = re.sub(
+                    season_suffix_pattern, '', series.bangumi_subject_name or series.title, flags=re.IGNORECASE,
+                )
+                async with HTTPX_CLIENT() as httpx_client:
+                    # EPG のジャンルだけではアニメ・特撮の区別ができないため、主条目の種別を正とする。
+                    subject_response = await httpx_client.get(
+                        url = f'{cls.API_BASE_URL}/subjects/{subject_id}',
+                        headers = {**API_REQUEST_HEADERS, 'Authorization': f'Bearer {access_token}'},
+                    )
+                    subject_response.raise_for_status()
+                    subject_type = int(subject_response.json()['type'])
+                    while pending:
+                        parent_id = pending.pop(0)
+                        response = await httpx_client.get(
+                            url = f'{cls.API_BASE_URL}/subjects/{parent_id}/subjects',
+                            headers = {**API_REQUEST_HEADERS, 'Authorization': f'Bearer {access_token}'},
+                        )
+                        response.raise_for_status()
+                        relations = cast(list[dict[str, Any]], response.json())
+                        for relation in relations:
+                            # 明示的な続編・同種別・期番号を除いた同名作品だけを辿る。劇場版等は含めない。
+                            sequel_name = str(relation.get('name', ''))
+                            base_name = re.sub(
+                                season_suffix_pattern, '', sequel_name, flags=re.IGNORECASE,
+                            )
+                            if (
+                                relation.get('relation') != '续集'
+                                or int(relation.get('type', -1)) != subject_type
+                                or cls._normalizeSubjectTitle(base_name) != cls._normalizeSubjectTitle(main_name)
+                            ):
+                                continue
+                            sequel_id = int(relation['id'])
+                            if sequel_id in visited:
+                                continue
+                            # 外部の循環・異常に大きい関係グラフでは、部分探索で一意と決めず未照合にする。
+                            if len(visited) >= 16:
+                                raise ValueError('Bangumi sequel graph exceeds the mapping limit')
+                            visited.add(sequel_id)
+                            pending.append(sequel_id)
+                            if sequel_id not in cache:
+                                cache[sequel_id] = await cls._getEpisodes(sequel_id, access_token)
+                            matches.extend(
+                                (sequel_id, int(candidate['id'])) for candidate in cache[sequel_id]
+                                if int(candidate.get('type', -1)) == 0 and float(candidate.get('sort') or -1) == episode_number
+                            )
+                if len(matches) == 1:
+                    resolved_subject_id, resolved_episode_id = matches[0]
+
+        # subject と episode は組として保存し、Series 主条目への一括上書きを行わない。
+        if (recorded_program.bangumi_subject_id, recorded_program.bangumi_episode_id) != (resolved_subject_id, resolved_episode_id):
+            recorded_program.bangumi_subject_id = resolved_subject_id
+            recorded_program.bangumi_episode_id = resolved_episode_id
+            await recorded_program.save(update_fields=['bangumi_subject_id', 'bangumi_episode_id'])

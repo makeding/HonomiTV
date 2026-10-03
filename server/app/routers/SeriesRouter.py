@@ -1,7 +1,6 @@
 
 import json
 import re
-from collections import Counter
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
@@ -35,7 +34,10 @@ NON_OFFICIAL_WEBSITE_HOSTS = {
     'x.com',
     'youtube.com',
 }
-REPEAT_BROADCAST_TITLE_PATTERN = re.compile(r'(?:\[再\]|【再】|再放送)')
+REPEAT_BROADCAST_TITLE_PATTERN = re.compile(r'(?:\[再\]|［再］|【再】|再放送)')
+# EPG に明示された最終回だけを On Air から外す根拠にする。作品名や副題に含まれる
+# 「終」を誤って拾わないよう、放送マークとして使われる括弧表記に限定する。
+FINAL_BROADCAST_TITLE_PATTERN = re.compile(r'(?:\[|［|【)\s*(?:完|終)\s*(?:\]|］|】)')
 ON_AIR_SERIES_GENRES = {'アニメ・特撮', 'ドラマ', 'バラエティ', '音楽'}
 
 
@@ -64,6 +66,23 @@ def ExtractIntegerEpisodeNumbers(episode_number: str) -> set[int]:
         if part.isdigit():
             episode_numbers.add(int(part))
     return episode_numbers
+
+
+def GetOnAirFinalExpiry(final_broadcast_at: datetime) -> datetime:
+    """
+    最終回が On Air へ残る期限を JST で決定する。
+
+    Args:
+        final_broadcast_at (datetime): 最終回の放送終了時刻。
+
+    Returns:
+        datetime: 放送終了から 7 日後と翌月 1 日 00:00 の早い方。
+    """
+
+    next_month_year = final_broadcast_at.year + (1 if final_broadcast_at.month == 12 else 0)
+    next_month = 1 if final_broadcast_at.month == 12 else final_broadcast_at.month + 1
+    next_month_start = datetime(next_month_year, next_month, 1, tzinfo=JST)
+    return min(final_broadcast_at + timedelta(days=7), next_month_start)
 
 
 def ExtractOfficialWebsiteURL(sources: list[str]) -> str | None:
@@ -135,7 +154,7 @@ async def SeriesSearchAPI(
 )
 async def OnAirSeriesListAPI():
     """
-    最近の非再放送録画から、各 Series の通常放送曜日と時刻を推定する。
+    最近の非再放送録画から、各 Series の最新話が最初に放送された曜日と時刻を取得する。
 
     Returns:
         schemas.OnAirSeriesList: 直近 21 日以内に通常放送がある Series の一覧。
@@ -143,13 +162,13 @@ async def OnAirSeriesListAPI():
 
     now = datetime.now(JST)
 
-    # 各 Series の直近 12 件を Python 側で集計できる最小限の列だけ取得する。
+    # 各 Series の通常枠と掲載期限を Python 側で集計できる最小限の列だけ取得する。
     ## 一時的な時刻変更や特番 1 件より、繰り返し現れる通常枠を優先する。
     connection = connections.get('default')
     _, rows = await connection.execute_query(
         """
         SELECT rp.series_id, s.title AS series_title, s.genres, rp.title AS program_title,
-               rp.id, rp.channel_id, rp.start_time, rp.episode_number, rp.is_partially_recorded,
+               rp.id, rp.channel_id, rp.start_time, rp.end_time, rp.episode_number, rp.is_partially_recorded,
                rv.thumbnail_info IS NOT NULL AS has_thumbnail
         FROM recorded_programs rp
         INNER JOIN series s ON s.id = rp.series_id
@@ -159,6 +178,7 @@ async def OnAirSeriesListAPI():
         """,
     )
     samples_by_series: dict[int, list[dict[str, Any]]] = {}
+    normal_broadcasts_by_series: dict[int, list[dict[str, Any]]] = {}
     sample_keys_by_series: dict[int, set[str]] = {}
     thumbnail_samples_by_series: dict[int, list[dict[str, Any]]] = {}
     thumbnail_sample_keys_by_series: dict[int, set[str]] = {}
@@ -185,6 +205,10 @@ async def OnAirSeriesListAPI():
         ## 一方、通常の放送曜日・時刻の推定には混ぜず、再放送枠を通常枠と誤認しないようにする。
         if REPEAT_BROADCAST_TITLE_PATTERN.search(str(row['program_title'])) is not None:
             continue
+
+        # 曜日推定は同一話数の別局版も含め、局ごとの連続した放送履歴を見て代表局を決める。
+        # 一方でカード用のサムネイルと話数集計は、従来どおり同じ自然話数を一度だけ扱う。
+        normal_broadcasts_by_series.setdefault(series_id, []).append(row)
 
         samples = samples_by_series.setdefault(series_id, [])
         sample_keys = sample_keys_by_series.setdefault(series_id, set())
@@ -217,14 +241,14 @@ async def OnAirSeriesListAPI():
     # SeriesIndexer と同じ規則で解析し、次回放送が確認できる Series を控える。
     _, future_program_rows = await connection.execute_query(
         """
-        SELECT title, description, genres, start_time
+        SELECT title, description, genres
         FROM programs
         WHERE start_time > ? AND start_time <= ?
         ORDER BY start_time ASC
         """,
         [now.isoformat(), (now + timedelta(days=8)).isoformat()],
     )
-    future_schedule_by_series_title: dict[str, datetime] = {}
+    future_series_titles: set[str] = set()
     for future_program_row in future_program_rows:
         genres = json.loads(str(future_program_row['genres']))
         if {str(genre['major']) for genre in genres}.isdisjoint(ON_AIR_SERIES_GENRES):
@@ -234,10 +258,11 @@ async def OnAirSeriesListAPI():
             genres,
             str(future_program_row['description']),
         )
-        if parsed_title is not None and parsed_title.normalized_title not in future_schedule_by_series_title:
-            future_schedule_by_series_title[parsed_title.normalized_title] = ParseDatetimeStringToJST(
-                str(future_program_row['start_time']),
-            )
+        if (
+            parsed_title is not None
+            and REPEAT_BROADCAST_TITLE_PATTERN.search(str(future_program_row['title'])) is None
+        ):
+            future_series_titles.add(parsed_title.normalized_title)
 
     cutoff = now - timedelta(days=21)
     on_air_series: list[schemas.OnAirSeries] = []
@@ -248,34 +273,91 @@ async def OnAirSeriesListAPI():
         major_genres = {str(genre['major']) for genre in genres}
         if major_genres.isdisjoint(ON_AIR_SERIES_GENRES):
             continue
-        parsed_samples = [(sample, ParseDatetimeStringToJST(str(sample['start_time']))) for sample in samples]
-        latest_broadcast_at = parsed_samples[0][1]
+        parsed_normal_broadcasts = [
+            (sample, ParseDatetimeStringToJST(str(sample['start_time'])))
+            for sample in normal_broadcasts_by_series[series_id]
+        ]
+        chronological_broadcasts = sorted(parsed_normal_broadcasts, key=lambda broadcast: broadcast[1])
+
+        # 話数が第 1 話へ戻る放送は、新しいシーズンの開始として以降だけを現在の周期にする。
+        # 最終話を別局で後から録画した場合は話数が戻らないため、現在の周期を巻き戻さない。
+        current_cycle_start_at: datetime | None = None
+        current_cycle_final_broadcasts: list[tuple[dict[str, Any], datetime, set[int]]] = []
+        for sample, start_time in chronological_broadcasts:
+            episode_numbers = ExtractIntegerEpisodeNumbers(str(sample['episode_number'] or ''))
+            is_final_broadcast = FINAL_BROADCAST_TITLE_PATTERN.search(str(sample['program_title'])) is not None
+            if not is_final_broadcast and current_cycle_final_broadcasts:
+                latest_final_episode_numbers = current_cycle_final_broadcasts[-1][2]
+                # 新シーズンは第 1 話へ戻る場合だけでなく、通算話数を継続する場合もある。最終話より
+                # 大きい話数は新しい周期の開始として、古い最終話の掲載期限を引き継がない。
+                if (
+                    episode_numbers == {1}
+                    or (
+                        latest_final_episode_numbers
+                        and episode_numbers
+                        and max(episode_numbers) > max(latest_final_episode_numbers)
+                    )
+                ):
+                    current_cycle_start_at = start_time
+                    current_cycle_final_broadcasts = []
+            if is_final_broadcast:
+                current_cycle_final_broadcasts.append((sample, start_time, episode_numbers))
+
+        current_cycle_broadcasts = [
+            (sample, start_time)
+            for sample, start_time in parsed_normal_broadcasts
+            if current_cycle_start_at is None or start_time >= current_cycle_start_at
+        ]
+        latest_broadcast_at = max(start_time for _, start_time in current_cycle_broadcasts)
         if latest_broadcast_at < cutoff:
             continue
 
-        # 5 分単位へ丸めて、放送設備由来の数分の揺れを同じ通常枠として数える。
-        schedule_counts = Counter(
-            (start_time.weekday(), start_time.hour, (start_time.minute // 5) * 5)
-            for _, start_time in parsed_samples
-        )
-        if max(schedule_counts.values()) >= 2:
-            weekday, hour, minute = max(
-                schedule_counts,
-                key = lambda schedule: (
-                    schedule_counts[schedule],
-                    max(start_time for _, start_time in parsed_samples if (
-                        start_time.weekday(), start_time.hour, (start_time.minute // 5) * 5
-                    ) == schedule),
-                ),
+        # 同じ最終話を別局で後から録画しても掲載期限を伸ばさない。現在の周期の最終話だけを見て、
+        # 同じ自然話数の最初の終了時刻を採用するため、過去シーズンの最終話にも影響されない。
+        if current_cycle_final_broadcasts:
+            latest_final_broadcast = max(current_cycle_final_broadcasts, key=lambda broadcast: broadcast[1])
+            latest_final_episode_numbers = latest_final_broadcast[2]
+            relevant_final_broadcasts = [
+                (sample, start_time)
+                for sample, start_time, episode_numbers in current_cycle_final_broadcasts
+                if episode_numbers == latest_final_episode_numbers
+            ]
+            final_end_at = min(
+                ParseDatetimeStringToJST(str(sample['end_time']))
+                for sample, _ in relevant_final_broadcasts
             )
-        else:
-            # 録画がまだ 1 件しかない新番組は、未来 EPG に同じ作品の次回話数がある場合だけ掲載する。
-            next_broadcast_at = future_schedule_by_series_title.get(NormalizeSeriesTitle(str(samples[0]['series_title'])))
-            if next_broadcast_at is None:
+            if now >= GetOnAirFinalExpiry(final_end_at):
                 continue
-            weekday = next_broadcast_at.weekday()
-            hour = next_broadcast_at.hour
-            minute = (next_broadcast_at.minute // 5) * 5
+
+        # 現在の最新話だけを通常枠の根拠にする。複数局で同じ話を録画していれば最も早い放送を選び、
+        # 以前の話を多く録画した局や未来 EPG が表示曜日を引き留めないようにする。
+        episode_broadcasts = [
+            (sample, start_time, ExtractIntegerEpisodeNumbers(str(sample['episode_number'] or '')))
+            for sample, start_time in current_cycle_broadcasts
+        ]
+        natural_episode_numbers = set().union(*(episode_numbers for _, _, episode_numbers in episode_broadcasts))
+        if natural_episode_numbers:
+            latest_episode_number = max(natural_episode_numbers)
+            schedule_sources = [
+                (sample, start_time)
+                for sample, start_time, episode_numbers in episode_broadcasts
+                if latest_episode_number in episode_numbers
+            ]
+            schedule_source = min(schedule_sources, key=lambda broadcast: (broadcast[1], int(broadcast[0]['id'])))
+        else:
+            # 話数を持たない音楽・バラエティなどは、単発番組を On Air へ載せないよう二回以上の
+            # 異なる放送実績を要件にし、そのうえで最新録画の実際の時刻を表示する。
+            if len({start_time for _, start_time in current_cycle_broadcasts}) < 2:
+                continue
+            schedule_source = max(current_cycle_broadcasts, key=lambda broadcast: (broadcast[1], int(broadcast[0]['id'])))
+
+        # 初回だけの新番組は、今後の同名番組が EPG に存在する場合だけ掲載する。EPG は掲載可否だけに使い、
+        # 表示する曜日と時刻は必ず録画済みの初回から取る。
+        if natural_episode_numbers == {1} and NormalizeSeriesTitle(str(samples[0]['series_title'])) not in future_series_titles:
+            continue
+        weekday = schedule_source[1].weekday()
+        hour = schedule_source[1].hour
+        minute = (schedule_source[1].minute // 5) * 5
         on_air_series.append(schemas.OnAirSeries(
             id = series_id,
             title = str(samples[0]['series_title']),

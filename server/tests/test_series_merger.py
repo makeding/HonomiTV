@@ -4,18 +4,25 @@ import sqlite3
 import unittest
 from datetime import date, datetime, timedelta
 from typing import cast
+from unittest.mock import AsyncMock, patch
 
+import httpx
+from fastapi import FastAPI
 from tortoise import Tortoise
 from tortoise.backends.base.client import BaseDBAsyncClient
 
+from app import schemas
 from app.constants import DATABASE_CONFIG, JST
 from app.metadata.SeriesIndexer import NormalizeSeriesTitle, SeriesIndexer
 from app.metadata.SeriesMerger import SeriesMerger
 from app.models.Channel import Channel
 from app.models.RecordedProgram import RecordedProgram
+from app.models.RecordedVideo import RecordedVideo
 from app.models.Series import Series
 from app.models.SeriesAlias import SeriesAlias
 from app.models.SeriesBroadcastPeriod import SeriesBroadcastPeriod
+from app.routers.SeriesRouter import router as series_router
+from app.routers.VideosRouter import router as videos_router
 
 
 ANIME_GENRES = [{'major': 'アニメ・特撮', 'middle': '国内アニメ'}]
@@ -23,6 +30,57 @@ ANIME_GENRES = [{'major': 'アニメ・特撮', 'middle': '国内アニメ'}]
 
 class SeriesMergerTest(unittest.IsolatedAsyncioTestCase):
     """Bangumi 条目で確定した重複 Series の完全統合を検証する。"""
+
+    async def test_video_http_readers_expose_persisted_episode_mapping(self) -> None:
+        """実 SQLite と HTTP 入口で、各一覧の Bangumi ID が単体 API と一致する。"""
+
+        series = await Series.create(normalized_title='work', title='作品', description='', genres=ANIME_GENRES)
+        target = await self._createRecordedProgram(series, None, None, '13', 1746074)
+        target.bangumi_subject_id = 616808
+        await target.save(update_fields=['bangumi_subject_id'])
+        anchor = await self._createRecordedProgram(series, None, None, '1', 1559545)
+        now = datetime.now(JST)
+        for recording in (target, anchor):
+            recording.start_time = now
+            recording.end_time = now + timedelta(minutes=30)
+            await recording.save(update_fields=['start_time', 'end_time'])
+            await RecordedVideo.create(
+                recorded_program=recording, status='Recorded', file_path=f'/nonexistent/{recording.id}.ts',
+                file_hash=str(recording.id), file_size=1, file_created_at=now, file_modified_at=now,
+                duration=1800.0, container_format='MPEG-TS', video_codec='H.264', video_codec_profile='High',
+                video_scan_type='Progressive', video_frame_rate=30.0, video_resolution_width=1920,
+                video_resolution_height=1080, primary_audio_codec='AAC-LC', primary_audio_channel='Stereo',
+                primary_audio_sampling_rate=48000,
+            )
+        application = FastAPI()
+        application.include_router(videos_router)
+        application.include_router(series_router)
+        # ファイル再解析だけは別責務なので除外し、DB 読取・SQL 投影・レスポンス検証は実処理を通す。
+        with patch('app.routers.VideosRouter.RecordedScanTask') as scan_task:
+            scan_task.return_value.refreshRecordedFileMetadataIfNeeded = AsyncMock(return_value=False)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url='http://test') as client:
+                detail = await client.get(f'/api/videos/{target.id}')
+                self.assertEqual(detail.status_code, 200, detail.text)
+                expected = detail.json()
+                for path in (
+                    '/api/videos', '/api/videos/search?query=作品', f'/api/videos/series/{series.id}',
+                    f'/api/videos/related?video_id={anchor.id}&include_other_channels=true',
+                ):
+                    with self.subTest(path=path):
+                        response = await client.get(path)
+                        self.assertEqual(response.status_code, 200, response.text)
+                        actual = next(item for item in response.json()['recorded_programs'] if item['id'] == target.id)
+                        # 単体 ORM と生 SQL は UTC/JST の表記が違うため、同じ時刻として全フィールドを比較する。
+                        self.assertEqual(schemas.RecordedProgram.model_validate(actual), schemas.RecordedProgram.model_validate(expected))
+                        self.assertEqual((actual['bangumi_subject_id'], actual['bangumi_episode_id']), (616808, 1746074))
+                on_air = await client.get('/api/series/on-air')
+                self.assertEqual(on_air.status_code, 200, on_air.text)
+                self.assertEqual(on_air.json(), {'series_list': [{
+                    'id': series.id, 'title': '作品', 'thumbnail_recorded_program_ids': [], 'channel_ids': [],
+                    'recorded_episodes_count': 2, 'missing_episodes_count': 11, 'partially_recorded_episodes_count': 0,
+                    'weekday': now.weekday(), 'broadcast_time': f'{now.hour:02d}:{(now.minute // 5) * 5:02d}',
+                    'latest_broadcast_at': now.isoformat(),
+                }]})
 
     async def asyncSetUp(self) -> None:
         """

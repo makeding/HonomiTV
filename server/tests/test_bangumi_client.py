@@ -10,6 +10,18 @@ from app.utils.BangumiClient import BangumiClient
 class BangumiClientTest(unittest.TestCase):
     """Bangumi コレクション候補の一括照合と視聴完了判定を検証する。"""
 
+    def test_episode_sort_is_one_based_and_wins_over_local_number(self) -> None:
+        """第 13 話を第 12 話へずらさず、分割クールの通算番号を優先する。"""
+
+        first_season = [{'id': 1559556, 'ep': 12, 'sort': 12, 'type': 0}]
+        self.assertIsNone(BangumiClient._findEpisode(first_season, 13))
+        second_season = [
+            {'id': 1746074, 'ep': 1, 'sort': 13, 'type': 0},
+            {'id': 2, 'ep': 13, 'sort': 25, 'type': 0},
+        ]
+        self.assertEqual(BangumiClient._findEpisode(second_season, 13), second_season[0])
+        self.assertIsNone(BangumiClient._findEpisode([*first_season, {**first_season[0], 'id': 99}], 12))
+
     def test_only_single_positive_integer_episode_is_accepted(self) -> None:
         """単一の正整数以外の話数は自動同期しない。"""
 
@@ -212,6 +224,55 @@ class BangumiClientTest(unittest.TestCase):
 
 class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
     """Bangumi API を呼び出す前のローカル対象判定を検証する。"""
+
+    async def test_existing_wrong_mapping_converges_to_explicit_sequel(self) -> None:
+        """主 Series を変えず、第 13 話の既存誤照合を続編の通算 13 話へ更新する。"""
+
+        series = MagicMock()
+        series.bangumi_subject_id = 509355
+        series.bangumi_subject_name = '野生のラスボスが現れた！'
+        recording = MagicMock()
+        recording.episode_number = '13'
+        recording.bangumi_subject_id = 509355
+        recording.bangumi_episode_id = 1559556
+        recording.save = AsyncMock()
+        response = MagicMock()
+        response.json.return_value = [
+            {'id': 616808, 'type': 2, 'relation': '续集', 'name': '野生のラスボスが現れた！第2期'},
+            {'id': 123, 'type': 2, 'relation': '续集', 'name': '無関係の作品第2期'},
+        ]
+        empty_response = MagicMock()
+        empty_response.json.return_value = []
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        subject_response = MagicMock()
+        subject_response.json.return_value = {'type': 2}
+        client.get.side_effect = [subject_response, response, empty_response]
+        cache = {
+            509355: [{'id': 1559556, 'ep': 12, 'sort': 12, 'type': 0}],
+            616808: [{'id': 1746074, 'ep': 1, 'sort': 13, 'type': 0}],
+        }
+        with patch('app.utils.BangumiClient.HTTPX_CLIENT', return_value=client):
+            await BangumiClient.resolveRecordedEpisode(recording, series, 'token', cache)
+        self.assertEqual((recording.bangumi_subject_id, recording.bangumi_episode_id), (616808, 1746074))
+        self.assertEqual(series.bangumi_subject_id, 509355)
+        recording.save.assert_awaited_once()
+
+        # 再検証しても保存結果は同じで、同期元の古い ID には戻らない。
+        client.get.side_effect = [subject_response, response, empty_response]
+        with patch('app.utils.BangumiClient.HTTPX_CLIENT', return_value=client):
+            await BangumiClient.resolveRecordedEpisode(recording, series, 'token', cache)
+        recording.save.assert_awaited_once()
+
+        # 同一通算話数の候補が複数あれば、以前の誤照合も含めて未照合に戻す。
+        response.json.return_value.append({
+            'id': 616809, 'type': 2, 'relation': '续集', 'name': '野生のラスボスが現れた！第3期',
+        })
+        cache[616809] = [{'id': 1746099, 'ep': 1, 'sort': 13, 'type': 0}]
+        client.get.side_effect = [subject_response, response, empty_response, empty_response]
+        with patch('app.utils.BangumiClient.HTTPX_CLIENT', return_value=client):
+            await BangumiClient.resolveRecordedEpisode(recording, series, 'token', cache)
+        self.assertIsNone(recording.bangumi_episode_id)
 
     async def test_collection_api_is_not_called_without_eligible_series(self) -> None:
         """照合対象の Series がない環境ではコレクション一覧を取得しない。"""
