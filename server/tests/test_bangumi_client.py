@@ -4,11 +4,35 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app import schemas
+from app.metadata.SeriesIndexer import ParseSeriesTitle
 from app.utils.BangumiClient import BangumiClient
 
 
 class BangumiClientTest(unittest.TestCase):
     """Bangumi コレクション候補の一括照合と視聴完了判定を検証する。"""
+
+    def test_bs11_dotted_chapter_resolves_space_mercenary(self) -> None:
+        """実際の BS11 短縮名と Chapter.1 が Bangumi の作品・第 1 話へ照合できる。"""
+
+        parsed = ParseSeriesTitle(
+            '[新]目覚めたら最強装備と宇宙船持ちだったので一戸建て目指して傭兵として自由に生きた',
+            [schemas.Genre(major='アニメ・特撮', middle='国内アニメ')],
+            'Chapter.1「はじめてのスペースコロニー」',
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        subject = {
+            'id': 536270,
+            'type': 2,
+            'name': '目覚めたら最強装備と宇宙船持ちだったので 、一戸建て目指して傭兵として自由に生きたい',
+            'name_cn': '一觉醒来就有了最强装备跟太空船 决定以自家独栋建筑为目标当佣兵自由过活',
+        }
+        self.assertEqual(BangumiClient.findSubject(parsed.display_title, [subject]), subject)
+        episode_number = BangumiClient.parseEpisodeNumber(parsed.episode_number)
+        self.assertEqual(episode_number, 1)
+        assert episode_number is not None
+        episode = {'id': 1717774, 'type': 0, 'sort': 1, 'ep': 1}
+        self.assertEqual(BangumiClient._findEpisode([episode], episode_number), episode)
 
     def test_episode_sort_is_one_based_and_wins_over_local_number(self) -> None:
         """第 13 話を第 12 話へずらさず、分割クールの通算番号を優先する。"""

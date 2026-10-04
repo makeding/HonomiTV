@@ -82,7 +82,8 @@ EPISODE_PATTERN = re.compile(
     r'#\s*(?P<hash>[0-9]+(?:\.[0-9]+)?(?:\s*[・&／/\-～~]\s*#?\s*[0-9]+(?:\.[0-9]+)?)*)|'
     r'第\s*(?P<japanese>[0-9一二三四五六七八九十百千〇零壱弐参拾貳肆伍陸漆玖]+(?:\s*[・&／/\-～~]\s*#?\s*[0-9一二三四五六七八九十百千〇零壱弐参拾貳肆伍陸漆玖]+)*)'
     r'(?!\s*(?:期|シーズン|クール|部|章))(?:(?:\s*(?:話|回|講|輪))|[^\W\d_\s])?|'
-    r'\b(?:Chapter|CH)\s*(?P<chapter>[0-9]+(?:\.[0-9]+)?)'
+    # BS11 の概要欄では Chapter.1 と表記するため、話数の前の区切りピリオドも許可する。
+    r'\b(?:Chapter|CH)\s*\.?\s*(?P<chapter>[0-9]+(?:\.[0-9]+)?)'
     r')',
     flags=re.IGNORECASE,
 )
@@ -353,7 +354,7 @@ def ParseSeriesTitle(
             # 放送局によっては title を毎回同じ作品名にし、description の独立行先頭へ話数を入れる。
             ## あらすじ本文に現れる数字を話数と誤認しないよう、各行の先頭一致だけを採用する。
             for description_line in description.splitlines():
-                description_line = description_line.strip()
+                description_line = unicodedata.normalize('NFKC', description_line).strip()
                 description_episode_match = EPISODE_PATTERN.match(description_line)
                 if description_episode_match is not None:
                     episode_source = description_line

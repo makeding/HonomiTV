@@ -288,6 +288,23 @@ class SeriesIndexerTest(unittest.TestCase):
         )
         self.assertIsNone(parsed)
 
+    def test_bs11_dotted_chapter_in_description(self) -> None:
+        """BS11 の Chapter.1 から話数と副題を抽出し、短縮された作品名を保持する。"""
+
+        title = '[新]目覚めたら最強装備と宇宙船持ちだったので一戸建て目指して傭兵として自由に生きた'
+        for heading in ('Chapter.1', 'Chapter．１', 'CH.1', 'Chapter 1'):
+            with self.subTest(heading=heading):
+                parsed = ParseSeriesTitle(
+                    title,
+                    ANIME_GENRES,
+                    f'{heading}「はじめてのスペースコロニー」\n◇番組内容\n退屈で苦労の多い日々を送る会社員。',
+                )
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                self.assertEqual(parsed.display_title, title.removeprefix('[新]'))
+                self.assertEqual(parsed.episode_number, '1')
+                self.assertEqual(parsed.subtitle, 'はじめてのスペースコロニー')
+
     def test_empty_description_does_not_interrupt_series_rebuild(self) -> None:
         """空文字の description は先頭行を持たなくても通常のタイトル解析を続行する。"""
 
