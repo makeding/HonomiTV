@@ -268,6 +268,13 @@ async def OnAirSeriesListAPI():
             season_id = GetBroadcastSeasonID(start_time, str(row['episode_number'] or ''))
             broadcasts_by_season.setdefault(season_id, []).append((row, start_time))
 
+        # 最新季度は「現在放送中」の一覧でもある。まだ今季度の録画がない長期番組も、
+        # 前季度の直近放送と明示的な完結情報から判定し、月初だけ消えることを防ぐ。
+        if normal_rows:
+            broadcasts_by_season[current_season_id] = [
+                (row, ParseDatetimeStringToJST(str(row['start_time']))) for row in normal_rows
+            ]
+
         for season_id, broadcasts in broadcasts_by_season.items():
             is_current = season_id == current_season_id
             latest_broadcast_at = max(start_time for _, start_time in broadcasts)
@@ -327,8 +334,12 @@ async def OnAirSeriesListAPI():
             # 同一話数の視聴候補として扱うが、放送枠の推定には再放送を使わない。
             season_rows = [
                 row for row in series_rows
-                if GetBroadcastSeasonID(ParseDatetimeStringToJST(str(row['start_time'])),
-                                        str(row['episode_number'] or '')) == season_id
+                if (
+                    ParseDatetimeStringToJST(str(row['start_time'])) >= cycle_start
+                    if is_current else
+                    GetBroadcastSeasonID(ParseDatetimeStringToJST(str(row['start_time'])),
+                                         str(row['episode_number'] or '')) == season_id
+                )
             ]
             episode_numbers: set[int] = set()
             complete_numbers: set[int] = set()
@@ -368,7 +379,9 @@ async def OnAirSeriesListAPI():
                 broadcast_time = f'{schedule_time.hour:02d}:{(schedule_time.minute // 5) * 5:02d}',
                 latest_broadcast_at = latest_broadcast_at,
             ))
-            dates_by_season.setdefault(season_id, []).extend(start_time for _, start_time in broadcasts)
+            dates_by_season.setdefault(season_id, []).extend(
+                start_time for _, start_time in schedule_broadcasts
+            )
 
     # 最新録画の集合ではなく、掲載された全放送の最初・最後から実際の期間を返す。
     seasons = [
