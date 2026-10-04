@@ -99,6 +99,7 @@ class CMSectionsDetector:
     # ロゴ有無時系列から CM 区間を組み立てる際の設定
     SMOOTH_WINDOW_SEC: ClassVar[float] = 8.0  # ロゴ有無時系列を平滑化する時間窓 (秒)。CM は一定時間ロゴが消え続ける前提
     LOGO_ABSENT_FRACTION: ClassVar[float] = 0.35  # 平滑化後、この割合を下回るとロゴ消失(=CM候補)とみなす
+    MIN_LOGO_ABSENT_DURATION: ClassVar[float] = 9.0  # 9秒を超えてロゴ消失が続いた区間だけを CM 候補とする
     SILENCE_SNAP_TOLERANCE: ClassVar[float] = 4.0  # CM 区間の端を無音位置にスナップする許容範囲 (秒)
     CM_MERGE_GAP: ClassVar[float] = 8.0  # この間隔未満で隣り合う CM 候補は1つにまとめる (秒)
     MIN_CM_DURATION: ClassVar[float] = 30.0  # CM 区間とみなす最短の長さ (秒、本編中の一時的なロゴ消失を誤検出しないため)
@@ -623,7 +624,7 @@ class CMSectionsDetector:
         # ロゴあり割合が一定を下回る (=ロゴが消え続けている) サンプルを CM 候補とする
         is_absent = smoothed < self.LOGO_ABSENT_FRACTION
 
-        # 連続する CM 候補サンプルを1つの区間にまとめる
+        # 連続する CM 候補サンプルを1つの区間にまとめ、長さと録画冒頭かどうかを確認する
         intervals: list[list[float]] = []
         index = 0
         sample_count = len(is_absent)
@@ -632,7 +633,13 @@ class CMSectionsDetector:
                 end_index = index
                 while end_index < sample_count and is_absent[end_index]:
                     end_index += 1
-                intervals.append([index / self.SAMPLE_FPS, (end_index - 1) / self.SAMPLE_FPS])
+                start_time = index / self.SAMPLE_FPS
+                end_time = (end_index - 1) / self.SAMPLE_FPS
+                duration = end_time - start_time
+                # 録画開始時点ですでにロゴが無い区間は判定材料にせず、9秒を超える消失だけを残す。
+                ## これにより冒頭のロゴ非表示や極限背景での短い誤判定が CM 候補にならない。
+                if start_time > 0.0 and duration > self.MIN_LOGO_ABSENT_DURATION:
+                    intervals.append([start_time, end_time])
                 index = end_index
             else:
                 index += 1

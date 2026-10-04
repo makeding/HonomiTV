@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import anyio
+import numpy as np
 
 from app.metadata.CMSectionsDetector import CMSectionsDetector
 
@@ -38,6 +39,29 @@ class CMSectionsDetectorPolicyTest(unittest.TestCase):
 
         self.assertFalse(CMSectionsDetector.shouldAnalyze('MMT/TLV', False, 'Fallback'))
         self.assertTrue(CMSectionsDetector.shouldAnalyze('MMT/TLV', True, 'Fallback'))
+
+
+    def test_logo_absence_candidates_require_more_than_nine_seconds_after_recording_start(self) -> None:
+        """冒頭のロゴ非表示と、9秒以下の一時的な消失は CM 候補にしない。"""
+
+        detector = CMSectionsDetector(
+            file_path=anyio.Path('recorded.ts'),
+            duration_sec=60.0,
+            container_format='MPEG-TS',
+        )
+        # 冒頭12秒はロゴ無し、その後は表示、30秒以降に15秒以上のロゴ消失を置く。
+        ## 0.5秒サンプリングで、冒頭区間を除外しつつ後半の長い消失だけ残ることを確認する。
+        presence = np.concatenate((
+            np.zeros(24, dtype=np.float32),
+            np.ones(36, dtype=np.float32),
+            np.zeros(32, dtype=np.float32),
+        ))
+
+        intervals = detector._CMSectionsDetector__findLogoAbsentIntervals(presence)
+
+        self.assertEqual(len(intervals), 1)
+        self.assertGreater(intervals[0][0], 0.0)
+        self.assertGreater(intervals[0][1] - intervals[0][0], 9.0)
 
 
 class CMSectionsDetectorConcurrencyTest(unittest.IsolatedAsyncioTestCase):
