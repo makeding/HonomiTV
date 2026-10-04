@@ -221,7 +221,7 @@ async def SeriesSearchAPI(
     '/on-air',
     summary = '放送中シリーズ一覧 API',
     response_description = 'ローカル録画から推定した曜日別の放送中シリーズ。',
-    response_model = schemas.OnAirSeriesList,
+    response_model = schemas.OnAirSeriesListResponse,
 )
 async def OnAirSeriesListAPI():
     """
@@ -546,8 +546,8 @@ async def OnAirSeriesListAPI():
             season_id = sid,
             season_label = GetSeasonLabel(sid),
             is_current = sid == current_season_id,
-            start_date = season_start.date(),
-            end_date = season_end.date(),
+            start_date = season_start.date() if isinstance(season_start, datetime) else season_start,
+            end_date = season_end.date() if isinstance(season_end, datetime) else season_end,
             series_list = series_list,
         ))
 
