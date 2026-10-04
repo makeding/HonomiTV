@@ -51,6 +51,8 @@ export interface IOnAirSeason {
     season_id: string;
     season_label: string;
     is_current: boolean;
+    start_date: string;
+    end_date: string;
     series_list: IOnAirSeries[];
 }
 

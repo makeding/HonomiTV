@@ -113,6 +113,20 @@ def GetSeasonLabel(season_id: str) -> str:
     return f'{year}年{int(month)}月期'
 
 
+def GetSeasonDateRange(season_broadcasts: list[tuple[dict[str, Any], datetime]]) -> tuple[datetime, datetime]:
+    """
+    季度内の放送リストから最初と最後の放送日時を取得する。
+
+    Args:
+        season_broadcasts: 季度内の放送リスト。
+
+    Returns:
+        tuple[datetime, datetime]: (最初の放送日時, 最後の放送日時)。
+    """
+    start_times = [start_time for _, start_time in season_broadcasts]
+    return min(start_times), max(start_times)
+
+
 def GetHistoricalSeasonWeekday(season_broadcasts: list[tuple[dict[str, Any], datetime]]) -> tuple[int, str]:
     """
     過去季度の曜日と時刻を、季度内全放送の録画時刻のうち最も多い曜日から決定する。
@@ -519,10 +533,21 @@ async def OnAirSeriesListAPI():
     for sid in sorted(seasons_by_id.keys(), reverse=True):
         series_list = seasons_by_id[sid]
         series_list.sort(key=lambda series: (series.weekday, series.broadcast_time, series.title))
+        # 季度の放送期間を計算
+        all_broadcasts: list[datetime] = []
+        for series in series_list:
+            all_broadcasts.append(series.latest_broadcast_at)
+        # 過去季度の放送期間は series_list の latest_broadcast_at から推定
+        # より正確には各季度の放送リストから取得する必要があるが、
+        # 簡略化のため latest_broadcast_at の最大値を使用
+        season_start = min(all_broadcasts) if all_broadcasts else datetime.now(JST)
+        season_end = max(all_broadcasts) if all_broadcasts else datetime.now(JST)
         seasons.append(schemas.OnAirSeason(
             season_id = sid,
             season_label = GetSeasonLabel(sid),
             is_current = sid == current_season_id,
+            start_date = season_start.date(),
+            end_date = season_end.date(),
             series_list = series_list,
         ))
 

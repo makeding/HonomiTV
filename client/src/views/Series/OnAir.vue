@@ -22,11 +22,22 @@
                                 <v-btn icon="mdi-chevron-right" variant="text" size="small"
                                     :disabled="!nextSeasonId" @click="switchSeason(nextSeasonId)"></v-btn>
                             </div>
+                            <div v-if="currentSeasonDateRange" class="on-air-season-date-range">
+                                {{ currentSeasonDateRange }}
+                            </div>
                         </div>
-                        <v-btn to="/series/" variant="tonal" prepend-icon="mdi-view-grid-outline">すべてのシリーズ</v-btn>
+                        <div class="on-air-header-stats">
+                            <span v-if="currentSeasonStats.total > 0" class="on-air-stat">
+                                {{ currentSeasonStats.total }} 作品
+                            </span>
+                            <span v-if="currentSeasonStats.complete > 0" class="on-air-stat on-air-stat--complete">
+                                {{ currentSeasonStats.complete }} 完録
+                            </span>
+                            <v-btn to="/series/" variant="tonal" prepend-icon="mdi-view-grid-outline">すべてのシリーズ</v-btn>
+                        </div>
                     </div>
 
-                    <div ref="onAirGridElement" class="on-air-week">
+                    <div ref="onAirGridElement" class="on-air-week" :class="{'on-air-week--switching': isSeasonSwitching}">
                         <header v-for="day in weekdays" :key="`header-${day.index}`"
                             class="on-air-day-header"
                             :class="[
@@ -272,6 +283,20 @@ const currentSeasonLabel = computed(() => {
     return currentSeason.value?.season_label ?? '';
 });
 
+const currentSeasonDateRange = computed(() => {
+    if (!currentSeason.value) return '';
+    const start = dayjsOriginal(currentSeason.value.start_date).tz('Asia/Tokyo');
+    const end = dayjsOriginal(currentSeason.value.end_date).tz('Asia/Tokyo');
+    return `${start.format('YYYY/M/D')} ~ ${end.format('YYYY/M/D')}`;
+});
+
+const currentSeasonStats = computed(() => {
+    const list = seriesList.value;
+    const total = list.length;
+    const complete = list.filter(s => s.missing_episodes_count === 0 && s.partially_recorded_episodes_count === 0).length;
+    return { total, complete };
+});
+
 const previousSeasonId = computed(() => {
     const index = seasons.value.findIndex(s => s.season_id === selectedSeasonId.value);
     return index < seasons.value.length - 1 ? seasons.value[index + 1].season_id : '';
@@ -282,11 +307,19 @@ const nextSeasonId = computed(() => {
     return index > 0 ? seasons.value[index - 1].season_id : '';
 });
 
-const switchSeason = (seasonId: string) => {
-    if (!seasonId) return;
-    selectedSeasonId.value = seasonId;
+const isSeasonSwitching = ref(false);
+
+const switchSeason = async (seasonId: string) => {
+    if (!seasonId || seasonId === selectedSeasonId.value) return;
+    isSeasonSwitching.value = true;
     expandedSeriesID.value = null;
     expandedSeriesSummary.value = null;
+    selectedSeasonId.value = seasonId;
+    const query = { ...route.query, season: seasonId };
+    await router.replace({ query });
+    setTimeout(() => {
+        isSeasonSwitching.value = false;
+    }, 300);
 };
 
 const loadOnAirSeries = async () => {
@@ -295,7 +328,9 @@ const loadOnAirSeries = async () => {
     if (result) {
         seasons.value = result.seasons;
         currentSeasonId.value = result.current_season_id;
-        selectedSeasonId.value = result.current_season_id;
+        const urlSeason = route.query.season;
+        const validSeason = typeof urlSeason === 'string' && result.seasons.some(s => s.season_id === urlSeason);
+        selectedSeasonId.value = validSeason ? urlSeason! : result.current_season_id;
     }
     isLoading.value = false;
     await syncExpandedSeriesFromRoute();
@@ -334,6 +369,29 @@ watch(() => route.params.series_id, async () => {
 .on-air-season-label {
     font-size: 13px; font-weight: 500; min-width: 90px; text-align: center;
     opacity: 0.85;
+}
+.on-air-season-date-range {
+    font-size: 11px; margin-top: 2px; opacity: 0.6;
+}
+.on-air-header-stats {
+    display: flex; align-items: center; gap: 12px;
+}
+.on-air-stat {
+    font-size: 12px; font-weight: 500; padding: 2px 8px;
+    background: rgb(var(--v-theme-primary) / 12%); border-radius: 4px;
+    color: rgb(var(--v-theme-primary));
+}
+.on-air-stat--complete {
+    background: rgb(var(--v-theme-success) / 12%);
+    color: rgb(var(--v-theme-success));
+}
+.on-air-week--switching {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.on-air-week {
+    transition: opacity 0.15s ease, transform 0.15s ease;
 }
 .on-air-week {
     display: grid; grid-template-columns: repeat(7, minmax(180px, 1fr)); gap: 10px;

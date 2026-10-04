@@ -420,6 +420,8 @@ class OnAirSeason(BaseModel):
     season_id: str
     season_label: str
     is_current: bool
+    start_date: date
+    end_date: date
     series_list: list[OnAirSeries]
 
 class OnAirSeriesListResponse(BaseModel):
