@@ -13,7 +13,7 @@
                         { name: '放送中', path: '/series/on-air', disabled: true },
                     ]" />
                     <div class="on-air-header">
-                        <div>
+                        <div class="on-air-header-left">
                             <h2>放送中</h2>
                             <div v-if="seasons.length > 1" class="on-air-season-switcher">
                                 <v-btn icon="mdi-chevron-left" variant="text" size="small"
@@ -362,6 +362,9 @@ watch(() => route.params.series_id, async () => {
 .on-air-header {
     display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px;
     h2 { font-size: 24px; }
+}
+.on-air-header-left {
+    display: flex; align-items: center; gap: 16px;
 }
 .on-air-season-switcher {
     display: flex; align-items: center; gap: 4px; margin-top: 8px;

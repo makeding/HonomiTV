@@ -88,6 +88,7 @@ def GetOnAirFinalExpiry(final_broadcast_at: datetime) -> datetime:
 def GetSeasonID(season_broadcasts: list[tuple[dict[str, Any], datetime]]) -> str:
     """
     季度内最早放送の年月から季度 ID を生成する。
+    日本テレビのクール（1/4/7/10月）に合わせて丸める。
 
     Args:
         season_broadcasts: 季度内の放送リスト。
@@ -96,7 +97,8 @@ def GetSeasonID(season_broadcasts: list[tuple[dict[str, Any], datetime]]) -> str
         str: "YYYY-MM" 形式の季度 ID 。
     """
     earliest = min(start_time for _, start_time in season_broadcasts)
-    return f'{earliest.year}-{earliest.month:02d}'
+    quarter_month = ((earliest.month - 1) // 3) * 3 + 1
+    return f'{earliest.year}-{quarter_month:02d}'
 
 
 def GetSeasonLabel(season_id: str) -> str:
