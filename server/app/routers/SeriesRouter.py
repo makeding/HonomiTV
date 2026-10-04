@@ -85,6 +85,63 @@ def GetOnAirFinalExpiry(final_broadcast_at: datetime) -> datetime:
     return min(final_broadcast_at + timedelta(days=7), next_month_start)
 
 
+def GetSeasonID(season_broadcasts: list[tuple[dict[str, Any], datetime]]) -> str:
+    """
+    季度内最早放送の年月から季度 ID を生成する。
+
+    Args:
+        season_broadcasts: 季度内の放送リスト。
+
+    Returns:
+        str: "YYYY-MM" 形式の季度 ID 。
+    """
+    earliest = min(start_time for _, start_time in season_broadcasts)
+    return f'{earliest.year}-{earliest.month:02d}'
+
+
+def GetSeasonLabel(season_id: str) -> str:
+    """
+    季度 ID から表示用ラベルを生成する。
+
+    Args:
+        season_id (str): "YYYY-MM" 形式の季度 ID 。
+
+    Returns:
+        str: "YYYY年M月期" 形式のラベル。
+    """
+    year, month = season_id.split('-')
+    return f'{year}年{int(month)}月期'
+
+
+def GetHistoricalSeasonWeekday(season_broadcasts: list[tuple[dict[str, Any], datetime]]) -> tuple[int, str]:
+    """
+    過去季度の曜日と時刻を、季度内全放送の録画時刻のうち最も多い曜日から決定する。
+
+    Args:
+        season_broadcasts: 季度内の放送リスト。
+
+    Returns:
+        tuple[int, str]: 曜日 (0=月曜) と "HH:MM" 形式の時刻。
+    """
+    weekday_counts: dict[int, int] = {}
+    for _, start_time in season_broadcasts:
+        weekday = start_time.weekday()
+        weekday_counts[weekday] = weekday_counts.get(weekday, 0) + 1
+    max_count = max(weekday_counts.values())
+    candidates = [wd for wd, count in weekday_counts.items() if count == max_count]
+    best_weekday = min(candidates, key=lambda wd: min(
+        start_time for _, start_time in season_broadcasts
+        if start_time.weekday() == wd
+    ))
+    earliest_time = min(
+        start_time for _, start_time in season_broadcasts
+        if start_time.weekday() == best_weekday
+    )
+    hour = earliest_time.hour
+    minute = (earliest_time.minute // 5) * 5
+    return best_weekday, f'{hour:02d}:{minute:02d}'
+
+
 def ExtractOfficialWebsiteURL(sources: list[str]) -> str | None:
     """
     EPG の公式情報欄から作品または番組の公式 Web サイトを抽出する。
@@ -265,7 +322,9 @@ async def OnAirSeriesListAPI():
             future_series_titles.add(parsed_title.normalized_title)
 
     cutoff = now - timedelta(days=21)
-    on_air_series: list[schemas.OnAirSeries] = []
+    seasons_by_id: dict[str, list[schemas.OnAirSeries]] = {}
+    current_season_id: str | None = None
+
     for series_id, samples in samples_by_series.items():
         # 1 件だけでは周期放送か判断できない。また On Air は作品を追うための一覧なので、
         # 単発の映画・紀行・ドキュメンタリーなどは Series に登録されていても対象外にする。
@@ -358,7 +417,13 @@ async def OnAirSeriesListAPI():
         weekday = schedule_source[1].weekday()
         hour = schedule_source[1].hour
         minute = (schedule_source[1].minute // 5) * 5
-        on_air_series.append(schemas.OnAirSeries(
+
+        # 現在の季度を特定
+        season_id = GetSeasonID(current_cycle_broadcasts)
+        current_season_id = season_id
+
+        # OnAirSeries データを作成
+        on_air_series_item = schemas.OnAirSeries(
             id = series_id,
             title = str(samples[0]['series_title']),
             thumbnail_recorded_program_ids = [
@@ -383,9 +448,88 @@ async def OnAirSeriesListAPI():
             weekday = weekday,
             broadcast_time = f'{hour:02d}:{minute:02d}',
             latest_broadcast_at = latest_broadcast_at,
+        )
+        seasons_by_id.setdefault(season_id, []).append(on_air_series_item)
+
+        # 過去季度の処理
+        # 現在の周期以外の周期を検出して処理
+        past_cycles: list[list[tuple[dict[str, Any], datetime]]] = []
+        past_cycle: list[tuple[dict[str, Any], datetime]] = []
+        past_cycle_final_episodes: set[int] = set()
+
+        for sample, start_time in chronological_broadcasts:
+            episode_numbers = ExtractIntegerEpisodeNumbers(str(sample['episode_number'] or ''))
+            is_final_broadcast = FINAL_BROADCAST_TITLE_PATTERN.search(str(sample['program_title'])) is not None
+
+            if past_cycle and not is_final_broadcast and past_cycle_final_episodes:
+                if (episode_numbers == {1} or
+                    (episode_numbers and max(episode_numbers) > max(past_cycle_final_episodes))):
+                    past_cycles.append(past_cycle)
+                    past_cycle = []
+                    past_cycle_final_episodes = set()
+
+            past_cycle.append((sample, start_time))
+            if is_final_broadcast:
+                past_cycle_final_episodes.update(episode_numbers)
+
+        if past_cycle:
+            past_cycles.append(past_cycle)
+
+        # 過去周期を処理（最後の周期は現在の周期なので除外）
+        for past_cycle_broadcasts in past_cycles[:-1]:
+            if len(past_cycle_broadcasts) < 2:
+                continue
+
+            past_season_id = GetSeasonID(past_cycle_broadcasts)
+            if past_season_id == season_id:
+                continue
+
+            past_weekday, past_broadcast_time = GetHistoricalSeasonWeekday(past_cycle_broadcasts)
+
+            past_on_air_series_item = schemas.OnAirSeries(
+                id = series_id,
+                title = str(samples[0]['series_title']),
+                thumbnail_recorded_program_ids = [
+                    int(sample['id']) for sample in thumbnail_samples_by_series.get(series_id, [])
+                ],
+                channel_ids = list(dict.fromkeys(
+                    str(sample['channel_id']) for sample in samples if sample['channel_id'] is not None
+                )),
+                recorded_episodes_count = len(episode_numbers_by_series.get(series_id, set())),
+                missing_episodes_count = (
+                    max(episode_numbers_by_series[series_id])
+                    - min(episode_numbers_by_series[series_id])
+                    + 1
+                    - len(episode_numbers_by_series[series_id])
+                    if episode_numbers_by_series.get(series_id)
+                    else 0
+                ),
+                partially_recorded_episodes_count = len(
+                    partially_recorded_episode_numbers_by_series.get(series_id, set())
+                    - complete_episode_numbers_by_series.get(series_id, set())
+                ),
+                weekday = past_weekday,
+                broadcast_time = past_broadcast_time,
+                latest_broadcast_at = max(start_time for _, start_time in past_cycle_broadcasts),
+            )
+            seasons_by_id.setdefault(past_season_id, []).append(past_on_air_series_item)
+
+    # 季度ごとにソートして返す
+    seasons: list[schemas.OnAirSeason] = []
+    for sid in sorted(seasons_by_id.keys(), reverse=True):
+        series_list = seasons_by_id[sid]
+        series_list.sort(key=lambda series: (series.weekday, series.broadcast_time, series.title))
+        seasons.append(schemas.OnAirSeason(
+            season_id = sid,
+            season_label = GetSeasonLabel(sid),
+            is_current = sid == current_season_id,
+            series_list = series_list,
         ))
-    on_air_series.sort(key=lambda series: (series.weekday, series.broadcast_time, series.title))
-    return schemas.OnAirSeriesList(series_list=on_air_series)
+
+    return schemas.OnAirSeriesListResponse(
+        seasons = seasons,
+        current_season_id = current_season_id or '',
+    )
 
 
 async def GetSeriesSummaries(

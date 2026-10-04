@@ -47,6 +47,18 @@ export interface IOnAirSeriesList {
     series_list: IOnAirSeries[];
 }
 
+export interface IOnAirSeason {
+    season_id: string;
+    season_label: string;
+    is_current: boolean;
+    series_list: IOnAirSeries[];
+}
+
+export interface IOnAirSeriesListResponse {
+    seasons: IOnAirSeason[];
+    current_season_id: string;
+}
+
 /** シリーズ一覧に表示する概要情報 */
 export interface ISeriesSummary {
     id: number;
@@ -77,8 +89,8 @@ export interface ISeriesBroadcastPeriod {
 
 class Series {
 
-    static async fetchOnAirSeriesList(): Promise<IOnAirSeriesList | null> {
-        const response = await APIClient.get<IOnAirSeriesList>('/series/on-air');
+    static async fetchOnAirSeriesList(): Promise<IOnAirSeriesListResponse | null> {
+        const response = await APIClient.get<IOnAirSeriesListResponse>('/series/on-air');
         if (response.type === 'error') {
             APIClient.showGenericError(response, '放送中のシリーズを取得できませんでした。');
             return null;

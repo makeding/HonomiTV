@@ -416,6 +416,16 @@ class OnAirSeries(BaseModel):
 class OnAirSeriesList(BaseModel):
     series_list: list[OnAirSeries]
 
+class OnAirSeason(BaseModel):
+    season_id: str
+    season_label: str
+    is_current: bool
+    series_list: list[OnAirSeries]
+
+class OnAirSeriesListResponse(BaseModel):
+    seasons: list[OnAirSeason]
+    current_season_id: str
+
 class Series(PydanticModel):
     id: int
     title: str

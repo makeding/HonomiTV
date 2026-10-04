@@ -15,6 +15,13 @@
                     <div class="on-air-header">
                         <div>
                             <h2>放送中</h2>
+                            <div v-if="seasons.length > 1" class="on-air-season-switcher">
+                                <v-btn icon="mdi-chevron-left" variant="text" size="small"
+                                    :disabled="!previousSeasonId" @click="switchSeason(previousSeasonId)"></v-btn>
+                                <span class="on-air-season-label">{{ currentSeasonLabel }}</span>
+                                <v-btn icon="mdi-chevron-right" variant="text" size="small"
+                                    :disabled="!nextSeasonId" @click="switchSeason(nextSeasonId)"></v-btn>
+                            </div>
                         </div>
                         <v-btn to="/series/" variant="tonal" prepend-icon="mdi-view-grid-outline">すべてのシリーズ</v-btn>
                     </div>
@@ -120,7 +127,7 @@ import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import SeriesEpisodeList from '@/components/Series/SeriesEpisodeList.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
-import Series, { IOnAirSeries, ISeriesSummary } from '@/services/Series';
+import Series, { IOnAirSeason, IOnAirSeries, ISeriesSummary } from '@/services/Series';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils, { dayjsOriginal } from '@/utils';
 import { isOnAirSeriesInAttentionWindow } from '@/views/Series/OnAirUtils';
@@ -135,7 +142,9 @@ const skeletonWeekdayCounts = [3, 2, 4, 2, 3, 3, 5];
 const skeletonCells = skeletonWeekdayCounts.flatMap((count, weekday) =>
     Array.from({length: count}, (_, row) => ({weekday, row})),
 );
-const seriesList = ref<IOnAirSeries[]>([]);
+const seasons = ref<IOnAirSeason[]>([]);
+const currentSeasonId = ref<string>('');
+const selectedSeasonId = ref<string>('');
 const isLoading = ref(true);
 const route = useRoute();
 const router = useRouter();
@@ -251,10 +260,43 @@ const handleEscapeKey = async (event: KeyboardEvent) => {
     await router.push('/series/on-air');
 };
 
+const currentSeason = computed(() => {
+    return seasons.value.find(s => s.season_id === selectedSeasonId.value);
+});
+
+const seriesList = computed(() => {
+    return currentSeason.value?.series_list ?? [];
+});
+
+const currentSeasonLabel = computed(() => {
+    return currentSeason.value?.season_label ?? '';
+});
+
+const previousSeasonId = computed(() => {
+    const index = seasons.value.findIndex(s => s.season_id === selectedSeasonId.value);
+    return index < seasons.value.length - 1 ? seasons.value[index + 1].season_id : '';
+});
+
+const nextSeasonId = computed(() => {
+    const index = seasons.value.findIndex(s => s.season_id === selectedSeasonId.value);
+    return index > 0 ? seasons.value[index - 1].season_id : '';
+});
+
+const switchSeason = (seasonId: string) => {
+    if (!seasonId) return;
+    selectedSeasonId.value = seasonId;
+    expandedSeriesID.value = null;
+    expandedSeriesSummary.value = null;
+};
+
 const loadOnAirSeries = async () => {
     isLoading.value = true;
     const result = await Series.fetchOnAirSeriesList();
-    if (result) seriesList.value = result.series_list;
+    if (result) {
+        seasons.value = result.seasons;
+        currentSeasonId.value = result.current_season_id;
+        selectedSeasonId.value = result.current_season_id;
+    }
     isLoading.value = false;
     await syncExpandedSeriesFromRoute();
 };
@@ -285,6 +327,13 @@ watch(() => route.params.series_id, async () => {
 .on-air-header {
     display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px;
     h2 { font-size: 24px; }
+}
+.on-air-season-switcher {
+    display: flex; align-items: center; gap: 4px; margin-top: 8px;
+}
+.on-air-season-label {
+    font-size: 13px; font-weight: 500; min-width: 90px; text-align: center;
+    opacity: 0.85;
 }
 .on-air-week {
     display: grid; grid-template-columns: repeat(7, minmax(180px, 1fr)); gap: 10px;
