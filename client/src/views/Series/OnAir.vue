@@ -22,9 +22,6 @@
                                 <v-btn icon="mdi-chevron-right" variant="text" size="small"
                                     :disabled="!nextSeasonId" @click="switchSeason(nextSeasonId)"></v-btn>
                             </div>
-                            <div v-if="currentSeasonDateRange" class="on-air-season-date-range">
-                                {{ currentSeasonDateRange }}
-                            </div>
                         </div>
                         <div class="on-air-header-stats">
                             <span v-if="currentSeasonStats.total > 0" class="on-air-stat">
@@ -238,7 +235,7 @@ const syncExpandedSeriesFromRoute = async () => {
         return;
     }
     if (!seriesList.value.some(series => series.id === parsedSeriesID)) {
-        await router.replace('/series/on-air');
+        await router.replace({path: '/series/on-air', query: {...route.query, season: selectedSeasonId.value}});
         return;
     }
     expandedSeriesID.value = parsedSeriesID;
@@ -253,7 +250,10 @@ const toggleSeries = async (seriesID: number) => {
     const targetTopBeforeUpdate = targetCard?.getBoundingClientRect().top;
     const horizontalScrollBeforeUpdate = onAirGridElement.value?.scrollLeft;
     const isClosing = expandedSeriesID.value === seriesID;
-    await router.push(isClosing ? '/series/on-air' : `/series/on-air/${seriesID}`);
+    await router.push({
+        path: isClosing ? '/series/on-air' : `/series/on-air/${seriesID}`,
+        query: {...route.query, season: selectedSeasonId.value},
+    });
 
     // 上の行で開いていた詳細が消えても、クリックしたカードの画面内位置を維持する。
     if (isClosing || targetCard === null || targetCard === undefined || targetTopBeforeUpdate === undefined) return;
@@ -268,7 +268,7 @@ const toggleSeries = async (seriesID: number) => {
 // Series の詳細を開いているときだけ、Escape キーで放送中一覧へ戻してカードを収める。
 const handleEscapeKey = async (event: KeyboardEvent) => {
     if (event.key !== 'Escape' || expandedSeriesID.value === null) return;
-    await router.push('/series/on-air');
+    await router.push({path: '/series/on-air', query: {...route.query, season: selectedSeasonId.value}});
 };
 
 const currentSeason = computed(() => {
@@ -281,13 +281,6 @@ const seriesList = computed(() => {
 
 const currentSeasonLabel = computed(() => {
     return currentSeason.value?.season_label ?? '';
-});
-
-const currentSeasonDateRange = computed(() => {
-    if (!currentSeason.value) return '';
-    const start = dayjsOriginal(currentSeason.value.start_date).tz('Asia/Tokyo');
-    const end = dayjsOriginal(currentSeason.value.end_date).tz('Asia/Tokyo');
-    return `${start.format('YYYY/M/D')} ~ ${end.format('YYYY/M/D')}`;
 });
 
 const currentSeasonStats = computed(() => {
@@ -316,7 +309,7 @@ const switchSeason = async (seasonId: string) => {
     expandedSeriesSummary.value = null;
     selectedSeasonId.value = seasonId;
     const query = { ...route.query, season: seasonId };
-    await router.replace({ query });
+    await router.replace({path: '/series/on-air', query});
     isSeasonSwitching.value = false;
 };
 
@@ -347,8 +340,12 @@ onBeforeUnmount(() => {
     if (currentTimeUpdateTimer !== null) window.clearInterval(currentTimeUpdateTimer);
 });
 
-watch(() => route.params.series_id, async () => {
+watch(() => [route.params.series_id, route.query.season], async () => {
     if (isLoading.value) return;
+    // 履歴の戻る・進むでも URL の季度を復元してから、その季度内の作品を展開する。
+    const urlSeason = route.query.season;
+    selectedSeasonId.value = typeof urlSeason === 'string' && seasons.value.some(s => s.season_id === urlSeason)
+        ? urlSeason : currentSeasonId.value;
     await syncExpandedSeriesFromRoute();
 });
 
@@ -370,9 +367,6 @@ watch(() => route.params.series_id, async () => {
 .on-air-season-label {
     font-size: 13px; font-weight: 500; min-width: 90px; text-align: center;
     opacity: 0.85;
-}
-.on-air-season-date-range {
-    font-size: 11px; opacity: 0.6; white-space: nowrap;
 }
 .on-air-header-stats {
     display: flex; align-items: center; gap: 12px;

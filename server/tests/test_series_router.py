@@ -126,11 +126,11 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
             result = await GetSeriesSummaries()
 
-        self.assertEqual(next((season.series_list for season in result.seasons if season.is_current), [])[0].thumbnail_recorded_program_ids, [102, 101])
+        self.assertEqual(result.series_list[0].thumbnail_recorded_program_ids, [102, 101])
         sql = connection.execute_query.await_args_list[0].args[0]
         self.assertIn('rv_thumbnail.thumbnail_info IS NOT NULL', sql)
         # 録画件数はサムネイルの有無にかかわらず全件を数える。
-        self.assertEqual(next((season.series_list for season in result.seasons if season.is_current), [])[0].recorded_programs_count, 3)
+        self.assertEqual(result.series_list[0].recorded_programs_count, 3)
 
     def setUp(self) -> None:
         """相対日時の試験が季度境界で別の季度へ移らないよう、現在を固定する。"""
@@ -139,6 +139,35 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         mocked_clock = clock.start()
         mocked_clock.now.return_value = datetime(2026, 8, 20, 12, tzinfo=JST)
         self.addCleanup(clock.stop)
+
+    async def test_on_air_counts_cross_quarter_recordings_like_series_details(self) -> None:
+        """季度内の 3 話だけでなく、作品の全 12 話と別季度の完全録画を集計する。"""
+
+        genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
+        rows = []
+        for number in range(1, 13):
+            start = datetime(2026, 4, 30, 18, tzinfo=JST) + timedelta(days=7 * (number - 1))
+            rows.append({
+                'series_id': 1, 'series_title': '季度をまたぐ作品', 'genres': genres,
+                'program_title': f'季度をまたぐ作品 #{number}', 'id': number, 'channel_id': 'gr011',
+                'start_time': start.isoformat(), 'end_time': (start + timedelta(minutes=30)).isoformat(),
+                'episode_number': str(number), 'is_partially_recorded': False, 'has_thumbnail': True,
+            })
+        # 第 1 話の別季度の部分録画も、既存の完全録画で警告を抑止する。
+        start = datetime(2026, 7, 1, 18, tzinfo=JST)
+        rows.append({**rows[0], 'id': 99, 'program_title': '季度をまたぐ作品 #1 [再]',
+                     'start_time': start.isoformat(), 'end_time': (start + timedelta(minutes=30)).isoformat(),
+                     'is_partially_recorded': True})
+        connection = AsyncMock()
+        connection.execute_query.side_effect = [(len(rows), rows), (0, [])]
+        with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
+            result = await OnAirSeriesListAPI()
+
+        for season in result.seasons:
+            self.assertEqual(season.series_list[0].recorded_episodes_count, 12)
+            self.assertEqual(season.series_list[0].missing_episodes_count, 0)
+            self.assertEqual(season.series_list[0].partially_recorded_episodes_count, 0)
+        self.assertEqual({season.season_id for season in result.seasons}, {'2026-04', '2026-07'})
 
     async def test_on_air_accepts_first_episode_with_next_epg_and_weekly_variety(self) -> None:
         """初回だけ録画済みのアニメと、履歴で週次と分かるバラエティを掲載する。"""

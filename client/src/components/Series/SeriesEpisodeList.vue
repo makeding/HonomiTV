@@ -72,26 +72,26 @@
         <div v-else class="series-episode-list__matrix-scroll"
             :class="{'series-episode-list__matrix-scroll--single-channel-wrapped': isSingleChannelWrapped}">
             <div v-if="isSingleChannelWrapped" class="series-episode-list__wrapped-channel">
-                <div v-if="episode_matrix.rows[0].channel_id" class="series-episode-list__channel-logo">
-                    <div class="ch-sprite" :chid="episode_matrix.rows[0].channel_id">
+                <div v-if="displayEpisodeMatrix.rows[0].channel_id" class="series-episode-list__channel-logo">
+                    <div class="ch-sprite" :chid="displayEpisodeMatrix.rows[0].channel_id">
                         <img loading="lazy" decoding="async"
-                            :src="`${Utils.api_base_url}/channels/${episode_matrix.rows[0].channel_id}/logo`" alt="">
+                            :src="`${Utils.api_base_url}/channels/${displayEpisodeMatrix.rows[0].channel_id}/logo`" alt="">
                     </div>
                 </div>
                 <div class="series-episode-list__channel-name">
-                    <span>{{episode_matrix.rows[0].name}}</span>
-                    <small>{{episode_matrix.rows[0].episode_label}}</small>
+                    <span>{{displayEpisodeMatrix.rows[0].name}}</span>
+                    <small>{{displayEpisodeMatrix.rows[0].episode_label}}</small>
                 </div>
             </div>
             <div class="series-episode-list__matrix"
                 :class="{'series-episode-list__matrix--single-channel-wrapped': isSingleChannelWrapped}"
-                :style="{'--episode-column-count': episode_matrix.slots.length}">
+                :style="{'--episode-column-count': displayEpisodeMatrix.slots.length}">
                 <div class="series-episode-list__corner">放送局</div>
-                <div v-for="slot in episode_matrix.slots" :key="slot.key"
+                <div v-for="slot in displayEpisodeMatrix.slots" :key="slot.key"
                     class="series-episode-list__column-header">
                     {{slot.label}}
                 </div>
-                <template v-for="(channel_row, row_index) in episode_matrix.rows" :key="channel_row.id">
+                <template v-for="(channel_row, row_index) in displayEpisodeMatrix.rows" :key="channel_row.id">
                     <div class="series-episode-list__channel-logo-cell">
                         <div v-if="channel_row.channel_id" class="series-episode-list__channel-logo">
                             <div class="ch-sprite" :chid="channel_row.channel_id">
@@ -107,10 +107,10 @@
                         <small>{{channel_row.episode_label}}</small>
                     </div>
                     <template v-for="(program, slot_index) in channel_row.programs"
-                        :key="episode_matrix.slots[slot_index].key">
+                        :key="displayEpisodeMatrix.slots[slot_index].key">
                         <div v-if="program" class="series-episode-list__episode">
                             <span class="series-episode-list__wrapped-slot-label">
-                                {{episode_matrix.slots[slot_index].label}}
+                                {{displayEpisodeMatrix.slots[slot_index].label}}
                             </span>
                             <a v-ripple class="series-episode-list__episode-link"
                                 :href="router.resolve(getEpisodeWatchRoute(program)).href"
@@ -144,12 +144,12 @@
                         <div v-else class="series-episode-list__episode-placeholder"
                             :class="{'series-episode-list__episode-placeholder--missing':
                                 row_index === 0 &&
-                                missingEpisodeSlotKeys.has(episode_matrix.slots[slot_index].key)}">
+                                missingEpisodeSlotKeys.has(displayEpisodeMatrix.slots[slot_index].key)}">
                             <small class="series-episode-list__wrapped-slot-label">
-                                {{episode_matrix.slots[slot_index].label}}
+                                {{displayEpisodeMatrix.slots[slot_index].label}}
                             </small>
                             <span v-if="row_index === 0 &&
-                                missingEpisodeSlotKeys.has(episode_matrix.slots[slot_index].key)">未録画</span>
+                                missingEpisodeSlotKeys.has(displayEpisodeMatrix.slots[slot_index].key)">未録画</span>
                         </div>
                     </template>
                 </template>
@@ -162,6 +162,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
+import { collapseBatchEpisodeColumns } from '@/components/Series/SeriesEpisodeMatrix';
 import RecordedProgramMenu from '@/components/Videos/RecordedProgramMenu.vue';
 import { IRecordedProgram } from '@/services/Videos';
 import Videos from '@/services/Videos';
@@ -575,10 +576,12 @@ const episode_matrix = computed<{ slots: IEpisodeSlot[]; rows: IChannelRow[] }>(
     return { slots, rows };
 });
 
+const displayEpisodeMatrix = computed(() => collapseBatchEpisodeColumns(episode_matrix.value));
+
 // 1 局だけで 20 件を超える長寿番組は、局間の話数比較をする必要がない。
 // 横一列を延々スクロールさせず、利用可能な横幅へ折り返して一覧性を優先する。
 const isSingleChannelWrapped = computed(() => {
-    return episode_matrix.value.rows.length === 1 && episode_matrix.value.slots.length > 20;
+    return displayEpisodeMatrix.value.rows.length === 1 && displayEpisodeMatrix.value.slots.length > 20;
 });
 
 // 同じ話数の別局録画は数えず、視聴者が「どこまで録れているか」を一目で把握できる表記にする。

@@ -330,8 +330,8 @@ async def OnAirSeriesListAPI():
                 and NormalizeSeriesTitle(str(series_rows[0]['series_title'])) not in future_series_titles):
                 continue
 
-            # 話数・局・サムネイルは選択季度の録画に限定する。完全な別局版・再放送も
-            # 同一話数の視聴候補として扱うが、放送枠の推定には再放送を使わない。
+            # 局・サムネイルは選択季度の録画に限定する。
+            # 話数統計は作品全体から取得するが、放送枠の推定には再放送を使わない。
             season_rows = [
                 row for row in series_rows
                 if (
@@ -346,13 +346,17 @@ async def OnAirSeriesListAPI():
             partial_numbers: set[int] = set()
             thumbnail_ids: list[int] = []
             thumbnail_keys: set[str] = set()
-            for row in season_rows:
+            # 展開先の作品詳細と同じ全録画を数え、季度をまたぐ作品の既存話数を落とさない。
+            # 同じ話の別局版・再放送は集合で重複を除き、完全録画が一つでもあれば警告を抑止する。
+            for row in series_rows:
                 numbers = ExtractIntegerEpisodeNumbers(str(row['episode_number'] or ''))
                 episode_numbers.update(numbers)
                 if bool(row['is_partially_recorded']):
                     partial_numbers.update(numbers)
                 else:
                     complete_numbers.update(numbers)
+            # 放送局と画像は掲載季度の放送実績を維持し、話数統計とは独立して選ぶ。
+            for row in season_rows:
                 start_time = ParseDatetimeStringToJST(str(row['start_time']))
                 thumbnail_key = str(row['episode_number'] or start_time.date().isoformat())
                 # 未生成の画像で重複扱いにせず、生成済みの別局版を選べるようにする。
