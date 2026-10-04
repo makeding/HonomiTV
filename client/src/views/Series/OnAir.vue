@@ -115,7 +115,7 @@
                             </div>
                         </template>
                     </div>
-                    <!-- 週間グリッド内の詳細は自然な高さにし、過去最高との差分だけをページ末尾で補う。 -->
+                    <!-- 詳細を閉じても過去最高の高さを末尾へ残し、スクロール範囲の縮小を防ぐ。 -->
                     <div v-if="seriesList.length > 0"
                         class="on-air-details-footer"
                         :style="detailsFooterHeight !== null
@@ -164,20 +164,18 @@ const expandedSeriesSummary = ref<ISeriesSummary | null>(null);
 const isSummaryLoading = ref(false);
 const onAirGridElement = ref<HTMLElement | null>(null);
 const rememberedDetailsHeight = ref(620);
-const currentDetailsHeight = ref(0);
 
-// 一度開いた最も高い詳細を保持し、別の短い番組では末尾の余白でページ全体の収縮を防ぐ。
+// 一度開いた最も高い詳細を保持し、別の短い番組でも詳細枠の高さを維持する。
 const rememberDetailsHeight = (height: number) => {
-    currentDetailsHeight.value = height;
     rememberedDetailsHeight.value = Math.max(rememberedDetailsHeight.value, height);
 };
 
-// 未展開時は詳細全体、展開時は過去最高との差分だけを週間グリッドの外側へ確保する。
+// 未展開時は末尾、展開時は詳細自身の min-height で同じ高さを確保する。
 const detailsFooterHeight = computed<number | null>(() => {
     if (expandedSeriesID.value === null) {
         return rememberedDetailsHeight.value > 0 ? rememberedDetailsHeight.value : null;
     }
-    return Math.max(0, rememberedDetailsHeight.value - currentDetailsHeight.value);
+    return 0;
 });
 
 // 既存の番組表設定と同じく、28 時間表記では 0:00〜3:59 を前日の 24:00〜27:59 として並べる。
