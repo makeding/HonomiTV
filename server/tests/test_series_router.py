@@ -7,6 +7,7 @@ from app.constants import JST
 from app.routers.SeriesRouter import (
     ON_AIR_SERIES_GENRES,
     ExtractOfficialWebsiteURL,
+    GetBroadcastSeasonID,
     GetOnAirFinalExpiry,
     GetSeriesSummaries,
     OnAirSeriesListAPI,
@@ -46,6 +47,15 @@ class SeriesRouterTest(unittest.TestCase):
 
         self.assertEqual(ON_AIR_SERIES_GENRES, {'アニメ・特撮', 'ドラマ', 'バラエティ', '音楽'})
         self.assertNotIn('ドキュメンタリー・教養', ON_AIR_SERIES_GENRES)
+
+    def test_season_early_premiere_boundary(self) -> None:
+        """初回だけを季度開始前 7 日から次季度へ含め、旧番の最終回は残す。"""
+
+        for year, month in [(2026, 1), (2026, 4), (2026, 7), (2026, 10)]:
+            boundary = datetime(year, month, 1, tzinfo=JST)
+            self.assertEqual(GetBroadcastSeasonID(boundary - timedelta(days=7), '1'), f'{year}-{month:02d}')
+            self.assertNotEqual(GetBroadcastSeasonID(boundary - timedelta(days=7, seconds=1), '1'), f'{year}-{month:02d}')
+            self.assertNotEqual(GetBroadcastSeasonID(boundary - timedelta(days=1), '12'), f'{year}-{month:02d}')
 
     def test_on_air_final_expiry_uses_seven_days_or_next_month(self) -> None:
         """最終回は 7 日後と翌月初日のうち早い時刻で掲載を終える。"""
@@ -92,7 +102,7 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
     async def test_series_summary_uses_only_generated_thumbnails(self) -> None:
         """一覧の重ねサムネイル候補は、サムネイル情報が生成済みの録画だけに絞る。"""
 
-        now = datetime.now(JST)
+        now = datetime(2026, 8, 20, 12, tzinfo=JST)
         row = {
             'id': 1,
             'title': '作品',
@@ -116,16 +126,24 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
             result = await GetSeriesSummaries()
 
-        self.assertEqual(result.series_list[0].thumbnail_recorded_program_ids, [102, 101])
+        self.assertEqual(next((season.series_list for season in result.seasons if season.is_current), [])[0].thumbnail_recorded_program_ids, [102, 101])
         sql = connection.execute_query.await_args_list[0].args[0]
         self.assertIn('rv_thumbnail.thumbnail_info IS NOT NULL', sql)
         # 録画件数はサムネイルの有無にかかわらず全件を数える。
-        self.assertEqual(result.series_list[0].recorded_programs_count, 3)
+        self.assertEqual(next((season.series_list for season in result.seasons if season.is_current), [])[0].recorded_programs_count, 3)
+
+    def setUp(self) -> None:
+        """相対日時の試験が季度境界で別の季度へ移らないよう、現在を固定する。"""
+
+        clock = patch('app.routers.SeriesRouter.datetime', wraps=datetime)
+        mocked_clock = clock.start()
+        mocked_clock.now.return_value = datetime(2026, 8, 20, 12, tzinfo=JST)
+        self.addCleanup(clock.stop)
 
     async def test_on_air_accepts_first_episode_with_next_epg_and_weekly_variety(self) -> None:
         """初回だけ録画済みのアニメと、履歴で週次と分かるバラエティを掲載する。"""
 
-        now = datetime.now(JST)
+        now = datetime(2026, 8, 20, 12, tzinfo=JST)
         anime_genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
         variety_genres = json.dumps([{'major': 'バラエティ', 'middle': 'その他'}], ensure_ascii=False)
         documentary_genres = json.dumps([{'major': 'ドキュメンタリー・教養', 'middle': '歴史・紀行'}], ensure_ascii=False)
@@ -176,22 +194,22 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
             result = await OnAirSeriesListAPI()
 
-        self.assertEqual({series.id for series in result.series_list}, {1, 3})
-        anime = next(series for series in result.series_list if series.id == 1)
+        self.assertEqual({series.id for series in next((season.series_list for season in result.seasons if season.is_current), [])}, {1, 3})
+        anime = next(series for series in next((season.series_list for season in result.seasons if season.is_current), []) if series.id == 1)
         first_broadcast = now - timedelta(days=1)
         self.assertEqual(anime.weekday, first_broadcast.weekday())
         self.assertEqual(anime.broadcast_time, f'{first_broadcast.hour:02d}:{(first_broadcast.minute // 5) * 5:02d}')
         # 完全録画の再放送があれば、同じ話数の部分録画は警告対象にしない。
         self.assertEqual(anime.partially_recorded_episodes_count, 0)
         self.assertEqual(anime.thumbnail_recorded_program_ids, [101])
-        weekly_variety = next(series for series in result.series_list if series.id == 3)
+        weekly_variety = next(series for series in next((season.series_list for season in result.seasons if season.is_current), []) if series.id == 3)
         self.assertEqual(weekly_variety.partially_recorded_episodes_count, 0)
         self.assertEqual(weekly_variety.thumbnail_recorded_program_ids, [303, 301])
 
     async def test_on_air_uses_current_cycle_final_expiry_and_resumes_for_new_cycle(self) -> None:
         """別局の最終回再録画で期限を延ばさず、現シーズンの完結と新シーズンを分ける。"""
 
-        now = datetime.now(JST)
+        now = datetime(2026, 8, 20, 12, tzinfo=JST)
         anime_genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
         recorded_rows = [
             {
@@ -270,12 +288,12 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
             result = await OnAirSeriesListAPI()
 
-        self.assertEqual([series.id for series in result.series_list], [3, 4])
+        self.assertEqual([series.id for series in next((season.series_list for season in result.seasons if season.is_current), [])], [3, 4])
 
     async def test_on_air_uses_earliest_broadcast_of_latest_episode(self) -> None:
         """過去話を多く録画した局ではなく、最新話を最初に放送した局の枠を表示する。"""
 
-        now = datetime.now(JST)
+        now = datetime(2026, 8, 20, 12, tzinfo=JST)
         anime_genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
         bs11_first = (now - timedelta(days=15)).replace(hour=23, minute=0, second=0, microsecond=0)
         bs11_second = (now - timedelta(days=8)).replace(hour=23, minute=0, second=0, microsecond=0)
@@ -332,17 +350,17 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
             result = await OnAirSeriesListAPI()
 
-        mx1_series = next(series for series in result.series_list if series.id == 1)
+        mx1_series = next(series for series in next((season.series_list for season in result.seasons if season.is_current), []) if series.id == 1)
         self.assertEqual(mx1_series.weekday, mx1_latest.weekday())
         self.assertEqual(mx1_series.broadcast_time, '00:30')
-        bs11_series = next(series for series in result.series_list if series.id == 2)
+        bs11_series = next(series for series in next((season.series_list for season in result.seasons if season.is_current), []) if series.id == 2)
         self.assertEqual(bs11_series.weekday, bs11_latest.weekday())
         self.assertEqual(bs11_series.broadcast_time, '23:00')
 
     async def test_on_air_first_episode_uses_epg_only_for_listing_eligibility(self) -> None:
         """初回だけの作品は未来 EPG で掲載可否を確認し、録画した初回枠を表示する。"""
 
-        now = datetime.now(JST)
+        now = datetime(2026, 8, 20, 12, tzinfo=JST)
         anime_genres = json.dumps([{'major': 'アニメ・特撮', 'middle': '国内アニメ'}], ensure_ascii=False)
         local_sunday = now - timedelta(days=(now.weekday() + 1) % 7 + 7)
         local_sunday = local_sunday.replace(hour=2, minute=50, second=0, microsecond=0)
@@ -384,10 +402,10 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
             result = await OnAirSeriesListAPI()
 
-        next_local = next(series for series in result.series_list if series.id == 1)
+        next_local = next(series for series in next((season.series_list for season in result.seasons if season.is_current), []) if series.id == 1)
         self.assertEqual(next_local.weekday, 6)
         self.assertEqual(next_local.broadcast_time, '02:50')
-        fallback_local = next(series for series in result.series_list if series.id == 2)
+        fallback_local = next(series for series in next((season.series_list for season in result.seasons if season.is_current), []) if series.id == 2)
         self.assertEqual(fallback_local.weekday, 6)
         self.assertEqual(fallback_local.broadcast_time, '02:50')
 

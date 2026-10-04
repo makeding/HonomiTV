@@ -37,17 +37,17 @@
                         </div>
                     </div>
 
-                    <div ref="onAirGridElement" class="on-air-week" :class="{'on-air-week--switching': isSeasonSwitching}">
+                    <div ref="onAirGridElement" class="on-air-week">
                         <header v-for="day in weekdays" :key="`header-${day.index}`"
                             class="on-air-day-header"
                             :class="[
                                 `on-air-day-header--${day.index}`,
                                 {'on-air-day-header--attention': hasAttentionSeries(day.index)},
                             ]">
-                                <h3>{{day.label}}</h3>
-                                <span>{{isLoading ? '取得中…' : `${seriesByWeekday[day.index].length}件`}}</span>
+                            <h3>{{day.label}}</h3>
+                            <span>{{isLoading || isSeasonSwitching ? '取得中…' : `${seriesByWeekday[day.index].length}件`}}</span>
                         </header>
-                        <template v-if="isLoading">
+                        <template v-if="isLoading || isSeasonSwitching">
                             <v-skeleton-loader v-for="cell in skeletonCells"
                                 :key="`skeleton-${cell.weekday}-${cell.row}`"
                                 type="image" class="on-air-card-skeleton"
@@ -317,9 +317,7 @@ const switchSeason = async (seasonId: string) => {
     selectedSeasonId.value = seasonId;
     const query = { ...route.query, season: seasonId };
     await router.replace({ query });
-    setTimeout(() => {
-        isSeasonSwitching.value = false;
-    }, 300);
+    isSeasonSwitching.value = false;
 };
 
 const loadOnAirSeries = async () => {
@@ -364,17 +362,17 @@ watch(() => route.params.series_id, async () => {
     h2 { font-size: 24px; }
 }
 .on-air-header-left {
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px;
 }
 .on-air-season-switcher {
-    display: flex; align-items: center; gap: 4px; margin-top: 8px;
+    display: flex; align-items: center; gap: 4px;
 }
 .on-air-season-label {
     font-size: 13px; font-weight: 500; min-width: 90px; text-align: center;
     opacity: 0.85;
 }
 .on-air-season-date-range {
-    font-size: 11px; margin-top: 2px; opacity: 0.6;
+    font-size: 11px; opacity: 0.6; white-space: nowrap;
 }
 .on-air-header-stats {
     display: flex; align-items: center; gap: 12px;
@@ -387,14 +385,6 @@ watch(() => route.params.series_id, async () => {
 .on-air-stat--complete {
     background: rgb(var(--v-theme-success) / 12%);
     color: rgb(var(--v-theme-success));
-}
-.on-air-week--switching {
-    opacity: 0;
-    transform: translateY(8px);
-    transition: opacity 0.15s ease, transform 0.15s ease;
-}
-.on-air-week {
-    transition: opacity 0.15s ease, transform 0.15s ease;
 }
 .on-air-week {
     display: grid; grid-template-columns: repeat(7, minmax(180px, 1fr)); gap: 10px;
