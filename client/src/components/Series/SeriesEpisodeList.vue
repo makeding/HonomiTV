@@ -69,7 +69,7 @@
                     class="series-episode-list__loading-episode" type="image" />
             </template>
         </div>
-        <div v-else class="series-episode-list__matrix-scroll"
+        <div v-if="!is_loading" ref="episodeMatrixScrollElement" class="series-episode-list__matrix-scroll"
             :class="{'series-episode-list__matrix-scroll--single-channel-wrapped': isSingleChannelWrapped}">
             <div v-if="isSingleChannelWrapped" class="series-episode-list__wrapped-channel">
                 <div v-if="displayEpisodeMatrix.rows[0].channel_id" class="series-episode-list__channel-logo">
@@ -159,7 +159,7 @@
 </template>
 <script lang="ts" setup>
 
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { collapseBatchEpisodeColumns } from '@/components/Series/SeriesEpisodeMatrix';
@@ -177,6 +177,7 @@ const props = defineProps<{
     bangumiSubjectNameCn: string | null;
     bangumiSubjectSummary: string | null;
     bangumiSubjectImageUrl: string | null;
+    initialScrollToLatest?: boolean;
 }>();
 const emit = defineEmits<{
     (e: 'heightChanged', height: number): void;
@@ -198,6 +199,8 @@ interface IChannelRow {
 
 const programs = ref<IRecordedProgram[]>([]);
 const seriesEpisodeListElement = ref<HTMLElement | null>(null);
+// 放送中一覧の曜日グリッドには触れず、話数行列の横スクロールだけを操作する。
+const episodeMatrixScrollElement = ref<HTMLElement | null>(null);
 const total_programs = ref(0);
 const is_loading = ref(true);
 const episode_number_collator = new Intl.Collator('ja', { numeric: true });
@@ -581,7 +584,8 @@ const displayEpisodeMatrix = computed(() => collapseBatchEpisodeColumns(episode_
 // 1 局だけで 20 件を超える長寿番組は、局間の話数比較をする必要がない。
 // 横一列を延々スクロールさせず、利用可能な横幅へ折り返して一覧性を優先する。
 const isSingleChannelWrapped = computed(() => {
-    return displayEpisodeMatrix.value.rows.length === 1 && displayEpisodeMatrix.value.slots.length > 20;
+    return !props.initialScrollToLatest &&
+        displayEpisodeMatrix.value.rows.length === 1 && displayEpisodeMatrix.value.slots.length > 20;
 });
 
 // 同じ話数の別局録画は数えず、視聴者が「どこまで録れているか」を一目で把握できる表記にする。
@@ -638,6 +642,12 @@ const fetchPrograms = async () => {
         total_programs.value = first_page.total;
     }
     is_loading.value = false;
+    // 最初のデータ描画後だけ最新話へ移動し、その後の画像更新・削除では手動の位置を維持する。
+    await nextTick();
+    const element = episodeMatrixScrollElement.value;
+    if (props.initialScrollToLatest && element !== null) {
+        element.scrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+    }
 };
 
 // 各話の代表画像を 3 周してから、3 回だけランダムな話の中盤キーフレームを挟んで変化を付ける。
@@ -719,6 +729,7 @@ onBeforeUnmount(() => {
 
     &__header {
         display: flex;
+        flex-wrap: wrap;
         align-items: flex-start;
         gap: 12px;
         margin-bottom: 14px;

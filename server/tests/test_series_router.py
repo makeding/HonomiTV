@@ -160,7 +160,9 @@ class SeriesRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
                      'is_partially_recorded': True})
         connection = AsyncMock()
         connection.execute_query.side_effect = [(len(rows), rows), (0, [])]
-        with patch('app.routers.SeriesRouter.connections.get', return_value=connection):
+        with (patch('app.routers.SeriesRouter.connections.get', return_value=connection),
+              patch('app.routers.SeriesRouter.datetime', wraps=datetime) as clock):
+            clock.now.return_value = datetime(2026, 7, 20, 12, tzinfo=JST)
             result = await OnAirSeriesListAPI()
 
         for season in result.seasons:

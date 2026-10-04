@@ -271,6 +271,7 @@ router.beforeResolve(async (to, from, next) => {
     const no_transition_routes = [
         '/tv/watch/',
         '/videos/watch/',
+        '/series/on-air',
     ];
     if (document.startViewTransition && !no_transition_routes.some((route) => to.path.startsWith(route) && from.path.startsWith(route))) {
         document.startViewTransition(() => {

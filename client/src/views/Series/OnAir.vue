@@ -96,11 +96,13 @@
                                 </button>
                                 <div v-else class="on-air-cell__placeholder"></div>
                             </div>
-                            <div v-if="expandedSeriesInRow(seriesRow)" class="on-air-week__episodes">
+                            <div v-if="expandedSeriesInRow(seriesRow)" class="on-air-week__episodes"
+                                :style="{minHeight: `${rememberedDetailsHeight}px`}">
                                 <div v-if="isSummaryLoading" class="on-air-week__loading">
                                     <v-skeleton-loader type="heading, image, paragraph, paragraph" />
                                 </div>
                                 <SeriesEpisodeList v-else-if="expandedSeriesSummary"
+                                    :key="expandedSeriesSummary.id" initialScrollToLatest
                                     :seriesId="expandedSeriesSummary.id"
                                     :title="expandedSeriesSummary.title"
                                     :description="expandedSeriesSummary.description"
@@ -161,7 +163,7 @@ const expandedSeriesID = ref<number | null>(null);
 const expandedSeriesSummary = ref<ISeriesSummary | null>(null);
 const isSummaryLoading = ref(false);
 const onAirGridElement = ref<HTMLElement | null>(null);
-const rememberedDetailsHeight = ref(0);
+const rememberedDetailsHeight = ref(620);
 const currentDetailsHeight = ref(0);
 
 // 一度開いた最も高い詳細を保持し、別の短い番組では末尾の余白でページ全体の収縮を防ぐ。
@@ -241,7 +243,10 @@ const syncExpandedSeriesFromRoute = async () => {
     expandedSeriesID.value = parsedSeriesID;
     expandedSeriesSummary.value = null;
     isSummaryLoading.value = true;
-    expandedSeriesSummary.value = await Series.fetchSeriesSummary(parsedSeriesID);
+    const summary = await Series.fetchSeriesSummary(parsedSeriesID);
+    // 遅れて返った前の作品を、新しく選択した作品の詳細へ上書きしない。
+    if (expandedSeriesID.value !== parsedSeriesID) return;
+    expandedSeriesSummary.value = summary;
     isSummaryLoading.value = false;
 };
 
@@ -256,7 +261,7 @@ const toggleSeries = async (seriesID: number) => {
     });
 
     // 上の行で開いていた詳細が消えても、クリックしたカードの画面内位置を維持する。
-    if (isClosing || targetCard === null || targetCard === undefined || targetTopBeforeUpdate === undefined) return;
+    if (targetCard === null || targetCard === undefined || targetTopBeforeUpdate === undefined) return;
     await nextTick();
     // モバイルでは展開位置を現在の曜日のまま保ち、詳細追加によって月曜日側へ戻らないようにする。
     if (onAirGridElement.value && horizontalScrollBeforeUpdate !== undefined) {
@@ -383,6 +388,8 @@ watch(() => [route.params.series_id, route.query.season], async () => {
 .on-air-week {
     display: grid; grid-template-columns: repeat(7, minmax(180px, 1fr)); gap: 10px;
     padding-bottom: 8px;
+    // 詳細の挿入時はクリックしたカードで補正するため、ブラウザによる二重の自動補正を防ぐ。
+    overflow-anchor: none;
 }
 .on-air-card-skeleton {
     aspect-ratio: 16 / 10;
@@ -486,13 +493,11 @@ watch(() => [route.params.series_id, route.query.season], async () => {
         grid-template-columns: repeat(7, min(36vw, 180px));
         gap: 8px;
         overflow-x: auto;
-        scroll-snap-type: x proximity;
     }
     .on-air-day-header {
         top: 0;
         min-width: min(36vw, 180px);
         padding: 5px 7px;
-        scroll-snap-align: start;
         h3 { font-size: 16px; }
     }
     .on-air-card {
