@@ -24,13 +24,18 @@
                             </div>
                         </div>
                         <div class="on-air-header-stats">
-                            <span v-if="currentSeasonStats.total > 0" class="on-air-stat">
-                                {{ currentSeasonStats.total }} 作品
+                            <span v-if="currentSeasonStats.total > 0" class="on-air-stat" role="img"
+                                :aria-label="`${currentSeasonStats.total} 作品`" :title="`${currentSeasonStats.total} 作品`">
+                                {{ currentSeasonStats.total }}<span class="on-air-stat-label"> 作品</span>
                             </span>
-                            <span v-if="currentSeasonStats.complete > 0" class="on-air-stat on-air-stat--complete">
-                                {{ currentSeasonStats.complete }} 完録
+                            <span v-if="currentSeasonStats.complete > 0" class="on-air-stat on-air-stat--complete" role="img"
+                                :aria-label="`${currentSeasonStats.complete} 完録`" :title="`${currentSeasonStats.complete} 完録`">
+                                {{ currentSeasonStats.complete }}<span class="on-air-stat-label"> 完録</span>
                             </span>
-                            <v-btn to="/series/" variant="tonal" prepend-icon="mdi-view-grid-outline">すべてのシリーズ</v-btn>
+                            <v-btn class="on-air-all-series" to="/series/" variant="tonal" prepend-icon="mdi-view-grid-outline"
+                                aria-label="すべてのシリーズ" title="すべてのシリーズ">
+                                <span class="on-air-all-series-label">すべてのシリーズ</span>
+                            </v-btn>
                         </div>
                     </div>
 
@@ -358,11 +363,12 @@ watch(() => [route.params.series_id, route.query.season], async () => {
 .on-air-wrapper { position: relative; width: 100%; min-width: 0; }
 .on-air-container { max-width: 1800px; padding: 20px; margin: 0 auto; }
 .on-air-header {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px;
+    // 中間幅では操作群ごとに折り返し、スマートフォンでは下の専用スタイルで情報量を減らす。
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 20px;
     h2 { font-size: 24px; }
 }
 .on-air-header-left {
-    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; max-width: 100%;
 }
 .on-air-season-switcher {
     display: flex; align-items: center; gap: 4px;
@@ -372,9 +378,11 @@ watch(() => [route.params.series_id, route.query.season], async () => {
     opacity: 0.85;
 }
 .on-air-header-stats {
-    display: flex; align-items: center; gap: 12px;
+    // 件数と全シリーズへの導線はそれぞれの幅を保ち、収まらない項目だけ行を変える。
+    display: flex; align-items: center; flex-wrap: wrap; gap: 12px; max-width: 100%;
 }
 .on-air-stat {
+    flex-shrink: 0; white-space: nowrap;
     font-size: 12px; font-weight: 500; padding: 2px 8px;
     background: rgb(var(--v-theme-primary) / 12%); border-radius: 4px;
     color: rgb(var(--v-theme-primary));
@@ -482,6 +490,19 @@ watch(() => [route.params.series_id, route.query.season], async () => {
     &--attention &__time {
         background: rgb(var(--v-theme-primary) / 92%);
         box-shadow: 0 0 0 2px rgb(255 255 255 / 20%), 0 0 12px rgb(var(--v-theme-primary) / 58%);
+    }
+}
+// スマートフォンは数字とアイコンだけを並べ、操作群を一行に保つ。
+// 要素自体は入れ替えないため、画面回転でもボタンのフォーカスを維持できる。
+@media (max-width: 600px), (max-width: 960px) and (orientation: landscape) {
+    .on-air-header { flex-wrap: nowrap; gap: 8px; }
+    .on-air-header-left { min-width: 0; }
+    .on-air-header-stats { flex-wrap: nowrap; flex-shrink: 0; gap: 6px; }
+    .on-air-stat-label, .on-air-all-series-label { display: none; }
+    .on-air-all-series {
+        width: 36px; min-width: 36px; padding: 0;
+        :deep(.v-btn__prepend) { margin: 0; }
+        :deep(.v-btn__content) { display: none; }
     }
 }
 @include smartphone-vertical {

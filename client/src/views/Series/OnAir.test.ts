@@ -33,6 +33,11 @@ describe('放送中一覧の作品開閉と季度 URL', () => {
             'v-btn': {template: '<button><slot /></button>'}, 'v-skeleton-loader': true,
         }}});
         await flushPromises();
+        // スマートフォンで単位を省略しても、統計と全シリーズの導線は名前を保持する。
+        expect(wrapper.get('.on-air-stat').attributes('aria-label')).toBe('1 作品');
+        expect(wrapper.get('.on-air-stat--complete').attributes('aria-label')).toBe('1 完録');
+        expect(wrapper.get('.on-air-all-series').attributes('aria-label')).toBe('すべてのシリーズ');
+        expect(wrapper.get('.on-air-all-series').attributes('to')).toBe('/series/');
         const grid = wrapper.get('.on-air-week').element;
         grid.scrollLeft = 350;
         await wrapper.get('[data-series-id="103"]').trigger('click');
