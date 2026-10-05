@@ -3,6 +3,8 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from app import schemas
 from app.metadata.SeriesIndexer import ParseSeriesTitle
 from app.utils.BangumiClient import BangumiClient
@@ -387,6 +389,7 @@ class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
                 with (
                     patch('app.utils.BangumiClient.Series.all', return_value=series_query),
                     patch('app.utils.BangumiClient.Series.filter', return_value=existence_query),
+                    patch('app.utils.BangumiClient.Series.get_or_none', AsyncMock(return_value=series)),
                     patch.object(BangumiClient, '_getCollectionSubjects', AsyncMock(return_value=subjects)),
                     patch('app.utils.BangumiClient.SeriesMerger.mergeByBangumiSubject', merge),
                     patch('app.utils.BangumiClient.RecordedProgram.filter', return_value=recorded_query),
@@ -397,6 +400,69 @@ class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
                 merge.assert_awaited_once()
                 self.assertEqual(merge.await_args.kwargs['subject_id'], 38652)
                 self.assertEqual(series.title, '帰ってきたウルトラマン 4Kリマスター版')
+
+
+    async def test_episode_failures_do_not_block_later_series_or_recordings(self) -> None:
+        """作品照合を先に完了し、章取得・続編探索の失敗後も他の録画を処理する。"""
+
+        for failure_stage in ('Fetch', 'Resolve'):
+            with self.subTest(failure_stage=failure_stage):
+                series_list = [MagicMock(), MagicMock()]
+                subjects = []
+                for series_id, series in enumerate(series_list, start=1):
+                    series.id = series_id
+                    series.title = f'作品{series_id}'
+                    series.genres = [schemas.Genre(major='アニメ・特撮', middle='国内アニメ')]
+                    series.bangumi_subject_id = series_id + 100
+                    subjects.append({'id': series_id + 100, 'type': 2, 'name': series.title})
+                series_query: asyncio.Future[list[Any]] = asyncio.Future()
+                series_query.set_result(series_list)
+                existence_query = MagicMock()
+                existence_query.exists = AsyncMock(return_value=True)
+                recordings = [MagicMock(), MagicMock(), MagicMock()]
+                for video_id, recording in enumerate(recordings, start=10):
+                    recording.id = video_id
+                    recording.bangumi_subject_id = 900
+                    recording.bangumi_episode_id = 901
+                    recording.save = AsyncMock()
+                recorded_query = MagicMock()
+                recorded_query.all = AsyncMock(side_effect=[recordings[:2], recordings[2:]])
+                user = MagicMock()
+                user.id = 1
+                user.decryptBangumiAccessToken.return_value = 'test-token'
+                merge = AsyncMock(side_effect=series_list)
+                timeout = httpx.ConnectTimeout('Bangumi connection timed out')
+
+                async def Fetch(subject_id: int, access_token: str) -> list[dict[str, Any]]:
+                    # 最初の外部章取得より前に、後続作品も照合済みでなければならない。
+                    self.assertEqual(merge.await_count, 2)
+                    if failure_stage == 'Fetch' and subject_id == 101:
+                        raise timeout
+                    return []
+
+                resolve = AsyncMock(side_effect=[timeout, None, None] if failure_stage == 'Resolve' else None)
+                with (
+                    patch('app.utils.BangumiClient.Series.all', return_value=series_query),
+                    patch('app.utils.BangumiClient.Series.filter', return_value=existence_query),
+                    patch('app.utils.BangumiClient.Series.get_or_none', AsyncMock(side_effect=series_list)),
+                    patch.object(BangumiClient, '_getCollectionSubjects', AsyncMock(return_value=subjects)),
+                    patch('app.utils.BangumiClient.SeriesMerger.mergeByBangumiSubject', merge),
+                    patch('app.utils.BangumiClient.RecordedProgram.filter', return_value=recorded_query),
+                    patch.object(BangumiClient, '_getEpisodes', side_effect=Fetch),
+                    patch.object(BangumiClient, 'resolveRecordedEpisode', resolve),
+                    patch('app.utils.BangumiClient.logging.warning') as warning,
+                ):
+                    self.assertEqual(await BangumiClient.syncUserCollections(user), 2)
+
+                self.assertEqual(resolve.await_count, 3 if failure_stage == 'Resolve' else 1)
+                self.assertIs(resolve.await_args.args[0], recordings[2])
+                warning.assert_called_once()
+                self.assertIn('series_id: 1, subject_id: 101', warning.call_args.args[0])
+                if failure_stage == 'Resolve':
+                    self.assertIn('video_id: 10', warning.call_args.args[0])
+                self.assertIs(warning.call_args.kwargs['exc_info'], timeout)
+                self.assertEqual((recordings[0].bangumi_subject_id, recordings[0].bangumi_episode_id), (900, 901))
+                recordings[0].save.assert_not_awaited()
 
 
     async def test_news_series_does_not_expand_matching_scope(self) -> None:

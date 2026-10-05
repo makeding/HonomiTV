@@ -379,14 +379,41 @@ class BangumiClient:
                         raise
             matched_series_ids.add(canonical_series.id)
 
+        # 作品の照合結果をすべて保存してから章を補完する。
+        ## 既存作品の続編 API が接続タイムアウトしても、新番組の作品照合を妨げない。
+        for series_id in sorted(matched_series_ids):
+            canonical_series = await Series.get_or_none(id=series_id)
+            # 別ユーザーの同期で統合された Series は、次回の同期で主レコードを処理する。
+            if canonical_series is None or canonical_series.bangumi_subject_id is None:
+                continue
+            subject_id = canonical_series.bangumi_subject_id
             recorded_programs = await RecordedProgram.filter(series_id=canonical_series.id).all()
             # 保存済み ID も再検証し、旧 sort + 1 規則の誤照合を次の同期で収束させる。
             if recorded_programs and subject_id not in episodes_by_subject_id:
-                episodes_by_subject_id[subject_id] = await cls._getEpisodes(subject_id, access_token)
+                try:
+                    episodes_by_subject_id[subject_id] = await cls._getEpisodes(subject_id, access_token)
+                except (httpx.HTTPError, ValueError) as ex:
+                    # 外部取得の失敗を空の章一覧として扱わず、保存済みの照合結果を保持して次の作品へ進む。
+                    logging.warning(
+                        f'[BangumiClient][syncUserCollections] Failed to fetch episodes. '
+                        f'[konomitv_user_id: {user.id}, series_id: {series_id}, subject_id: {subject_id}]',
+                        exc_info = ex,
+                    )
+                    continue
 
             # Series の主条目を上書きせず、録画ごとに実際の放送期の条目と章を保存する。
             for recorded_program in recorded_programs:
-                await cls.resolveRecordedEpisode(recorded_program, canonical_series, access_token, episodes_by_subject_id)
+                try:
+                    await cls.resolveRecordedEpisode(recorded_program, canonical_series, access_token, episodes_by_subject_id)
+                except (httpx.HTTPError, ValueError) as ex:
+                    # 一件の続編探索に失敗しても、他の録画と作品の章補完は継続する。
+                    ## 失敗した録画は書き換えず、次回の定期同期で再検証する。
+                    logging.warning(
+                        f'[BangumiClient][syncUserCollections] Failed to resolve recorded episode. '
+                        f'[konomitv_user_id: {user.id}, series_id: {series_id}, subject_id: {subject_id}, '
+                        f'video_id: {recorded_program.id}]',
+                        exc_info = ex,
+                    )
         return len(matched_series_ids)
 
 
