@@ -3,8 +3,13 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
+from collections import OrderedDict
+from copy import deepcopy
 from difflib import SequenceMatcher
+from hashlib import sha256
+from time import monotonic
 from typing import Any, cast
+from weakref import WeakValueDictionary
 
 import httpx
 from tortoise.exceptions import IntegrityError
@@ -43,6 +48,58 @@ class BangumiClient:
     )
     _sync_tasks: set[asyncio.Task[None]] = set()
     _subject_merge_locks: dict[int, asyncio.Lock] = {}
+    # 認証ごとに読み取り結果を隔離し、公開範囲の違うアカウントへ応答を流用しない。
+    ## token は保持せずハッシュだけをキーに使う。章追加を反映するため有効期間は 5 分とする。
+    READ_CACHE_TTL_SECONDS = 300
+    READ_CACHE_MAX_ENTRIES = 512
+    _read_cache: OrderedDict[tuple[str, str, tuple[tuple[str, int], ...]], tuple[float, Any]] = OrderedDict()
+    # 同一キーの並行取得は直列化し、使われなくなったロックは自動的に解放する。
+    _read_locks: WeakValueDictionary[tuple[str, str, tuple[tuple[str, int], ...]], asyncio.Lock] = WeakValueDictionary()
+
+
+    @classmethod
+    async def _getCachedJSON(
+        cls, client: httpx.AsyncClient, url: str, access_token: str, params: dict[str, int] | None = None,
+    ) -> Any:
+        """
+        認証付き作品・章・関連作品の読み取りを期限と容量付きでキャッシュする。
+
+        Args:
+            client (httpx.AsyncClient): 呼び出し元が管理する HTTP クライアント。
+            url (str): 読み取り先 URL。
+            access_token (str): 連携アカウントの認証 token。
+            params (dict[str, int] | None): 章一覧のページ指定等。
+
+        Returns:
+            Any: 呼び出し元の変更がキャッシュへ波及しない JSON のコピー。
+
+        Raises:
+            httpx.HTTPError: 取得に失敗した場合。失敗応答はキャッシュしない。
+        """
+
+        key = (sha256(access_token.encode()).hexdigest(), url, tuple(sorted((params or {}).items())))
+        lock = cls._read_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            now = monotonic()
+            # 期限切れの応答は削除し、認証失効や新しい章を定期的に再検証する。
+            for expired_key, (expires_at, _) in list(cls._read_cache.items()):
+                if expires_at <= now:
+                    del cls._read_cache[expired_key]
+            if key in cls._read_cache:
+                cls._read_cache.move_to_end(key)
+                return deepcopy(cls._read_cache[key][1])
+            response = await client.get(
+                url = url,
+                headers = {**API_REQUEST_HEADERS, 'Authorization': f'Bearer {access_token}'},
+                params = params,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            # 成功した JSON だけ保存し、最近使われていない項目から容量上限まで追い出す。
+            cls._read_cache[key] = (monotonic() + cls.READ_CACHE_TTL_SECONDS, deepcopy(payload))
+            while len(cls._read_cache) > cls.READ_CACHE_MAX_ENTRIES:
+                cls._read_cache.popitem(last=False)
+            return payload
 
 
     @staticmethod
@@ -280,26 +337,21 @@ class BangumiClient:
         offset = 0
         async with HTTPX_CLIENT() as httpx_client:
             while True:
-                response = await httpx_client.get(
-                    url = f'{cls.API_BASE_URL}/episodes',
+                try:
                     # NSFW 作品は匿名アクセスを 404 に偽装するため、コレクション一覧と同じ認証を必ず引き継ぐ。
-                    headers = {**API_REQUEST_HEADERS, 'Authorization': f'Bearer {access_token}'},
-                    params = {
-                        'subject_id': subject_id,
-                        'type': 0,
-                        'limit': cls.EPISODE_PAGE_SIZE,
-                        'offset': offset,
-                    },
-                )
+                    payload = await cls._getCachedJSON(
+                        httpx_client, f'{cls.API_BASE_URL}/episodes', access_token,
+                        {'subject_id': subject_id, 'type': 0, 'limit': cls.EPISODE_PAGE_SIZE, 'offset': offset},
+                    )
                 # 認証後も閲覧できない作品、または削除済み作品だけ episode 未照合として扱う。
-                if response.status_code == 404:
+                except httpx.HTTPStatusError as ex:
+                    if ex.response.status_code != 404:
+                        raise
                     logging.warning(
                         f'[BangumiClient][_getEpisodes] Bangumi subject was not found. '
                         f'[subject_id: {subject_id}]',
                     )
                     return []
-                response.raise_for_status()
-                payload = cast(dict[str, Any], response.json())
                 page_episodes = cast(list[dict[str, Any]], payload.get('data', []))
                 episodes.extend(page_episodes)
                 offset += len(page_episodes)
@@ -548,20 +600,15 @@ class BangumiClient:
                 )
                 async with HTTPX_CLIENT() as httpx_client:
                     # EPG のジャンルだけではアニメ・特撮の区別ができないため、主条目の種別を正とする。
-                    subject_response = await httpx_client.get(
-                        url = f'{cls.API_BASE_URL}/subjects/{subject_id}',
-                        headers = {**API_REQUEST_HEADERS, 'Authorization': f'Bearer {access_token}'},
+                    subject_payload = await cls._getCachedJSON(
+                        httpx_client, f'{cls.API_BASE_URL}/subjects/{subject_id}', access_token,
                     )
-                    subject_response.raise_for_status()
-                    subject_type = int(subject_response.json()['type'])
+                    subject_type = int(subject_payload['type'])
                     while pending:
                         parent_id = pending.pop(0)
-                        response = await httpx_client.get(
-                            url = f'{cls.API_BASE_URL}/subjects/{parent_id}/subjects',
-                            headers = {**API_REQUEST_HEADERS, 'Authorization': f'Bearer {access_token}'},
-                        )
-                        response.raise_for_status()
-                        relations = cast(list[dict[str, Any]], response.json())
+                        relations = cast(list[dict[str, Any]], await cls._getCachedJSON(
+                            httpx_client, f'{cls.API_BASE_URL}/subjects/{parent_id}/subjects', access_token,
+                        ))
                         for relation in relations:
                             # 明示的な続編・同種別・期番号を除いた同名作品だけを辿る。劇場版等は含めない。
                             sequel_name = str(relation.get('name', ''))

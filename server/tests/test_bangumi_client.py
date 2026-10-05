@@ -249,6 +249,57 @@ class BangumiClientTest(unittest.TestCase):
 
 
 class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        BangumiClient._read_cache.clear()
+        BangumiClient._read_locks.clear()
+
+    async def test_read_cache_coalesces_and_expires_without_sharing_auth(self) -> None:
+        """並行要求をまとめ、期限・容量・認証境界・コピーを検証する。"""
+
+        client = AsyncMock()
+        response = MagicMock()
+        response.json.return_value = {'type': 2}
+        client.get.return_value = response
+        url = 'https://api.bgm.tv/v0/subjects/1'
+        with patch('app.utils.BangumiClient.monotonic', return_value=10):
+            results = await asyncio.gather(*(
+                BangumiClient._getCachedJSON(client, url, 'token') for _ in range(10)
+            ))
+            self.assertEqual(client.get.await_count, 1)
+            results[0]['type'] = 6
+            self.assertEqual((await BangumiClient._getCachedJSON(client, url, 'token'))['type'], 2)
+            await BangumiClient._getCachedJSON(client, url, 'other-token')
+            self.assertEqual(client.get.await_count, 2)
+        with patch('app.utils.BangumiClient.monotonic', return_value=311):
+            await BangumiClient._getCachedJSON(client, url, 'token')
+            self.assertEqual(client.get.await_count, 3)
+        with patch.object(BangumiClient, 'READ_CACHE_MAX_ENTRIES', 1):
+            await BangumiClient._getCachedJSON(client, url + '2', 'token')
+            self.assertEqual(len(BangumiClient._read_cache), 1)
+
+    async def test_read_cache_retries_failures(self) -> None:
+        """タイムアウト・429・404 は成功キャッシュにならず、後続取得で回復できる。"""
+
+        for failure in (
+            httpx.ConnectTimeout('timeout'),
+            httpx.HTTPStatusError('limited', request=httpx.Request('GET', 'https://api.bgm.tv'),
+                                  response=httpx.Response(429)),
+            httpx.HTTPStatusError('missing', request=httpx.Request('GET', 'https://api.bgm.tv'),
+                                  response=httpx.Response(404)),
+        ):
+            BangumiClient._read_cache.clear()
+            response = MagicMock()
+            response.json.return_value = {'data': []}
+            client = AsyncMock()
+            client.get.side_effect = [failure, response]
+            with self.assertRaises(httpx.HTTPError):
+                await BangumiClient._getCachedJSON(client, 'https://api.bgm.tv/v0/episodes', 'token')
+            self.assertEqual(len(BangumiClient._read_cache), 0)
+            self.assertEqual(await BangumiClient._getCachedJSON(
+                client, 'https://api.bgm.tv/v0/episodes', 'token',
+            ), {'data': []})
+            self.assertEqual(client.get.await_count, 2)
+
     """Bangumi API を呼び出す前のローカル対象判定を検証する。"""
 
     async def test_existing_wrong_mapping_converges_to_explicit_sequel(self) -> None:
@@ -291,6 +342,7 @@ class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
         recording.save.assert_awaited_once()
 
         # 同一通算話数の候補が複数あれば、以前の誤照合も含めて未照合に戻す。
+        BangumiClient._read_cache.clear()
         response.json.return_value.append({
             'id': 616809, 'type': 2, 'relation': '续集', 'name': '野生のラスボスが現れた！第3期',
         })
@@ -488,6 +540,10 @@ class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
 
         response = MagicMock()
         response.status_code = 404
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            'missing', request=httpx.Request('GET', 'https://api.bgm.tv/v0/episodes'),
+            response=httpx.Response(404),
+        )
         httpx_client = AsyncMock()
         httpx_client.get.return_value = response
         httpx_client.__aenter__.return_value = httpx_client
@@ -500,7 +556,7 @@ class BangumiClientAsyncTest(unittest.IsolatedAsyncioTestCase):
             httpx_client.get.await_args.kwargs['headers']['Authorization'],
             'Bearer test-token',
         )
-        response.raise_for_status.assert_not_called()
+        response.raise_for_status.assert_called_once()
 
 
 if __name__ == '__main__':
