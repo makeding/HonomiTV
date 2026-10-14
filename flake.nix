@@ -4,7 +4,21 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    poetry2nix.url = "github:nix-community/poetry2nix";
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+    };
 
   };
 
@@ -13,44 +27,31 @@
       self,
       nixpkgs,
       flake-utils,
-      poetry2nix,
+      pyproject-nix,
+      uv2nix,
+      pyproject-build-systems,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
-        inherit (nixpkgs) lib;
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [
-            # poetry2nix.overlays.default
-            # (self: super: rec {
-            #   python3 = super.python3.override {
-            #     packageOverrides = (
-            #       self: super: {
-            #         inherit (super.python3.pkgs) ;
-            #         fastapi-cli = super.fastapi-cli.overridePythonAttrs {
-            #           dependencies = [
-            #             super.rich-toolkit
-            #             super.typer
-            #             super.uvicorn
-            #           ] ++ super.uvicorn.optional-dependencies.standard;
-
-            #           optional-dependencies = {
-            #             standard = [
-            #               super.uvicorn
-            #             ] ++ super.uvicorn.optional-dependencies.standard;
-            #           };
-            #         };
-            #       }
-            #     );
-            #   };
-            # })
-          ];
-        };
-        inherit (poetry2nix.lib.mkPoetry2Nix { inherit pkgs; }) mkPoetryApplication;
+        pkgs = import nixpkgs { inherit system; };
+        workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./server; };
+        overlay = workspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
+        pythonSet = (pkgs.callPackage pyproject-nix.build.packages {
+          python = pkgs.python311;
+          # OpenCV の macOS wheel は macOS 13 以降を対象にするため、wheel 互換性判定に現在の SDK を渡す
+          stdenv = if pkgs.stdenv.isDarwin then pkgs.stdenv.override {
+            targetPlatform = pkgs.stdenv.targetPlatform // {
+              darwinSdkVersion = "15.1";
+            };
+          } else pkgs.stdenv;
+        }).overrideScope (pkgs.lib.composeManyExtensions [
+          pyproject-build-systems.overlays.default
+          overlay
+        ]);
         konomitv-client = import ./client/package.nix { inherit pkgs; };
-        konomitv-server = mkPoetryApplication { projectDir = ./server/.; };
+        konomitv-server = pythonSet.mkVirtualEnv "konomitv-server" workspace.deps.default;
 
       in
       {
@@ -59,13 +60,13 @@
           default = konomitv-server;
         };
 
-        # devShells.default = pkgs.mkShell {
-        #   buildInputs = [
-        #     pkgs.nodejs
-        #     pkgs.python3
-        #     pkgs.poetry
-        #   ];
-        # };
+        devShells.default = pkgs.mkShell {
+          packages = [
+            pkgs.nodejs
+            pkgs.python311
+            pkgs.uv
+          ];
+        };
       }
     );
 }

@@ -10,6 +10,7 @@ on:
     paths:
       - '.github/workflows/build_thirdparty.yaml'
       - '.github/workflows/scripts/build_intel_media_stack_standalone.sh'
+      - '.github/workflows/scripts/poetry/**'
       - 'docker/thirdparty/build-cm-analysis.sh'
       - 'docker/thirdparty/manifest.env'
       - 'docker/thirdparty/patches/**'
@@ -23,8 +24,8 @@ env:
   PYTHON_TAG: '20260610'
   PYTHON_MAJOR_VERSION: '3.11'
   PYTHON_VERSION: '3.11.15'
-  # Poetry のバージョン
-  POETRY_VERSION: '1.8.5'
+  # uv のバージョン
+  UV_VERSION: '0.12.18'
   # FFmpeg のバージョン
   ## 公式 FFmpeg の固定タグに、libaribtlv を利用する MMT/TLV 対応パッチを適用してビルドする
   ## ビルド環境には BtbN/FFmpeg-Builds の公開済み Docker イメージを使うが、FFmpeg 本体は必ずここで再ビルドする
@@ -253,8 +254,16 @@ jobs:
           mv thirdparty/VCEEncC/VCEEncC64.exe thirdparty/VCEEncC/VCEEncC.exe
           curl -fSL -o thirdparty/VCEEncC/License.txt https://raw.githubusercontent.com/rigaya/VCEEnc/master/VCEEnc_license.txt
 
-      # Python Standalone Builds のダウンロードと poetry のインストール
-      - name: Install Python Standalone Builds & pip & poetry
+      # 旧バージョンのインストーラー向けの Poetry 互換モジュールを取得する
+      ## サードパーティーライブラリの組み立て先を汚さないよう、必要なフォルダだけを別フォルダにチェックアウトする
+      - name: Checkout Poetry Compatibility Shim
+        uses: actions/checkout@v4
+        with:
+          path: KonomiTV-Source
+          sparse-checkout: .github/workflows/scripts/poetry
+
+      # Python Standalone Builds のダウンロードと uv のインストール
+      - name: Install Python Standalone Builds & pip & uv
         run: |
 
           # Python 本体のダウンロード
@@ -263,8 +272,16 @@ jobs:
           mv python/ thirdparty/Python/
           Rename-Item thirdparty/Python/LICENSE.txt License.txt
 
-          # poetry のインストール
-          thirdparty/Python/python.exe -m pip install poetry==${{ env.POETRY_VERSION }}
+          # uv のインストール
+          thirdparty/Python/python.exe -m pip install uv==${{ env.UV_VERSION }}
+
+          # 旧バージョンのインストーラーが実行する python -m poetry を uv に読み替える互換モジュールを配置
+          Copy-Item -Recurse KonomiTV-Source/.github/workflows/scripts/poetry thirdparty/Python/Lib/site-packages/poetry
+
+          # 公開アーカイブの更新経路: uv と旧インストーラーの Poetry 呼び出しの両方が実行可能なことを確認する
+          thirdparty/Python/python.exe -m uv --version
+          thirdparty/Python/python.exe -m poetry --version
+          thirdparty/Python/python.exe -m poetry env use thirdparty/Python/python.exe
 
       # サードパーティーライブラリを 7z で圧縮
       # ファイルサイズ縮減のため、圧縮をかなり強めに掛けている
@@ -579,8 +596,8 @@ jobs:
           patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../Library' thirdparty/rkmppenc/rkmppenc.elf
           curl -fSL -o thirdparty/rkmppenc/License.txt https://raw.githubusercontent.com/rigaya/rkmppenc/master/rkmppenc_license.txt
 
-      # Python Standalone Builds のダウンロードと poetry のインストール
-      - name: Install Python Standalone Builds & pip & poetry
+      # Python Standalone Builds のダウンロードと uv のインストール
+      - name: Install Python Standalone Builds & pip & uv
         run: |
 
           # Python 本体のダウンロード
@@ -588,9 +605,17 @@ jobs:
           tar xvf python.tar.gz
           mv python/ thirdparty/Python/
 
-          # poetry のインストール
+          # 旧バージョンのインストーラーが実行する python -m poetry を uv に読み替える互換モジュールを配置
+          cp -r .github/workflows/scripts/poetry thirdparty/Python/lib/python${{ env.PYTHON_MAJOR_VERSION }}/site-packages/poetry
+
+          # uv のインストール
           cd thirdparty/Python/
-          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c './bin/python -m pip install poetry==${{ env.POETRY_VERSION }}'
+          docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c './bin/python -m pip install uv==${{ env.UV_VERSION }}'
+
+          # 公開アーカイブの更新経路: uv と旧インストーラーの Poetry 呼び出しの両方が実行可能なことを確認する
+          ./bin/python -m uv --version
+          ./bin/python -m poetry --version
+          ./bin/python -m poetry env use ./bin/python
 
       # chapter_exe / logoframe / join_logo_scp と専用 FFMS2 ランタイムを構築する (x64 のみ)
       ## 実行時依存は thirdparty/CMAnalysis 内へまとめるため、導入先で追加パッケージを要求しない。

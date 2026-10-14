@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Usage: poetry run python -m misc.UpdateThirdparty DOWNLOAD_VERSION
+# Usage: uv run python -m misc.UpdateThirdparty DOWNLOAD_VERSION
 # サーバー稼働状態だと正常に動作しません。必ず KonomiTV サービスが停止している状態で実行してください。
 # 最新版のナイトリービルドをダウンロードする場合は、DOWNLOAD_VERSION に latest を指定する (開発版ではナイトリービルドを推奨)
 # 安定版をダウンロードする場合は、DOWNLOAD_VERSION にバージョン番号を指定する (例: 0.7.1)
@@ -130,8 +130,9 @@ def main(
         elif platform_type == 'Linux':
             # Linux: tar.xz 形式のアーカイブを解凍
             ## 7-Zip だと (おそらく) ファイルパーミッションを保持したまま圧縮することができない？ため、あえて tar.xz を使っている
+            # アーカイブ内のパスが展開先の外を指すエントリ (../ や絶対パス) を拒否するため、tar フィルタを指定する
             with tarfile.open(thirdparty_compressed_file_path, mode='r:xz') as tar_xz:
-                tar_xz.extractall(INSTALLED_DIR)
+                tar_xz.extractall(INSTALLED_DIR, filter='tar')
         Path(thirdparty_compressed_file_path).unlink()
         if Path(INSTALLED_DIR / 'thirdparty/.gitkeep').exists() is False:
             Path(INSTALLED_DIR / 'thirdparty/.gitkeep').touch()

@@ -1,8 +1,30 @@
-[tool.poetry]
+[project]
 name = "KonomiTV-Installer"
 version = "0.14.1"
 description = "KonomiTV Installer"
-package-mode = false
+requires-python = ">=3.11.4,<3.12"
+dependencies = [
+    "aiofiles>=24.1.0,<25",
+    "distro>=1.8.0,<2",
+    "elevate>=0.1.3,<1.0.0",
+    "emoji>=2.14.0,<3",
+    "ifaddr<=0.2.0,<1.0.0",
+    "psutil>=6.0.0,<7",
+    "py7zr>=0.22.0,<1.0.0",
+    # For the Windows version only, to prevent virus detection, when the installer is built by CI,
+    # it is forced to replace the PyInstaller with my own build.
+    "pyinstaller @ https://github.com/tsukumijima/Pyinstaller-Builds/raw/gh-pages/x86_64/pyinstaller-5.13.0-py3-none-any.whl ; sys_platform == 'win32'",
+    "pyinstaller==5.13.0 ; sys_platform == 'linux'",
+    "pyright>=1.1.403,<2",
+    "requests>=2.32.4,<3",
+    "rich>=13.9.3,<14",
+    "ruamel.yaml==0.18.12",
+    "ruff>=0.9.1,<1.0.0",
+    "setuptools<80",
+    "taskipy>=1.14.0,<2",
+    "tzdata>=2024.2,<2025",
+    "watchdog>=5.0.3,<6",
+]
 
 [tool.taskipy.tasks]
 dev = "python KonomiTV-Installer.py"
@@ -11,37 +33,8 @@ typecheck = "pyright"
 # KonomiTV-Installer.spec は PyInstaller によって自動生成された .spec をベースにカスタマイズしている
 build = "pyinstaller --clean KonomiTV-Installer.spec"
 
-[tool.poetry.dependencies]
-python = "3.11.*"
-aiofiles = "^24.1.0"
-distro = "^1.8.0"
-elevate = ">=0.1.3,<1.0.0"
-emoji = "^2.14.0"
-ifaddr = "<=0.2.0,<1.0.0"
-psutil = "^6.0.0"
-py7zr = ">=0.22.0,<1.0.0"
-# For the Windows version only, to prevent virus detection, when the installer is built by CI,
-# it is forced to replace the PyInstaller with my own build.
-# ref: https://python-poetry.org/docs/dependency-specification/#combining-git--url--path-dependencies-with-source-repositories
-pyinstaller = [
-    { platform = "win32", url = "https://github.com/tsukumijima/Pyinstaller-Builds/raw/gh-pages/x86_64/pyinstaller-5.13.0-py3-none-any.whl" },
-    { platform = "linux", version = "5.13.0", source = "pypi" },
-]
-pyright = "^1.1.403"
-requests = "^2.32.4"
-rich = "^13.9.3"
-"ruamel.yaml" = "==0.18.12"
-ruff = ">=0.9.1,<1.0.0"
-setuptools = "<80"
-taskipy = "^1.14.0"
-tzdata = "^2024.2"
-watchdog = "^5.0.3"
-
-[tool.poetry.group.dev.dependencies]
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.uv]
+package = false
 
 [tool.ruff]
 # インデントの幅を4スペースに設定
