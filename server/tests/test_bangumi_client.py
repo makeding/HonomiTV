@@ -205,6 +205,60 @@ class BangumiClientTest(unittest.TestCase):
                 self.assertIsNone(BangumiClient.findSubject(local_title, [subject]))
 
 
+    def test_atx_anime_playback_selection(self) -> None:
+        """CS333 アニメは単話・認識済み範囲の現在話だけを 20 分で完了する。"""
+
+        recording = MagicMock()
+        recording.channel.type = 'CS'
+        recording.channel.service_id = 333
+        recording.genres = [{'major': 'アニメ・特撮', 'middle': '国内アニメ'}]
+        recording.is_partially_recorded = False
+        recording.duration = 1800.0
+        recording.recorded_video.duration = 1807.0
+        recording.recorded_video.cm_sections = []
+        recording.episode_number = '1'
+        self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 1199.9, 1807.0), (1, False, False))
+        self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 1200.0, 1807.0), (1, False, True))
+        # CM が存在しても、CS333 の通常枠は指定された 20 分ルールを使う。
+        recording.recorded_video.cm_sections = [{'start_time': 1500.0, 'end_time': 1800.0}]
+        self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 1200.0, 1807.0), (1, False, True))
+        recording.duration = 10800.0
+        for first in (1, 7):
+            recording.episode_number = f'{first}-{first + 5}'
+            for index in range(6):
+                threshold = index * 1800 + 1200
+                self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, threshold - 0.1, 10807.0), (first + index, True, False))
+                self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, threshold, 10807.0), (first + index, True, True))
+            self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 1800.0, 10807.0), (first + 1, True, False))
+            self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 10807.0, 10807.0), (first + 5, True, True))
+        for unknown in (None, '1・6', '0-6', '6-1', '1-1', '1-999'):
+            recording.episode_number = unknown
+            self.assertIsNone(BangumiClient.selectPlaybackEpisode(recording, 1200.0, 10807.0)[0])
+
+    def test_atx_rule_requires_channel_animation_and_normal_complete_slots(self) -> None:
+        """他局、実写・特撮、欠損、長編単話を CS333 の 20 分ルールへ巻き込まない。"""
+
+        recording = MagicMock()
+        recording.channel.type = 'CS'
+        recording.channel.service_id = 333
+        recording.genres = [{'major': 'アニメ・特撮', 'middle': '国内アニメ'}]
+        recording.is_partially_recorded = False
+        recording.duration = 1800.0
+        recording.recorded_video.duration = 1800.0
+        recording.recorded_video.cm_sections = []
+        recording.episode_number = '1'
+        for attribute, value in (('channel', None), ('genres', []), ('is_partially_recorded', True), ('duration', 3600.0)):
+            original = getattr(recording, attribute)
+            setattr(recording, attribute, value)
+            self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 1200.0, 1800.0), (1, False, False))
+            setattr(recording, attribute, original)
+        recording.channel.service_id = 334
+        self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 1200.0, 1800.0), (1, False, False))
+        recording.channel.service_id = 333
+        recording.genres = [{'major': 'アニメ・特撮', 'middle': '特撮'}]
+        self.assertEqual(BangumiClient.selectPlaybackEpisode(recording, 1200.0, 1800.0), (1, False, False))
+
+
     def test_playback_completion_is_decided_at_ninety_percent(self) -> None:
         """30 分番組は 27 分到達時点から完了と判定する。"""
 

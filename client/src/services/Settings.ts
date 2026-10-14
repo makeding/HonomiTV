@@ -190,7 +190,26 @@ export const IServerSettingsDefault: IServerSettings = {
 };
 
 
+export interface IHistoryPlaybackProgress {
+    video_id: number;
+    playback_position: number;
+    duration: number;
+}
+
 class Settings {
+
+    // 再生中の時間軸だけを既存の設定・履歴同期へ添付する。追加の API やタイマーは作らない。
+    private static playback_progress_source: (() => IHistoryPlaybackProgress | null) | null = null;
+
+    static bindPlaybackProgress(source: () => IHistoryPlaybackProgress | null): () => void {
+        Settings.playback_progress_source = source;
+        return () => {
+            if (Settings.playback_progress_source === source) {
+                Settings.playback_progress_source = null;
+            }
+        };
+    }
+
 
     /**
      * クライアント設定を取得する
@@ -220,7 +239,13 @@ class Settings {
     static async updateClientSettings(settings: IClientSettings): Promise<boolean> {
 
         // API リクエストを実行
-        const response = await APIClient.put<IClientSettings>('/settings/client', settings);
+        const progress = Settings.playback_progress_source?.() ?? null;
+        // 全履歴の同期・取り込みは Bangumi 更新の根拠にしない。実プレイヤーの現在位置だけを添える。
+        const playback_progress = progress !== null && settings.watched_history.some(item => item.video_id === progress.video_id) ?
+            progress : null;
+        const response = await APIClient.put<IClientSettings>('/settings/client', {
+            ...settings, playback_progress,
+        });
 
         // 設定同期は再生や画面操作を妨げない補助処理なので、通信失敗や更新競合は次回の同期へ委ねる
         if (response.type === 'error') {

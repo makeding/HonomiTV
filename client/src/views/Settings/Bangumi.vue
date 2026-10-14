@@ -53,8 +53,8 @@
             <div class="settings__item">
                 <div class="settings__item-heading">個人アクセストークンについて</div>
                 <div class="settings__item-label">
-                    個人アクセストークンは Bangumi のページで作成できます。最長の有効期間は 365 日です。<br>
-                    期限切れや失効後は、新しい個人アクセストークンを作成して再連携してください。<br>
+                    連携時に専用の 30 日トークンを作成し、有効期限が切れる前に自動更新します。<br>
+                    長期間のサーバー停止やトークン失効で更新できなかった場合は、再連携してください。<br>
                     入力されたトークンは KonomiTV サーバーのデータベースへ暗号化して保存され、クライアントには返されません。<br>
                 </div>
                 <v-btn class="settings__save-button mt-4" variant="flat" href="https://next.bgm.tv/demo/access-token" target="_blank">

@@ -241,6 +241,58 @@ class BangumiClient:
 
 
     @classmethod
+    def selectPlaybackEpisode(
+        cls, recorded_program: RecordedProgram, playback_position: float, duration: float,
+    ) -> tuple[int | None, bool, bool]:
+        """
+        録画・放送局・現在位置から、今回だけ更新できる話数と完了判定を選ぶ。
+
+        Args:
+            recorded_program (RecordedProgram): 話数と放送局を読み込み済みの録画。
+            playback_position (float): ファイル先頭基準の現在位置 (秒)。
+            duration (float): プレイヤーが解決したファイル時間 (秒)。
+
+        Returns:
+            tuple[int | None, bool, bool]: 対象話数、範囲録画かどうか、完了位置到達かどうか。
+        """
+
+        episode_number = cls.parseEpisodeNumber(recorded_program.episode_number)
+        channel = recorded_program.channel
+        is_atx_anime = (
+            channel is not None and channel.type == 'CS' and channel.service_id == 333
+            and any('アニメ' in genre['major'] and '特撮' not in genre['middle'] for genre in recorded_program.genres)
+            and recorded_program.is_partially_recorded is False
+        )
+        # 単話は従来の CM/90% 判定を基本とし、CS333 の通常アニメ枠だけ 20 分へ置き換える。
+        if episode_number is not None:
+            if is_atx_anime and 27 * 60 <= recorded_program.duration <= 36 * 60:
+                return episode_number, False, playback_position >= 20 * 60
+            completion_duration = recorded_program.recorded_video.duration \
+                if recorded_program.recorded_video.cm_sections else duration
+            return episode_number, False, cls.isPlaybackCompleted(
+                playback_position, completion_duration, recorded_program.recorded_video.cm_sections,
+            )
+
+        # UI が認識済みの連続範囲だけを使う。タイトルから新たな範囲や話数を推測しない。
+        match = re.fullmatch(r'([0-9]+)-([0-9]+)', recorded_program.episode_number or '')
+        if not is_atx_anime or match is None:
+            return None, False, False
+        first_episode, last_episode = (int(value) for value in match.groups())
+        episode_count = last_episode - first_episode + 1
+        if first_episode <= 0 or episode_count <= 1:
+            return None, True, False
+        # 半時間枠の連続放送だけを対象とし、映画・短編・欠損録画へ機械的な 30 分分割を適用しない。
+        slot_duration = recorded_program.duration / episode_count
+        if not 27 * 60 <= slot_duration <= 36 * 60:
+            return None, True, False
+        slot_index = int(playback_position // (30 * 60))
+        # 最終話後の録画マージンでは最終話を維持するが、余分な話数は生成しない。
+        slot_index = min(slot_index, episode_count - 1)
+        threshold = slot_index * 30 * 60 + 20 * 60
+        return first_episode + slot_index, True, playback_position >= threshold
+
+
+    @classmethod
     def findSubject(cls, series_title: str, subjects: list[dict[str, Any]]) -> dict[str, Any] | None:
         """
         ユーザーの視聴中・視聴済みのコレクションからローカル Series に対応する作品を一意に選ぶ。
@@ -570,11 +622,43 @@ class BangumiClient:
             None: 録画単位の照合結果を保存する。外部視聴状態は更新しない。
         """
 
+        episode_number = cls.parseEpisodeNumber(recorded_program.episode_number)
+        if series.bangumi_subject_id is None:
+            return
+        resolved = await cls.resolveEpisodeNumber(series, episode_number, access_token, episodes_by_subject_id)
+        if resolved is None:
+            return
+        resolved_subject_id, resolved_episode_id = resolved
+
+        # subject と episode は組として保存し、Series 主条目への一括上書きを行わない。
+        if (recorded_program.bangumi_subject_id, recorded_program.bangumi_episode_id) != (resolved_subject_id, resolved_episode_id):
+            recorded_program.bangumi_subject_id = resolved_subject_id
+            recorded_program.bangumi_episode_id = resolved_episode_id
+            await recorded_program.save(update_fields=['bangumi_subject_id', 'bangumi_episode_id'])
+
+
+    @classmethod
+    async def resolveEpisodeNumber(
+        cls, series: Series, episode_number: int | None, access_token: str,
+        episodes_by_subject_id: dict[int, list[dict[str, Any]]] | None = None,
+    ) -> tuple[int, int | None] | None:
+        """
+        主条目と明示的な続編から指定話数を一意に解決し、録画の範囲メタデータは変更しない。
+
+        Args:
+            series (Series): ローカル Series の主条目。
+            episode_number (int | None): 今回照合する正整数話数。
+            access_token (str): 認証付き章取得に使うトークン。
+            episodes_by_subject_id (dict | None): 一括同期中の章キャッシュ。
+
+        Returns:
+            tuple[int, int | None] | None: 主条目がなければ None、一意に解決した条目と章 ID。
+        """
+
         subject_id = series.bangumi_subject_id
         if subject_id is None:
-            return
+            return None
         cache = episodes_by_subject_id if episodes_by_subject_id is not None else {}
-        episode_number = cls.parseEpisodeNumber(recorded_program.episode_number)
         resolved_subject_id = subject_id
         resolved_episode_id: int | None = None
         if episode_number is not None:
@@ -638,8 +722,4 @@ class BangumiClient:
                 if len(matches) == 1:
                     resolved_subject_id, resolved_episode_id = matches[0]
 
-        # subject と episode は組として保存し、Series 主条目への一括上書きを行わない。
-        if (recorded_program.bangumi_subject_id, recorded_program.bangumi_episode_id) != (resolved_subject_id, resolved_episode_id):
-            recorded_program.bangumi_subject_id = resolved_subject_id
-            recorded_program.bangumi_episode_id = resolved_episode_id
-            await recorded_program.save(update_fields=['bangumi_subject_id', 'bangumi_episode_id'])
+        return resolved_subject_id, resolved_episode_id

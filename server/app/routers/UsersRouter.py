@@ -605,7 +605,8 @@ async def UserUpdateAPI(
         current_user.password = PASSWORD_CONTEXT.hash(user_update_request.password)  # ハッシュ化されたパスワード
 
     # レコードを保存する
-    await current_user.save()
+    # プロフィール更新で並行更新された外部サービスの認証情報を上書きしない。
+    await current_user.save(update_fields=['name', 'password', 'updated_at'])
 
 
 @router.get(
@@ -749,7 +750,8 @@ async def SpecifiedUserUpdateAPI(
             )
 
     # レコードを保存する
-    await user.save()
+    # 権限変更だけを保存し、定期更新中の外部サービス認証情報を保持する。
+    await user.save(update_fields=['is_admin', 'updated_at'])
 
 
 @router.get(

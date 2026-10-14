@@ -173,4 +173,8 @@ class User(TortoiseModel):
             pass  # 取れなくてもセッション取得に支障はないのでパス
 
         # 変更をデータベースに保存
-        await self.save()
+        # 更新対象をニコニコに限定し、並行する Bangumi 更新を上書きしない。
+        await self.save(update_fields=[
+            'niconico_user_name', 'niconico_user_premium',
+            'niconico_access_token', 'niconico_refresh_token', 'updated_at',
+        ])

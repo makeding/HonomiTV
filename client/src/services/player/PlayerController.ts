@@ -9,7 +9,6 @@ import mpegts from 'mpegts.js';
 import { watch } from 'vue';
 
 import APIClient from '@/services/APIClient';
-import Bangumi from '@/services/Bangumi';
 import OfflineVideos from '@/services/OfflineVideos';
 import CustomBufferController from '@/services/player/CustomBufferController';
 import LivePlaybackSession, { type ILivePlaybackSession } from '@/services/player/LivePlaybackSession';
@@ -34,6 +33,7 @@ import {
 import { applyInitialPlaybackPosition } from '@/services/player/PlayerInitialPlayback';
 import PlayerManager from '@/services/player/PlayerManager';
 import TLVPlaybackNotification from '@/services/player/TLVPlaybackNotification';
+import Settings from '@/services/Settings';
 import Videos, { type IJikkyoComments } from '@/services/Videos';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
@@ -150,11 +150,8 @@ class PlayerController {
     // 視聴履歴に追加すべきかを判断するためのタイムアウトの ID
     private watched_history_threshold_timer_id: number = 0;
 
-    // ビデオ視聴: 同じプレイヤーで Bangumi 視聴完了 API を重複送信しないためのフラグ
-    private is_bangumi_episode_completion_requested = false;
-
-    // ビデオ視聴: Bangumi の条目・話数照合が未完了だった場合に、API を再送できる最短時刻
-    private bangumi_progress_retry_at = 0;
+    // 再生時間軸の登録だけを解除する関数。同期リクエスト自体は既存の設定同期が所有する。
+    private history_progress_source_cleanup: (() => void) | null = null;
 
     // Screen Wake Lock API の WakeLockSentinel のインスタンス
     // 確保した起動ロックを解放するために保持しておく必要がある
@@ -2357,6 +2354,16 @@ class PlayerController {
                 });
             });
 
+            // 履歴同期が起きた瞬間に実プレイヤーの現在位置を読む。独立した上報は行わない。
+            this.history_progress_source_cleanup?.();
+            this.history_progress_source_cleanup = Settings.bindPlaybackProgress(() => {
+                const video = this.player?.video;
+                if (!video || player_store.is_offline_playback || !Number.isFinite(video.duration) || video.duration <= 0) {
+                    return null;
+                }
+                return {video_id: player_store.recorded_program.id, playback_position: video.currentTime, duration: video.duration};
+            });
+
             // 視聴履歴の更新処理
             // timeupdate イベントを間引いて処理
             // ここで登録したイベントは、destroy() を実行した際にプレイヤーごと破棄される
@@ -2366,7 +2373,7 @@ class PlayerController {
                     return;
                 }
                 // 前回 timeupdate イベントが発火した時刻から WATCHED_HISTORY_UPDATE_INTERVAL 秒間は処理を実行しない（間引く）
-                const now = new Date().getTime();
+                const now = dayjs().valueOf();
                 if (now - last_timeupdate_fired_at < PlayerController.WATCHED_HISTORY_UPDATE_INTERVAL * 1000) {
                     return;
                 }
@@ -2381,47 +2388,8 @@ class PlayerController {
                     settings_store.settings.watched_history[history_index].last_playback_position = current_time;
                     settings_store.settings.watched_history[history_index].updated_at = Utils.time();
                     console.log(`\u001b[31m[PlayerController] Last playback position updated. (Video ID: ${video_id}, last_playback_position: ${current_time})`);
-                }
-            });
 
-            // Bangumi 連携済みのログインユーザーが終盤まで再生したら、実再生位置をバックエンドへ送信する
-            // CM 区間を考慮した完了判定と Bangumi の条目・話数解決はバックエンドを正とする
-            this.player.on('timeupdate', () => {
-                if (!this.player || !this.player.video || this.is_bangumi_episode_completion_requested) {
-                    return;
                 }
-                if (user_store.is_logged_in === false || user_store.user?.bangumi_user_id == null) {
-                    return;
-                }
-                if (player_store.is_offline_playback) {
-                    return;
-                }
-                const duration = this.player.video.duration;
-                if (Number.isFinite(duration) === false || duration <= 0) {
-                    return;
-                }
-                const cm_sections = player_store.recorded_program.recorded_video.cm_sections;
-                const completion_threshold = cm_sections !== null && cm_sections.length > 0 ?
-                    player_store.recorded_program.recorded_video.playback_completion_threshold : duration * 0.9;
-                if (Number.isFinite(completion_threshold) === false || completion_threshold <= 0) {
-                    return;
-                }
-                if (this.player.video.currentTime < completion_threshold || dayjs().valueOf() < this.bangumi_progress_retry_at) {
-                    return;
-                }
-
-                // timeupdate は短時間に複数回発火するため、await より前にフラグを立てて重複送信を防ぐ
-                this.is_bangumi_episode_completion_requested = true;
-                void Bangumi.updatePlaybackProgress(player_store.recorded_program.id, {
-                    playback_position: this.player.video.currentTime,
-                    duration,
-                }).then((response) => {
-                    // 未照合・録画中・通信失敗なら 30 秒後に再送し、同じ timeupdate から連打しない。
-                    if (response === null || response.status === 'Pending') {
-                        this.bangumi_progress_retry_at = dayjs().add(30, 'seconds').valueOf();
-                        this.is_bangumi_episode_completion_requested = false;
-                    }
-                });
             });
 
             // 視聴開始から WATCHED_HISTORY_THRESHOLD_SECONDS 秒間このページが開かれ続けていたら、視聴履歴に追加する
@@ -3318,6 +3286,9 @@ class PlayerController {
                 console.log(`\u001b[31m[PlayerController] Last playback position updated. (Video ID: ${player_store.recorded_program.id}, last_playback_position: ${current_time})`);
             }
         }
+
+        this.history_progress_source_cleanup?.();
+        this.history_progress_source_cleanup = null;
 
         console.log('\u001b[31m[PlayerController] Destroying...');
 

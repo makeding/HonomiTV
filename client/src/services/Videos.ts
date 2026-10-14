@@ -21,7 +21,6 @@ export interface IRecordedVideo {
     recording_start_time: string | null;
     recording_end_time: string | null;
     duration: number;
-    playback_completion_threshold: number;
     container_format: 'MPEG-TS' | 'MPEG-4' | 'MMT/TLV';
     video_codec: 'MPEG-2' | 'H.264' | 'H.265';
     video_codec_profile: 'High' | 'High 10' | 'Main' | 'Main 10' | 'Baseline' | 'Constrained Baseline';
@@ -82,7 +81,6 @@ export const IRecordedVideoDefault: IRecordedVideo = {
     recording_start_time: null,
     recording_end_time: null,
     duration: 0,
-    playback_completion_threshold: 0,
     container_format: 'MPEG-TS',
     video_codec: 'MPEG-2',
     video_codec_profile: 'High',

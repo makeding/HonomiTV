@@ -9,7 +9,13 @@ from app import logging, schemas
 from app.config import ClientSettings, Config, SaveConfig, ServerSettings
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
+from app.utils.BangumiPlaybackSync import SyncHistoryPlaybackProgress
 from app.WatchedHistory import MergeWatchedHistory
+
+
+class ClientSettingsUpdateRequest(ClientSettings):
+    # 現在の再生報告はリクエスト専用であり、保存設定や一括履歴には含めない。
+    playback_progress: schemas.HistoryPlaybackProgress | None = None
 
 
 # ルーター
@@ -63,7 +69,7 @@ async def ClientSettingsAPI(
     status_code = status.HTTP_204_NO_CONTENT,
 )
 async def ClientSettingsUpdateAPI(
-    client_settings: Annotated[ClientSettings, Body(description='更新するクライアント設定のデータ。')],
+    client_settings: Annotated[ClientSettingsUpdateRequest, Body(description='更新するクライアント設定のデータ。')],
     current_user: Annotated[User, Depends(GetCurrentUser)],
 ):
     """
@@ -88,6 +94,7 @@ async def ClientSettingsUpdateAPI(
         # dict に変換してから入れる
         ## Pydantic モデルのままだと JSON にシリアライズできないので怒られる
         updated_settings = dict(client_settings)
+        updated_settings.pop('playback_progress', None)
         updated_settings['watched_history'] = MergeWatchedHistory(
             current_client_settings.watched_history,
             client_settings.watched_history,
@@ -96,7 +103,9 @@ async def ClientSettingsUpdateAPI(
         current_user.client_settings = updated_settings
 
         # レコードを保存する
-        await current_user.save()
+        # 設定取得後に更新された Bangumi 認証情報などを古い値へ戻さない。
+        await current_user.save(update_fields=['client_settings', 'updated_at'])
+    await SyncHistoryPlaybackProgress(current_user, client_settings.playback_progress)
 
 
 @router.get(
@@ -131,14 +140,14 @@ async def WatchedHistoryAPI(
     response_model = schemas.WatchedHistory,
 )
 async def WatchedHistoryUpdateAPI(
-    watched_history: Annotated[schemas.WatchedHistory, Body(description='端末上で更新された視聴履歴。')],
+    watched_history: Annotated[schemas.WatchedHistoryUpdate, Body(description='端末上で更新された視聴履歴。')],
     current_user: Annotated[User, Depends(GetCurrentUser)],
 ):
     """
     端末から受信した視聴履歴を、ログイン中ユーザーの履歴へマージする。
 
     Args:
-        watched_history (schemas.WatchedHistory): 端末上で更新された視聴履歴。
+        watched_history (schemas.WatchedHistoryUpdate): 端末上で更新された視聴履歴。
         current_user (User): JWT から解決したログイン中のユーザー。
 
     Returns:
@@ -158,7 +167,9 @@ async def WatchedHistoryUpdateAPI(
         updated_settings = dict(client_settings)
         updated_settings['watched_history'] = merged_history
         current_user.client_settings = updated_settings
-        await current_user.save()
+        # 履歴保存は設定だけを更新し、並行するトークン更新を保持する。
+        await current_user.save(update_fields=['client_settings', 'updated_at'])
+    await SyncHistoryPlaybackProgress(current_user, watched_history.playback_progress)
     # マージ結果も保存時と同じ JSON 表現なので、レスポンスでは型付きの公開スキーマへ戻す
     return schemas.WatchedHistory(
         items=[schemas.WatchedHistoryItem.model_validate(item) for item in merged_history],

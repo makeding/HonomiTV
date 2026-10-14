@@ -1000,8 +1000,14 @@ class BangumiAuthRequest(BaseModel):
     access_token: Annotated[str, Field(min_length=1, max_length=512)]
 
 class BangumiPlaybackProgressRequest(BaseModel):
-    playback_position: Annotated[float, Field(ge=0)]
-    duration: Annotated[float, Field(gt=0)]
+    playback_position: Annotated[float, Field(ge=0, allow_inf_nan=False)]
+    duration: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+class HistoryPlaybackProgress(BangumiPlaybackProgressRequest):
+    video_id: int
+
+class WatchedHistoryUpdate(WatchedHistory):
+    playback_progress: HistoryPlaybackProgress | None = None
 
 class BangumiPlaybackProgressResponse(BaseModel):
     status: Literal['Completed', 'AlreadyCompleted', 'Pending', 'NotEligible']

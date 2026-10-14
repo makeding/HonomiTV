@@ -47,6 +47,7 @@ from app.routers import (
 )
 from app.streams.LiveStream import LiveStream
 from app.utils.BangumiClient import BangumiClient
+from app.utils.BangumiTokenManager import BangumiTokenManager
 from app.utils.edcb.EDCBTuner import EDCBTuner
 from app.utils.EventLoopBlockDetector import (
     StartEventLoopBlockDetector,
@@ -308,6 +309,12 @@ async def CollectExpiredNetworkTVSessions():
 @repeat_every(seconds=30 * 60, wait_first=10, logger=logging.logger)
 async def UpdateBangumiCollections():
     await BangumiClient.syncAllLinkedUsers()
+
+# 視聴や收藏同期の有無に依存せず、失効前に個人トークンを後継へ更新する。
+@app.on_event('startup')
+@repeat_every(seconds=BangumiTokenManager.CHECK_INTERVAL_SECONDS, wait_first=10, logger=logging.logger)
+async def RenewBangumiTokens():
+    await BangumiTokenManager.renewAllLinkedUsers()
 
 # 通常の起動処理が完了してからイベントループの応答性を監視し、実行中の同期ブロックを次回発生時に捕捉する。
 @app.on_event('startup')

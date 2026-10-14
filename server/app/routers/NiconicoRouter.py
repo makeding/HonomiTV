@@ -223,7 +223,11 @@ async def NiconicoAuthCallbackAPI(
         )
 
     # 変更をデータベースに保存
-    await current_user.save()
+    # 他サービスのトークン更新と競合しないよう、ニコニコ連携情報だけを保存する。
+    await current_user.save(update_fields=[
+        'niconico_user_id', 'niconico_user_name', 'niconico_user_premium',
+        'niconico_access_token', 'niconico_refresh_token', 'updated_at',
+    ])
 
     # OAuth 連携が正常に完了したことを伝える
     return OAuthCallbackResponse(
@@ -252,4 +256,8 @@ async def NiconicoAccountLogoutAPI(
     current_user.niconico_user_premium = None
     current_user.niconico_access_token = None
     current_user.niconico_refresh_token = None
-    await current_user.save()
+    # 連携解除でも、並行する Bangumi のトークン更新を巻き戻さない。
+    await current_user.save(update_fields=[
+        'niconico_user_id', 'niconico_user_name', 'niconico_user_premium',
+        'niconico_access_token', 'niconico_refresh_token', 'updated_at',
+    ])

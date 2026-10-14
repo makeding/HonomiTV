@@ -121,7 +121,7 @@ class FakeUser:
         return f'encrypted:{plain_text}'
 
 
-    async def save(self) -> None:
+    async def save(self, update_fields: list[str] | None = None) -> None:
         """
         Returns:
             None: 保存されたことだけを記録する。
@@ -163,12 +163,12 @@ class BangumiRouterTest(unittest.IsolatedAsyncioTestCase):
             recording.bangumi_episode_id = 1746074
 
         with (
-            patch('app.routers.BangumiRouter.RecordedProgram.get_or_none', return_value=query),
-            patch('app.routers.BangumiRouter.Series.get_or_none', AsyncMock(return_value=MagicMock())),
-            patch('app.routers.BangumiRouter.BangumiClient.resolveRecordedEpisode', AsyncMock(side_effect=Resolve)),
-            patch('app.routers.BangumiRouter.BangumiEpisodeCompletion.filter', return_value=completed_query) as completed_filter,
-            patch('app.routers.BangumiRouter.UpdateBangumiEpisodeCollection', AsyncMock()) as update_collection,
-            patch('app.routers.BangumiRouter.BangumiEpisodeCompletion.get_or_create', AsyncMock()) as completion,
+            patch('app.utils.BangumiPlaybackSync.RecordedProgram.get_or_none', return_value=query),
+            patch('app.utils.BangumiPlaybackSync.Series.get_or_none', AsyncMock(return_value=MagicMock())),
+            patch('app.utils.BangumiPlaybackSync.BangumiClient.resolveRecordedEpisode', AsyncMock(side_effect=Resolve)),
+            patch('app.utils.BangumiPlaybackSync.BangumiEpisodeCompletion.filter', return_value=completed_query) as completed_filter,
+            patch('app.utils.BangumiPlaybackSync.UpdateBangumiEpisodeCollection', AsyncMock()) as update_collection,
+            patch('app.utils.BangumiPlaybackSync.BangumiEpisodeCompletion.get_or_create', AsyncMock()) as completion,
         ):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url='http://test') as client:
                 response = await client.post('/api/bangumi/videos/2781/progress', json={
@@ -182,11 +182,11 @@ class BangumiRouterTest(unittest.IsolatedAsyncioTestCase):
 
         # 外部検証が失敗したときは、古い完了記録を成功扱いせず再試行できる Pending を返す。
         with (
-            patch('app.routers.BangumiRouter.RecordedProgram.get_or_none', return_value=query),
-            patch('app.routers.BangumiRouter.Series.get_or_none', AsyncMock(return_value=MagicMock())),
-            patch('app.routers.BangumiRouter.BangumiClient.resolveRecordedEpisode', AsyncMock(side_effect=httpx.NetworkError('network error'))),
-            patch('app.routers.BangumiRouter.BangumiEpisodeCompletion.filter') as completed_filter,
-            patch('app.routers.BangumiRouter.UpdateBangumiEpisodeCollection', AsyncMock()) as update_collection,
+            patch('app.utils.BangumiPlaybackSync.RecordedProgram.get_or_none', return_value=query),
+            patch('app.utils.BangumiPlaybackSync.Series.get_or_none', AsyncMock(return_value=MagicMock())),
+            patch('app.utils.BangumiPlaybackSync.BangumiClient.resolveRecordedEpisode', AsyncMock(side_effect=httpx.NetworkError('network error'))),
+            patch('app.utils.BangumiPlaybackSync.BangumiEpisodeCompletion.filter') as completed_filter,
+            patch('app.utils.BangumiPlaybackSync.UpdateBangumiEpisodeCollection', AsyncMock()) as update_collection,
         ):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url='http://test') as client:
                 response = await client.post('/api/bangumi/videos/2781/progress', json={
@@ -196,6 +196,93 @@ class BangumiRouterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {'status': 'Pending'})
         completed_filter.assert_not_called()
         update_collection.assert_not_awaited()
+
+    async def test_atx_range_http_marks_only_current_identified_episode(self) -> None:
+        """HTTP 入口で 1-6 / 7-12 の各枠を処理し、シークで未視聴話を補完しない。"""
+
+        application = FastAPI()
+        application.include_router(bangumi_router)
+        user = MagicMock()
+        user.id = 1
+        user.bangumi_user_id = 123
+        user.bangumi_access_token = 'encrypted-token'
+        user.decryptBangumiAccessToken.return_value = 'test-token'
+        application.dependency_overrides[GetCurrentUser] = lambda: user
+        recording = MagicMock()
+        recording.id = 2781
+        recording.series_id = 90
+        recording.channel.type = 'CS'
+        recording.channel.service_id = 333
+        recording.genres = [{'major': 'アニメ・特撮', 'middle': '国内アニメ'}]
+        recording.is_partially_recorded = False
+        recording.duration = 10800.0
+        recording.recorded_video.duration = 10807.0
+        recording.recorded_video.cm_sections = []
+        recording.recorded_video.status = 'Recorded'
+        recording.bangumi_subject_id = 77
+        recording.bangumi_episode_id = None
+        series = MagicMock()
+        series.bangumi_subject_id = 77
+        episodes = [{'id': 100 + number, 'type': 0, 'sort': number, 'ep': number} for number in range(1, 13)]
+        query = MagicMock()
+        query.prefetch_related = AsyncMock(return_value=recording)
+        completed: set[int] = set()
+        selected_ids: list[int] = []
+
+        def Filter(**kwargs: Any) -> MagicMock:
+            result = MagicMock()
+            result.exists = AsyncMock(return_value=kwargs['bangumi_episode_id'] in completed)
+            return result
+
+        async def Store(**kwargs: Any) -> None:
+            completed.add(kwargs['bangumi_episode_id'])
+
+        async def Update(token: str, subject_id: int, episode_id: int) -> None:
+            self.assertEqual((token, subject_id), ('test-token', 77))
+            selected_ids.append(episode_id)
+
+        with (
+            patch('app.utils.BangumiPlaybackSync.RecordedProgram.get_or_none', return_value=query),
+            patch('app.utils.BangumiPlaybackSync.Series.get_or_none', AsyncMock(return_value=series)),
+            patch('app.utils.BangumiClient.BangumiClient._getEpisodes', AsyncMock(return_value=episodes)),
+            patch('app.utils.BangumiPlaybackSync.BangumiEpisodeCompletion.filter', side_effect=Filter),
+            patch('app.utils.BangumiPlaybackSync.BangumiEpisodeCompletion.get_or_create', AsyncMock(side_effect=Store)),
+            patch('app.utils.BangumiPlaybackSync.UpdateBangumiEpisodeCollection', AsyncMock(side_effect=Update)),
+        ):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url='http://test') as client:
+                async def Request(position: float, expected: str) -> None:
+                    response = await client.post('/api/bangumi/videos/2781/progress', json={
+                        'playback_position': position, 'duration': 10807.0,
+                    })
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json(), {'status': expected})
+
+                recording.episode_number = '1-6'
+                await Request(1199.9, 'Pending')
+                await Request(1200.0, 'Completed')
+                await Request(1200.0, 'AlreadyCompleted')
+                await Request(1800.0, 'Pending')
+                await Request(2999.9, 'Pending')
+                await Request(3000.0, 'Completed')
+                # 第 6 話へ直接シークしても、第 3-5 話の完了記録は作らない。
+                await Request(10200.0, 'Completed')
+                self.assertEqual(selected_ids, [101, 102, 106])
+                recording.episode_number = '7-12'
+                await Request(1200.0, 'Completed')
+                await Request(3000.0, 'Completed')
+                self.assertEqual(selected_ids[-2:], [107, 108])
+                recording.episode_number = None
+                await Request(10200.0, 'NotEligible')
+                recording.episode_number = '7-12'
+                episodes[:] = [episode for episode in episodes if episode['sort'] != 8]
+                # 未照合でも前の話の ID を流用しない。
+                with patch('app.utils.BangumiPlaybackSync.BangumiClient.resolveEpisodeNumber', AsyncMock(return_value=(77, None))):
+                    await Request(3000.0, 'Pending')
+                recording.recorded_video.status = 'Recording'
+                await Request(1200.0, 'Pending')
+        self.assertEqual(recording.bangumi_episode_id, None)
+        recording.save.assert_not_called()
+
 
     async def test_access_token_is_encrypted_and_not_exposed_by_user_schema(self) -> None:
         """保存用トークンは暗号化され、User API のレスポンス構造には含まれない。"""
@@ -222,6 +309,7 @@ class BangumiRouterTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch('app.routers.BangumiRouter.HTTPX_CLIENT', return_value=httpx_client),
             patch('app.routers.BangumiRouter.BangumiClient.scheduleUserCollectionSync') as schedule_sync,
+            patch('app.routers.BangumiRouter.BangumiTokenManager.issueToken', AsyncMock(return_value='successor-token')) as issue_token,
         ):
             await BangumiAuthAPI(
                 auth_request = schemas.BangumiAuthRequest(access_token='  personal-token\n'),
@@ -234,7 +322,8 @@ class BangumiRouterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current_user.bangumi_user_name, 'huggy')
         self.assertEqual(current_user.bangumi_user_nickname, 'Huggy')
         self.assertEqual(current_user.bangumi_user_avatar_url, 'https://lain.bgm.tv/avatar.jpg')
-        self.assertEqual(current_user.bangumi_access_token, 'encrypted:personal-token')
+        self.assertEqual(current_user.bangumi_access_token, 'encrypted:successor-token')
+        issue_token.assert_awaited_once_with('personal-token', 123)
         self.assertTrue(current_user.saved)
         schedule_sync.assert_called_once_with(current_user)
 
