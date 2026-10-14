@@ -64,6 +64,10 @@ NVIDIA_GPU_NAMES_WITHOUT_NVENC: tuple[str, ...] = (
     'GeForce MX570 A',
 )
 
+# thirdparty/Python に導入する uv のバージョン
+## 既存リリースの thirdparty アーカイブには Poetry だけを含む版もあるため、uv sync の前に必ず固定版を導入する
+UV_VERSION = '0.12.18'
+
 
 def Installer(version: str) -> None:
     """
@@ -689,14 +693,15 @@ def Installer(version: str) -> None:
             elif platform_type == 'Linux':
                 # Linux: tar.xz 形式のアーカイブを解凍
                 ## 7-Zip だと (おそらく) ファイルパーミッションを保持したまま圧縮することができない？ため、あえて tar.xz を使っている
+                ## アーカイブ内のパスが展開先の外を指すエントリ (../ や絶対パス) を拒否するため、tar フィルタを指定する
                 with tarfile.open(thirdparty_compressed_file_path, mode='r:xz') as tar_xz:
-                    tar_xz.extractall(install_path / 'server/')
+                    tar_xz.extractall(install_path / 'server/', filter='tar')
             Path(thirdparty_compressed_file_path).unlink()
             # server/thirdparty/.gitkeep が消えてたらもう一度作成しておく
             if Path(install_path / 'server/thirdparty/.gitkeep').exists() is False:
                 Path(install_path / 'server/thirdparty/.gitkeep').touch()
 
-        # ***** poetry 環境の構築 (依存パッケージのインストール) *****
+        # ***** uv による仮想環境の構築 (依存パッケージのインストール) *****
 
         # Python の実行ファイルのパス (Windows と Linux で異なる)
         if platform_type == 'Windows':
@@ -704,24 +709,26 @@ def Installer(version: str) -> None:
         elif platform_type == 'Linux':
             python_executable_path = install_path / 'server/thirdparty/Python/bin/python'
 
-        # poetry env use を実行
+        # 既存リリースの thirdparty アーカイブに uv がない場合でも、新しい pyproject.toml を同期できるよう固定版 uv を導入する
         result = RunSubprocessDirectLogOutput(
-            'Python の仮想環境を作成しています…',
-            [python_executable_path, '-m', 'poetry', 'env', 'use', python_executable_path],
+            'uv をセットアップしています…',
+            [python_executable_path, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', f'uv=={UV_VERSION}'],
             cwd = install_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
-            environment = {'PYTHON_KEYRING_BACKEND': 'keyring.backends.null.Keyring'},  # Windows で SSH 接続時に発生するエラーを回避
-            error_message = 'Python の仮想環境の作成中に予期しないエラーが発生しました。',
+            error_message = 'uv のセットアップ中に予期しないエラーが発生しました。',
         )
         if result is False:
             return  # 処理中断
 
-        # poetry install を実行
-        # --no-root: プロジェクトのルートパッケージをインストールしない
+        # uv sync を実行
+        ## サードパーティーライブラリ内の Python を明示的に指定して、server/.venv/ に仮想環境を作成し、依存パッケージをインストールする
+        ## --frozen: uv.lock を更新せず、記録されているバージョンのままインストールする
+        ## --no-dev: 開発時にのみ利用する依存パッケージ (Ruff・Pyright など) をインストールしない
+        ## --link-mode copy: uv のキャッシュとインストール先が別のドライブにあるとハードリンクに失敗して警告が出るため、最初からコピーする
+        ## --python: Python の実行ファイルのパスを指定しているため、uv が別の Python を自動でダウンロードすることはない
         result = RunSubprocessDirectLogOutput(
             '依存パッケージをインストールしています…',
-            [python_executable_path, '-m', 'poetry', 'install', '--only', 'main', '--no-root'],
+            [python_executable_path, '-m', 'uv', 'sync', '--frozen', '--no-dev', '--link-mode', 'copy', '--python', python_executable_path],
             cwd = install_path / 'server/',  # カレントディレクトリを KonomiTV サーバーのベースディレクトリに設定
-            environment = {'PYTHON_KEYRING_BACKEND': 'keyring.backends.null.Keyring'},  # Windows で SSH 接続時に発生するエラーを回避
             error_message = '依存パッケージのインストール中に予期しないエラーが発生しました。',
         )
         if result is False:
@@ -1035,8 +1042,8 @@ def Installer(version: str) -> None:
 
     if platform_type == 'Windows':
 
-        # Windows サービス管理スクリプトは Poetry 経由ではなく、仮想環境の Python 実行ファイルを直接実行する
-        ## Poetry 経由だと Windows で shell 解釈の影響を受け、パスワード中の記号が崩れる可能性がある
+        # Windows サービス管理スクリプトはパッケージマネージャー経由ではなく、仮想環境の Python 実行ファイルを直接実行する
+        ## 以前 Poetry 経由で実行していた際、Windows で shell 解釈の影響を受けてパスワード中の記号が崩れる問題があったため
         venv_python_executable_path = install_path / 'server/.venv/Scripts/python.exe'
 
         # 現在ログオン中のユーザー名を取得
@@ -1104,11 +1111,9 @@ def Installer(version: str) -> None:
                     text = True,  # 出力をテキストとして取得する
                 )
             if 'Error installing service' in service_install_result.stdout:
-                print(Padding(str(
-                    '[red]Windows サービスのインストールに失敗しました。\n'
+                print(Padding(('[red]Windows サービスのインストールに失敗しました。\n'
                     '入力されたログオン中ユーザーのパスワードが間違っているか、\n'
-                    'すでに KonomiTV がインストールされている可能性があります。',
-                ), (1, 2, 0, 2)))
+                    'すでに KonomiTV がインストールされている可能性があります。'), (1, 2, 0, 2)))
                 print(Padding('[red]エラーログ:\n' + service_install_result.stdout.strip(), (1, 2, 1, 2)))
                 continue
 
@@ -1125,11 +1130,9 @@ def Installer(version: str) -> None:
                     text = True,  # 出力をテキストとして取得する
                 )
             if 'Error starting service' in service_start_result.stdout:
-                print(Padding(str(
-                    '[red]Windows サービスの起動に失敗しました。\n'
+                print(Padding(('[red]Windows サービスの起動に失敗しました。\n'
                     '入力されたログオン中ユーザーのパスワードが間違っているか、\n'
-                    'すでに KonomiTV がインストールされている可能性があります。',
-                ), (1, 2, 0, 2)))
+                    'すでに KonomiTV がインストールされている可能性があります。'), (1, 2, 0, 2)))
                 print(Padding('[red]エラーログ:\n' + service_start_result.stdout.strip(), (1, 2, 1, 2)))
                 continue
 

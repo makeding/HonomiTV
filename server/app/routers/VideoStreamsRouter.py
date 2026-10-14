@@ -4,14 +4,16 @@ import json
 import pathlib
 import struct
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from starlette.background import BackgroundTask
 
 from app import logging
+from app.constants import QUALITY
 from app.metadata.RecordedScanTask import (
     RecordedFileMetadataNotStableError,
     RecordedFileMetadataRefreshError,
@@ -25,6 +27,7 @@ from app.streams.StreamEncodingOptions import (
 )
 from app.streams.VideoSourceTimeline import VideoSourceTimelineResolver
 from app.streams.VideoStream import VideoStream
+from app.utils.DisconnectAwareFileResponse import DisconnectAwareFileResponse
 
 
 # ルーター
@@ -156,7 +159,7 @@ def ValidateVideoCopyQuality(recorded_program: RecordedProgram, stream_quality: 
 @router.get(
     '/{video_id}/raw-mmts/mpegts',
     summary = '録画番組 Raw MMTS ストリーム API',
-    response_class = FileResponse,
+    response_class = DisconnectAwareFileResponse,
     responses = {
         status.HTTP_200_OK: {
             'description': '録画ファイルに保存されている MMT/TLV データ。',
@@ -199,7 +202,7 @@ async def VideoRawMMTSStreamAPI(
             detail = 'Recorded video file was not found',
         )
 
-    return FileResponse(
+    return DisconnectAwareFileResponse(
         path = file_path,
         media_type = 'video/mp2t',
         headers = {
@@ -224,6 +227,11 @@ async def VideoHLSPlaylistAPI(
     stream_quality: Annotated[StreamQualityWithOptions, Depends(ValidateQuality)],
     session_id: Annotated[str, Query(description='セッション ID（クライアント側で適宜生成したランダム値を指定する）。')],
     cache_key: Annotated[str | None, Query(description='キャッシュ制御用のキー。')] = None,
+    is_recording: Annotated[bool, Query(alias='recording', description='録画追いかけ再生中かどうか。')] = False,
+    playlist_type: Annotated[
+        Literal['master', 'primary-audio', 'secondary-audio'],
+        Query(alias='type', description='プレイリストの種類。'),
+    ] = 'primary-audio',
 ):
     """
     指定された画質に対応する、録画番組のストリーミング用 HLS M3U8 プレイリストを返す。<br>
@@ -262,8 +270,33 @@ async def VideoHLSPlaylistAPI(
             )
             video_stream.configureSourceTimeline(source_timeline, source_recorded_programs)
 
-    # 仮想 HLS M3U8 プレイリストを取得
-    virtual_playlist = await video_stream.getVirtualPlaylist(cache_key)
+    # master playlist はエンコード済み TS に常に主/副音声を含める経路だけに公開する。
+    # copy 品質も同じ TS 出力を経由し、tsreadex または FFmpeg の無音 AAC 入力で副音声を必ず補完する。
+    if playlist_type == 'master':
+        quality = stream_quality.quality
+        # copy は入力ビットレートを固定値から導けないため、BS4K も上回る安全側の帯域上限を宣言する。
+        if quality == 'copy':
+            bandwidth = 50_000_000
+        else:
+            quality_setting = QUALITY[quality]
+            video_bitrate = int(quality_setting.video_bitrate_max.removesuffix('K')) * 1000
+            audio_bitrate = int(quality_setting.audio_bitrate.removesuffix('K')) * 1000
+            bandwidth = round((video_bitrate + audio_bitrate * 2) * 1.1)
+        # 子 playlist も親と同じ追いかけ再生の許可・キャッシュ世代で開かなければ、master URL 経由で録画中視聴が切れる。
+        playlist_query = {'session_id': session_id}
+        if cache_key is not None:
+            playlist_query['cache_key'] = cache_key
+        if is_recording is True:
+            playlist_query['recording'] = '1'
+        playlist_uri = f'playlist?{urlencode(playlist_query)}'
+        virtual_playlist = '#EXTM3U\n#EXT-X-VERSION:6\n'
+        virtual_playlist += '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="主音声",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="jpn"\n'
+        virtual_playlist += f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="副音声",DEFAULT=NO,AUTOSELECT=YES,LANGUAGE="jpn",URI="{playlist_uri}&type=secondary-audio"\n'
+        virtual_playlist += f'#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},AUDIO="audio"\n'
+        virtual_playlist += f'{playlist_uri}&type=primary-audio\n'
+    else:
+        audio = 'secondary' if playlist_type == 'secondary-audio' else 'primary'
+        virtual_playlist = await video_stream.getVirtualPlaylist(cache_key, audio)
     return Response(
         content = virtual_playlist,
         media_type = 'application/vnd.apple.mpegurl',
@@ -290,6 +323,7 @@ async def VideoHLSSegmentAPI(
     session_id: Annotated[str, Query(description='セッション ID（クライアント側で適宜生成したランダム値を指定する）。')],
     sequence: Annotated[int, Query(description='HLS セグメントの 0 スタートのシーケンス番号。')],
     cache_key: Annotated[str | None, Query(description='キャッシュ制御用のキー。')],
+    audio: Annotated[Literal['primary', 'secondary'], Query(description='音声トラック。')] = 'primary',
 ):
     """
     指定された画質に対応する、録画番組のストリーミング用 HLS セグメントを返す。<br>
@@ -305,7 +339,29 @@ async def VideoHLSSegmentAPI(
     video_stream = VideoStream(session_id, recorded_program, stream_quality.quality, stream_quality.encoding_options)
 
     # セグメントを取得（キャッシュキーはブラウザキャッシュ避けのための ID なので特に使わない）
-    segment_data = await video_stream.getSegment(sequence)
+    try:
+        segment_data = await video_stream.getSegment(sequence, audio)
+    except HTTPException:
+        # 録画追いかけ再生の待機、gap、上限超過など、既存の HTTP 契約はそのまま返す。
+        raise
+    except ValueError as ex:
+        logging.error(
+            f'{video_stream.log_prefix} Failed to get segment. [sequence: {sequence}, audio: {audio}]',
+            exc_info=ex,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f'Failed to get segment. [audio: {audio}, reason: {ex}]',
+        ) from ex
+    except RuntimeError as ex:
+        logging.error(
+            f'{video_stream.log_prefix} Failed to generate segment. [sequence: {sequence}, audio: {audio}]',
+            exc_info=ex,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Failed to generate segment. [audio: {audio}, reason: {ex}]',
+        ) from ex
     if segment_data is None:
         logging.error(
             f'{video_stream.log_prefix} Specified sequence segment was not found. '

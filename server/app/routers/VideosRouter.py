@@ -37,9 +37,11 @@ from app.metadata.TSInfoAnalyzer import TSInfoAnalyzer
 from app.models.RecordedProgram import RecordedProgram
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser
+from app.utils.DisconnectAwareFileResponse import DisconnectAwareFileResponse
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.JikkyoClient import JikkyoClient
 from app.utils.ProcessLimiter import ProcessLimiter
+from app.utils.RecordedWebVTTSidecar import RecordedWebVTTSidecar
 from app.utils.TSInformation import TSInformation
 
 
@@ -1336,7 +1338,7 @@ async def VideoAPI(
     '/{video_id}/download',
     summary = '録画ファイルダウンロード API',
     response_description = '指定された録画番組に対応する録画ファイル。',
-    response_class = FileResponse,
+    response_class = DisconnectAwareFileResponse,
     responses = {
         200: {'content': {'video/mp2t': {}, 'video/mp4': {}, 'application/octet-stream': {}}},
         404: {'description': 'The recorded file was not found'},
@@ -1388,10 +1390,74 @@ async def VideoDownloadAPI(
             media_type = 'application/octet-stream'
 
     # 録画ファイルをダウンロードさせる
-    return FileResponse(
+    return DisconnectAwareFileResponse(
         path = file_path,
         filename = filename,
         media_type = media_type,
+    )
+
+
+@router.get(
+    '/{video_id}/subtitles/webvtt',
+    summary = '録画番組 WebVTT 外部字幕 API',
+    response_description = '同名の WebVTT 外部字幕ファイル。',
+    response_class = Response,
+    responses = {
+        404: {'description': 'The WebVTT sidecar was not found or embedded subtitles take priority'},
+        422: {'description': 'Specified video_id was not found'},
+        503: {'description': 'Failed to inspect embedded subtitles'},
+    },
+)
+@router.head(
+    '/{video_id}/subtitles/webvtt',
+    include_in_schema = False,
+)
+async def VideoWebVTTSidecarAPI(
+    request: Request,
+    recorded_program: Annotated[RecordedProgram, Depends(GetRecordedProgram)],
+):
+    """
+    指定された録画番組と同名の WebVTT 外部字幕を返す。<br>
+    録画内の埋め込み字幕が存在する場合はそちらを優先し、外部字幕を重ねて返さない。
+    """
+
+    recorded_file_path = pathlib.Path(recorded_program.recorded_video.file_path)
+
+    # sidecar がない録画では FFprobe を起動せず、従来の再生・メタデータ経路を増やさない。
+    # HEAD は存在確認だけに使うため、本文の読み込みも行わない。
+    if request.method == 'HEAD':
+        sidecar_data = await asyncio.to_thread(RecordedWebVTTSidecar.readHeader, recorded_file_path)
+    else:
+        sidecar_data = await asyncio.to_thread(RecordedWebVTTSidecar.read, recorded_file_path)
+    if sidecar_data is None:
+        raise HTTPException(
+            status_code = status.HTTP_404_NOT_FOUND,
+            detail = 'The WebVTT sidecar was not found',
+        )
+
+    # 埋め込み字幕の検査結果は録画ファイルのサイズ・更新時刻でキャッシュされる。
+    # 結果を確定できない状態で sidecar を返すと二重字幕になり得るため、クライアントには再試行を促す。
+    has_embedded_subtitle = await asyncio.to_thread(RecordedWebVTTSidecar.hasEmbeddedSubtitle, recorded_file_path)
+    if has_embedded_subtitle is None:
+        raise HTTPException(
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail = 'Failed to inspect embedded subtitles. Please retry shortly.',
+            headers = {'Retry-After': '5'},
+        )
+    if has_embedded_subtitle is True:
+        raise HTTPException(
+            status_code = status.HTTP_404_NOT_FOUND,
+            detail = 'Embedded subtitles take priority',
+        )
+
+    return Response(
+        content = b'' if request.method == 'HEAD' else sidecar_data,
+        media_type = 'text/vtt',
+        headers = {
+            # 外部ファイルを差し替えた場合は、次の視聴開始で新しい字幕を確実に取得する。
+            'Cache-Control': 'no-cache',
+            'X-Content-Type-Options': 'nosniff',
+        },
     )
 
 

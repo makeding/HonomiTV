@@ -1204,11 +1204,11 @@ VS Code を開発に利用しています。
 ### 開発版 KonomiTV のインストール (開発環境の構築)
 
 **「`master` の最新をサービスとして動かして試したい」だけであれば、インストーラーで `4` (新規インストール) または `5` (更新) を選ぶ方法で十分です。**  
-ここでは、ソースツリーを手元に置いて Poetry や `yarn dev` でコードを改造・デバッグしたい開発者向けに、`master` ブランチの最新版を手動でセットアップする手順を説明します。  
+ここでは、ソースツリーを手元に置いて uv や `yarn dev` でコードを改造・デバッグしたい開発者向けに、`master` ブランチの最新版を手動でセットアップする手順を説明します。<br>
 サポートは行えませんので、技術的な知識がある方のみお試しください。
 
-- Python 3.11.x
-- Poetry (最新版)
+- Python 3.11.4 以降の 3.11.x
+- uv (最新版)
 - Node.js 20.16.0 (クライアントの開発やビルドを行う場合のみ)
 - yarn 1.x (クライアントの開発やビルドを行う場合のみ)
 
@@ -1234,27 +1234,26 @@ Copy-Item -Force config.example.yaml config.yaml
 cp -a config.example.yaml config.yaml
 nano config.yaml
 
-# 一時的な Poetry 仮想環境の構築 (poetry run task update-thirdparty の実行に必要)
+# 一時的な uv 仮想環境の構築 (uv run task update-thirdparty の実行に必要)
 cd server/
-poetry env use 3.11
-poetry install --no-root --with dev
+uv sync --frozen --python 3.11 --all-groups
 
 # 最新のサードパーティーライブラリを GitHub Actions からダウンロード
 ## 本番環境用のスタンドアローン版 Python もサードパーティーライブラリに含まれている
-poetry run task update-thirdparty
+uv run task update-thirdparty
 
-# サードパーティーライブラリ内のスタンドアローン版 Python を明示的に指定して Poetry 仮想環境を再構築
+# サードパーティーライブラリ内のスタンドアローン版 Python を明示的に指定して uv 仮想環境を再構築
 ## ローカル環境の Python 3.11 を使うと、組み込みの SQLite バージョンが古いことによる問題が発生する可能性がある
 ## サードパーティーライブラリ内の Python には最新の SQLite が組み込まれているため、そちらを明示的に利用すべき
 # Windows:
 Remove-Item -Recurse -Force .venv/
-poetry env use /Develop/KonomiTV/server/thirdparty/Python/python.exe
+uv sync --frozen --python /Develop/KonomiTV/server/thirdparty/Python/python.exe --all-groups
 # Linux
 rm -rf .venv/
-poetry env use /Develop/KonomiTV/server/thirdparty/Python/bin/python
+uv sync --frozen --python /Develop/KonomiTV/server/thirdparty/Python/bin/python --all-groups
 
-# 依存パッケージのインストール
-poetry install --no-root --with dev
+# 依存パッケージの同期 (開発用依存を含む)
+uv sync --frozen --all-groups
 ```
 
 ### サーバーの起動
@@ -1272,10 +1271,10 @@ Uvicorn も Akebi HTTPS Server も KonomiTV.py の起動時に透過的に同時
 cd /Develop/KonomiTV/server/
 
 # リロードモードで起動する
-poetry run task dev
+uv run task dev
 
 # 通常モードで起動する
-poetry run task serve
+uv run task serve
 ```
 
 サーバーの起動方法には、リロードモードと通常モードの2つがあります。
@@ -1321,31 +1320,31 @@ API ドキュメントは FastAPI によって自動生成されたものです�
 
 > [!WARNING]  
 > KonomiTV の Windows サービスは相当強引な手法で実装しているため (そうせざるを得なかった…) 、開発状況次第では Windows サービスでのみ動作しなくなっている可能性があります。  
-> 動作不良時は、一度 `poetry run task serve` で起動できるかや、`server/logs/KonomiTV-Server.log` 内のログを確認してみてください。
+> 動作不良時は、一度 `uv run task serve` で起動できるかや、`server/logs/KonomiTV-Server.log` 内のログを確認してみてください。
 
 > [!NOTE]  
 > KonomiTV-Service.py は、KonomiTV の Windows サービスの管理を行うユーティリティスクリプトです。  
-> `poetry run python KonomiTV-Service.py --help` と実行すると、利用できるコマンドの一覧が表示されます。
+> `uv run python KonomiTV-Service.py --help` と実行すると、利用できるコマンドの一覧が表示されます。
 
 ```powershell
 cd /Develop/KonomiTV/server/
 
 # Windows サービスのインストール
 ## インストールと同時に自動起動 (OS 起動後数分遅延してから) も設定される
-poetry run python KonomiTV-Service.py install --username (ログオン中のユーザー名) --password (ログオン中ユーザーのパスワード)
+uv run python KonomiTV-Service.py install --username (ログオン中のユーザー名) --password (ログオン中ユーザーのパスワード)
 
 # Windows サービスの起動
 ## sc start "KonomiTV Service" でも起動できる
-poetry run python KonomiTV-Service.py start
+uv run python KonomiTV-Service.py start
 
 # Windows サービスの停止
 ## sc stop "KonomiTV Service" でも停止できる
-poetry run python KonomiTV-Service.py stop
+uv run python KonomiTV-Service.py stop
 
 # Windows サービスのアンインストール
 ## アンインストールと同時に自動起動の設定も解除される
-poetry run python KonomiTV-Service.py stop  # サービスを停止してからアンインストールすること
-poetry run python KonomiTV-Service.py uninstall
+uv run python KonomiTV-Service.py stop  # サービスを停止してからアンインストールすること
+uv run python KonomiTV-Service.py uninstall
 ```
 
 #### PM2 サービス
@@ -1401,7 +1400,7 @@ yarn build
 サーバーを終了するときは、Ctrl+C を押してください。
 
 > [!WARNING]  
-> `yarn dev` でクライアントの開発サーバーを起動する際は、必ず `poetry run task dev` でサーバー側の開発サーバーも起動してください。  
+> `yarn dev` でクライアントの開発サーバーを起動する際は、必ず `uv run task dev` でサーバー側の開発サーバーも起動してください。<br>
 > クライアントの開発サーバーはフロントエンド側の静的ファイルのみをホスティングしますが、サーバー側の開発サーバーは静的ファイルの配信だけでなく、API サーバーとしての役割も兼ねています。  
 > このため、クライアントの開発サーバーのみ、クライアントからのサーバー API のアクセス先を `https://(サーバーと同じIPアドレス).local.konomi.tv:7000/` に固定しています。
 

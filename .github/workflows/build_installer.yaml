@@ -19,8 +19,8 @@ env:
   PYTHON_TAG: '20251031'
   PYTHON_MAJOR_VERSION: '3.11'
   PYTHON_VERSION: '3.11.14'
-  # Poetry のバージョン
-  POETRY_VERSION: '1.8.5'
+  # uv のバージョン
+  UV_VERSION: '0.12.18'
 
 # ジョブの定義
 jobs:
@@ -34,29 +34,23 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Python 3.11 環境をセットアップ
-      ## 事前に Runner 自体に入っている Python に Poetry をインストールしておく必要がある
-      - name: Install Poetry (for Runner)
-        run: |
-          python -m pip install poetry
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+      # uv をセットアップ
+      - name: Setup uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
-          python-version: '3.11'
-          cache: 'poetry'
-          cache-dependency-path: '${{ github.workspace }}/installer/poetry.lock'
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: 'installer/uv.lock'
 
       # インストーラーの依存関係をインストール
       - name: Install Dependencies
         working-directory: installer/
-        run: |
-          pip install poetry
-          poetry install --no-root
+        run: uv sync --frozen
 
       # インストーラーを PyInstaller でビルド
       - name: Build Installer with PyInstaller
         working-directory: installer/
-        run: poetry run task build
+        run: uv run --frozen task build
 
       # 単一実行ファイルにビルドされたインストーラーを Artifact としてアップロード
       - name: Upload Installer Executable as Artifact
@@ -110,8 +104,8 @@ jobs:
               tar xvf python.tar.gz && \
               cp -r python/* /usr/local/ && \
               rm -rf python python.tar.gz
-          # poetry をインストール
-          RUN python3.11 -m pip install poetry==${{ env.POETRY_VERSION }}
+          # uv をインストール
+          RUN python3.11 -m pip install uv==${{ env.UV_VERSION }}
           EOF
 
       # Ubuntu 20.04 の Docker イメージをビルド
@@ -138,7 +132,7 @@ jobs:
         working-directory: installer/
         run: |
           docker run --rm -i -v $(pwd):/work -w /work ubuntu:20.04-custom bash -c \
-            'poetry install --no-root && poetry run task build'
+            'uv sync --frozen --python /usr/local/bin/python${{ env.PYTHON_MAJOR_VERSION }} && uv run --frozen task build'
           if [ "${{ matrix.arch }}" == "arm64" ]; then
             echo "Renaming artifact for ARM build..."
             sudo mv dist/KonomiTV-Installer.elf dist/KonomiTV-Installer-ARM.elf

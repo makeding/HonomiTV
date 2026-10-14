@@ -128,7 +128,10 @@ class VideoEncodingTask:
         ## 音声切り替えのため、主音声・副音声両方をエンコード後の TS に含む
         if mmt_seek_seconds is not None:
             # MMT/TLV 録画では副音声が存在するとは限らず、字幕は現時点で MPEG-TS 出力へ変換できないため映像と音声だけを選ぶ
-            options.append('-map 0:v:0 -map 0:a:0 -map 0:a:1? -ignore_unknown')
+            # lavfi の無音 AAC を最後に加えることで、実副音声がなくても出力の第2音声を必ず確保する。
+            ## 実副音声がある場合は 0:a:1 が第2音声のまま残り、無音音声は第3音声になる。
+            options.append('-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000')
+            options.append('-map 0:v:0 -map 0:a:0 -map 0:a:1? -map 1:a:0 -ignore_unknown')
         else:
             options.append('-map 0:v:0 -map 0:a:0 -map 0:a:1 -map 0:d? -ignore_unknown')
 
@@ -195,6 +198,9 @@ class VideoEncodingTask:
         options.append(f'-output_ts_offset {output_ts_offset}')
 
         # 出力
+        # 無音入力は無限長のため、映像の終了に合わせて出力を終了する。
+        if mmt_seek_seconds is not None:
+            options.append('-shortest')
         options.append('-y -f mpegts')  # MPEG-TS 出力ということを明示
         options.append('pipe:1')  # 標準出力へ出力
 
@@ -236,11 +242,15 @@ class VideoEncodingTask:
             options = [
                 '-f', 'libaribtlv',
                 '-i', mmt_input_file_path,
+                # 実副音声の有無に関係なく第2 AAC を出力するための無音入力。
+                '-f', 'lavfi',
+                '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
                 # stream copy では input seek 後の RAP から要求時刻までをデコードして破棄できないため、output seek で時刻以前のパケットを除外する
                 '-ss', str(mmt_seek_seconds),
                 '-map', '0:v:0',
                 '-map', '0:a:0',
                 '-map', '0:a:1?',
+                '-map', '1:a:0',
                 '-ignore_unknown',
                 '-codec:v', 'copy',
                 '-acodec', 'aac',
@@ -250,6 +260,8 @@ class VideoEncodingTask:
                 '-ar', '48000',
                 '-af', 'volume=2.0',
                 '-output_ts_offset', str(output_ts_offset),
+                # 無限長の無音入力に引かれず、映像の終了で HLS セグメントを閉じる。
+                '-shortest',
                 '-y',
                 '-f', 'mpegts',
                 'pipe:1',
