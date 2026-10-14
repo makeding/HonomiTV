@@ -35,6 +35,7 @@ class HistoryBangumiSyncTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json(), {'items': [item]})
                 sync.assert_awaited_once()
+                assert sync.await_args is not None
                 self.assertEqual(sync.await_args.args[0], 1)
                 self.assertEqual(sync.await_args.args[1].model_dump(), progress)
                 # Web の既存設定 PUT も同じ関数へ現在位置を添える。保存 JSON に一時情報は残さない。

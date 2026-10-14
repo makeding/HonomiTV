@@ -1,4 +1,3 @@
-
 import httpx
 from fastapi import HTTPException, status
 
@@ -198,4 +197,3 @@ async def SyncHistoryPlaybackProgress(
             f'[BangumiPlaybackSync] Failed to sync current playback. [video_id: {playback_progress.video_id}]',
             exc_info = ex,
         )
-

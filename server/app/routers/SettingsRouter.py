@@ -4,6 +4,7 @@ import weakref
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
+from pydantic import Field
 
 from app import logging, schemas
 from app.config import ClientSettings, Config, SaveConfig, ServerSettings
@@ -15,7 +16,7 @@ from app.WatchedHistory import MergeWatchedHistory
 
 class ClientSettingsUpdateRequest(ClientSettings):
     # 現在の再生報告はリクエスト専用であり、保存設定や一括履歴には含めない。
-    playback_progress: schemas.HistoryPlaybackProgress | None = None
+    playback_progress: Annotated[schemas.HistoryPlaybackProgress | None, Field(default=None)]
 
 
 # ルーター

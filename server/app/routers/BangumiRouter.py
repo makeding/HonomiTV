@@ -1,4 +1,3 @@
-
 from typing import Annotated, Any, cast
 
 import httpx

@@ -6,7 +6,7 @@ import Hls from 'hls.js';
 import { Mpeg2TsPlayer } from 'mpeg2toh264/player';
 import { Deinterlacer, probeDecoder, supportsDeinterlace, type DecoderProbe } from 'mpeg2toh264/yadif';
 import mpegts from 'mpegts.js';
-import { watch } from 'vue';
+import { nextTick, watch } from 'vue';
 
 import APIClient from '@/services/APIClient';
 import OfflineVideos from '@/services/OfflineVideos';
@@ -2356,12 +2356,14 @@ class PlayerController {
 
             // 履歴同期が起きた瞬間に実プレイヤーの現在位置を読む。独立した上報は行わない。
             this.history_progress_source_cleanup?.();
+            const history_video_id = player_store.recorded_program.id;
             this.history_progress_source_cleanup = Settings.bindPlaybackProgress(() => {
                 const video = this.player?.video;
-                if (!video || player_store.is_offline_playback || !Number.isFinite(video.duration) || video.duration <= 0) {
+                if (!video || player_store.recorded_program.id !== history_video_id || player_store.is_offline_playback ||
+                    !Number.isFinite(video.duration) || video.duration <= 0 || !Number.isFinite(video.currentTime)) {
                     return null;
                 }
-                return {video_id: player_store.recorded_program.id, playback_position: video.currentTime, duration: video.duration};
+                return {video_id: history_video_id, playback_position: video.currentTime, duration: video.duration};
             });
 
             // 視聴履歴の更新処理
@@ -2388,7 +2390,6 @@ class PlayerController {
                     settings_store.settings.watched_history[history_index].last_playback_position = current_time;
                     settings_store.settings.watched_history[history_index].updated_at = Utils.time();
                     console.log(`\u001b[31m[PlayerController] Last playback position updated. (Video ID: ${video_id}, last_playback_position: ${current_time})`);
-
                 }
             });
 
@@ -3287,6 +3288,8 @@ class PlayerController {
             }
         }
 
+        // 最終履歴更新の既存 Pinia 同期が現在位置を読むまで、登録を保持する。
+        await nextTick();
         this.history_progress_source_cleanup?.();
         this.history_progress_source_cleanup = null;
 

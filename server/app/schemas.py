@@ -1007,7 +1007,7 @@ class HistoryPlaybackProgress(BangumiPlaybackProgressRequest):
     video_id: int
 
 class WatchedHistoryUpdate(WatchedHistory):
-    playback_progress: HistoryPlaybackProgress | None = None
+    playback_progress: Annotated[HistoryPlaybackProgress | None, Field(default=None)]
 
 class BangumiPlaybackProgressResponse(BaseModel):
     status: Literal['Completed', 'AlreadyCompleted', 'Pending', 'NotEligible']
