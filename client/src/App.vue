@@ -1,5 +1,7 @@
 <template>
     <v-app id="app">
+        <!-- WebKit の固定ヘッダー判定を利用し、iOS の画面上端への強制ぼかしを抑える。 -->
+        <div class="ios-top-blur-fix" aria-hidden="true"></div>
         <router-view v-slot="{ Component }">
             <component :is="Component" />
         </router-view>
@@ -133,6 +135,26 @@ html {
     // Safari は Twemoji COLR をうまく描画できない？ので当面無効にする
     @supports (-webkit-touch-callout: none) {
         font-family: 'Open Sans', 'YakuHanJPs', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+    }
+}
+
+// iOS Safari / PWA の強制ぼかし対策。描画内容もヒット領域も持たず、既存の配置を変えない。
+// ref: https://github.com/tsukumijima/KonomiTV/issues/294
+.ios-top-blur-fix {
+    display: none;
+    @supports (-webkit-touch-callout: none) {
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 11px;
+        z-index: 2147483647;
+        pointer-events: none;
+        background-color: rgb(var(--v-theme-background));
+        // 透明化では WebKit の判定対象にならないため、空の文字領域へ背景をクリップする。
+        -webkit-background-clip: text;
+        background-clip: text;
     }
 }
 

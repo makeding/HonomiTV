@@ -115,6 +115,9 @@ class PlayerController {
     private live_session_required = false;
     private initialization_generation = 0;
     private disposed = false;
+
+    // 初期化中の外部字幕確認を退出時に中止し、旧世代の応答を新しいプレイヤーへ渡さない。
+    private subtitle_discovery_abort_controller: AbortController | null = null;
     private readonly display_channel_id: string;
 
     // それぞれの PlayerManager のインスタンスのリスト
@@ -575,6 +578,29 @@ class PlayerController {
             }
         })();
 
+        // 埋め込み字幕がない録画だけ、同名 WebVTT を DPlayer の標準字幕機能へ渡す。
+        // オフライン再生はサーバーへアクセスせず、字幕の描画・切り替えは DPlayer に任せる。
+        let webvtt_subtitle_url: string | undefined;
+        if (this.playback_mode === 'Video' && player_store.is_offline_playback === false) {
+            const subtitle_path = `/videos/${player_store.recorded_program.id}/subtitles/webvtt`;
+            const abort_controller = new AbortController();
+            this.subtitle_discovery_abort_controller = abort_controller;
+            const response = await APIClient.request<void>({
+                method: 'HEAD',
+                url: subtitle_path,
+                signal: abort_controller.signal,
+                timeout: 5000,
+                validateStatus: (status) => status === 200 || status === 404,
+            });
+            if (this.subtitle_discovery_abort_controller === abort_controller) {
+                this.subtitle_discovery_abort_controller = null;
+            }
+            if (generation !== this.initialization_generation || this.disposed) return;
+            if (response.type === 'success' && response.status === 200) {
+                webvtt_subtitle_url = Utils.api_base_url + subtitle_path;
+            }
+        }
+
         // DPlayer を初期化
         const is_bs4k_live_channel = this.playback_mode === 'Live' && channels_store.channel.current.type === 'BS4K';
         this.player = new DPlayer({
@@ -703,7 +729,9 @@ class PlayerController {
                         // ラジオチャンネルは mpeg2toh264 に対応していないため、1080p 固定 (実際には映像エンコードは行われない)
                         default_quality = channels_store.channel.current.is_radiochannel === true ? '1080p' : 'Original (MPEG-2)';
                     } else {
-                        default_quality = this.quality_profile.tv_streaming_quality;
+                        // DPlayer は画質の表示名で選択するため、設定値の 60fps 名を画質リストと揃える。
+                        default_quality = this.quality_profile.tv_streaming_quality === '1080p-60fps' ?
+                            '1080p (60fps)' : this.quality_profile.tv_streaming_quality;
                     }
                     if (options.default_quality !== null) {
                         // PlayerController.init() のオプションでデフォルト画質が指定されている場合は
@@ -720,6 +748,10 @@ class PlayerController {
                         is_bs4k_channel === false
                     ) {
                         default_quality = '1080p';
+                    }
+                    // 旧設定の画質 ID がレジューム情報に残っていても、60fps の表示名へ揃える。
+                    if (default_quality === '1080p-60fps') {
+                        default_quality = '1080p (60fps)';
                     }
                     // ラジオチャンネルのみ常に 48KHz/192kbps に固定する
                     if (channels_store.channel.current.is_radiochannel) {
@@ -772,7 +804,7 @@ class PlayerController {
                         qualities.push({
                             name: PlayerController.MMT_HLS_QUALITY_NAME,
                             type: 'hls',
-                            url: `${streaming_api_base_url}/copy/playlist?session_id=${session_id}`,
+                            url: `${streaming_api_base_url}/copy/playlist?session_id=${session_id}&type=master`,
                         });
                     }
 
@@ -782,7 +814,7 @@ class PlayerController {
                         qualities.push({
                             name: PlayerController.MPEGTS_PASSTHROUGH_QUALITY_NAME,
                             type: 'hls',
-                            url: `${streaming_api_base_url}/copy/playlist?session_id=${session_id}`,
+                            url: `${streaming_api_base_url}/copy/playlist?session_id=${session_id}&type=master`,
                         });
                     }
 
@@ -807,7 +839,7 @@ class PlayerController {
                         const session_id = crypto.randomUUID().split('-')[0];
 
                         // playlist URL を構築
-                        const playlist_url = `${streaming_api_base_url}/${build_api_quality(quality_name)}/playlist?session_id=${session_id}` +
+                        const playlist_url = `${streaming_api_base_url}/${build_api_quality(quality_name)}/playlist?session_id=${session_id}&type=master` +
                                 `${is_recording_chase_playback === true ? '&recording=1' : ''}`;
 
                         // 画質設定を追加
@@ -837,7 +869,9 @@ class PlayerController {
                     } else if (this.quality_profile.video_streaming_quality === 'original') {
                         default_quality = is_original_quality_available === true ? 'Original (MPEG-2)' : original_quality_fallback;
                     } else {
-                        default_quality = this.quality_profile.video_streaming_quality;
+                        // DPlayer は画質の表示名で選択するため、設定値の 60fps 名を画質リストと揃える。
+                        default_quality = this.quality_profile.video_streaming_quality === '1080p-60fps' ?
+                            '1080p (60fps)' : this.quality_profile.video_streaming_quality;
                     }
                     // MMT/TLV 以外の録画番組で raw 直通画質のレジューム情報が残っている場合は通常画質に戻す
                     if (default_quality === PlayerController.PASSTHROUGH_PRIMARY_QUALITY_NAME && is_mmts_recorded_video === false) {
@@ -852,6 +886,10 @@ class PlayerController {
                     }
                     if (default_quality === 'Original (MPEG-2)' && is_original_quality_available === false) {
                         default_quality = original_quality_fallback;
+                    }
+                    // 利用できない直通画質からの復帰でも、設定名を表示名へ変換して選択を維持する。
+                    if (default_quality === '1080p-60fps') {
+                        default_quality = '1080p (60fps)';
                     }
 
                     const tile_info = player_store.recorded_program.recorded_video.thumbnail_info?.tile ?? null;
@@ -1018,7 +1056,8 @@ class PlayerController {
 
             // 字幕の設定
             subtitle: {
-                type: 'aribb24',
+                type: webvtt_subtitle_url !== undefined ? 'webvtt' : 'aribb24',
+                url: webvtt_subtitle_url,
             },
 
             // 再生プラグインの設定
@@ -1029,6 +1068,9 @@ class PlayerController {
                     mediaSource: 'auto',
                     // MPEG-2 を直接デコードできるブラウザ環境…もあるらしいがデインタレースができるかは不明なため、パススルーモードは使わない
                     passthrough: MPEG2TOH264_PASSTHROUGH,
+                    // 通常画質と同様に音量を上げ、5.1ch は混合時の音割れを抑える。
+                    audioGainSteps: 4,
+                    surroundAudioGainSteps: 3,
                     // ライブ放送では選択中のサービスを明示する (tsreadex がすでに選択してくれているが念のため)
                     // 録画再生では、DB に記録済みのサービス ID がある場合だけ指定する
                     serviceId: this.playback_mode === 'Live' ?
@@ -1043,7 +1085,7 @@ class PlayerController {
                         doubleRate: true,
                         // 24fps モードがオンの場合のみ、実写区間では 60fps でぬるぬる描画しつつ、
                         // 映画・アニメなど 24fps で制作された映像を自動検出し、余分なフレームを間引いて本来の動きに近づける
-                        autoFilm: this.playback_mode === 'Live' ? this.quality_profile.tv_24fps_mode : this.quality_profile.video_24fps_mode,
+                        film: this.playback_mode === 'Live' ? this.quality_profile.tv_24fps_mode : this.quality_profile.video_24fps_mode,
                     }) : undefined,
                 },
                 // mpegts.js
@@ -1085,6 +1127,9 @@ class PlayerController {
                     // startPosition に視聴履歴などから求めた再生位置を渡し、ロード開始時点で正しい Media Sequence を選択させる
                     // これを指定しないと manifest 解析後に sequence=0 からフラグメント取得が始まってしまう
                     startPosition: this.live_session_info !== null ? -1 : seek_seconds,
+                    // 副音声切替時にも同じ TS を使えるよう、通常録画は保持範囲内で先読みする。
+                    maxMaxBufferLength: this.playback_mode === 'Video' && player_store.is_offline_playback === false ?
+                        30 : Hls.DefaultConfig.maxMaxBufferLength,
                     // 追っかけ再生は EVENT playlist を使うが、視聴位置はユーザーの再生位置・視聴履歴を優先する。
                     // liveSyncDurationCount / liveMaxLatencyDurationCount を低遅延ライブ向けに詰めると、
                     // manifest 更新時に hls.js が「大きく遅延している」と判定し、現在位置から録画末尾へ飛んでしまう。
@@ -1263,7 +1308,8 @@ class PlayerController {
             if (!dplayer_instance.options.subtitle) {
                 return;
             }
-            dplayer_instance.options.subtitle.type = quality?.type === 'tlv' ? 'aribb62' : 'aribb24';
+            dplayer_instance.options.subtitle.type = webvtt_subtitle_url !== undefined ? 'webvtt' :
+                (quality?.type === 'tlv' ? 'aribb62' : 'aribb24');
         };
         const originalSwitchQuality = dplayer_instance.switchQuality.bind(dplayer_instance);
         dplayer_instance.switchQuality = (index: number): void => {
@@ -1368,7 +1414,7 @@ class PlayerController {
 
                 // MSE は AAC のサンプル境界に合わせてシーク位置をわずかに補正する場合がある
                 // DPlayer の画質切り替え完了判定が同じ位置へ戻し続けないよう、50ms 以内の補正値を現在位置として確定する
-                if (target_quality?.type === 'mpeg2toh264' && dplayer_instance.prevVideo !== null) {
+                if ((target_quality?.type === 'mpeg2toh264' || target_quality?.type === 'hls') && dplayer_instance.prevVideo !== null) {
                     const video = dplayer_instance.video;
                     const requested_time = dplayer_instance.prevVideoCurrentTime;
                     video.addEventListener('seeked', () => {
@@ -3236,6 +3282,8 @@ class PlayerController {
     /** 再起動にも使う破棄処理。画面から離れる場合は dispose() で再初期化も禁止する。 */
     public async destroy(): Promise<void> {
         ++this.initialization_generation;
+        this.subtitle_discovery_abort_controller?.abort();
+        this.subtitle_discovery_abort_controller = null;
         // 開始要求がまだ応答していなくても、後から届くセッションを無効化する。
         const release_session = this.live_session.close();
         this.live_session_info = null;
@@ -3251,6 +3299,10 @@ class PlayerController {
             return;
         }
         this.destroying = true;
+
+        // 非同期の終了処理中に DOM が外れるため、サイズ 0 の Canvas への字幕再描画を先に止める。
+        this.player?.plugins.aribb24Caption?.hide();
+        this.player?.plugins.aribb24Superimpose?.hide();
 
         // 視聴履歴の最終位置を更新
         // 現在の再生位置を取得するため、プレイヤーの破棄前に実行する必要がある

@@ -38,6 +38,13 @@ class CustomBufferController extends BufferController {
         super(hls, fragmentTracker);
         this.onCustomBufferFlushingHandler = this.onCustomBufferFlushing.bind(this);
         this.dontFlush = false;
+        // 副音声の初回取得も現在の映像位置から開始し、先頭の TS を再エンコードしない。
+        hls.on(Hls.Events.AUDIO_TRACK_UPDATED, () => {
+            const media = hls.media;
+            if (media !== null && media.readyState > 0) {
+                hls.startLoad(media.currentTime);
+            }
+        });
     }
 
 
@@ -73,7 +80,11 @@ class CustomBufferController extends BufferController {
         media.addEventListener('seeking', this.onCustomBufferFlushingHandler);
         media.addEventListener('timeupdate', this.onCustomBufferFlushingHandler);
         // SSE の接続を開始
-        this.sse = new EventSource(hls.url!.replace('playlist', 'buffer'));
+        // Master Playlist の指定を除き、既存のセッションと追更指定を維持する。
+        const bufferURL = new URL(hls.url!);
+        bufferURL.pathname = bufferURL.pathname.replace(/\/playlist$/, '/buffer');
+        bufferURL.searchParams.delete('type');
+        this.sse = new EventSource(bufferURL);
         this.sse.addEventListener('buffer_range_update', (event) => {
             this.serverBufferingRange = JSON.parse(event.data);
             console.log('[CustomBufferController] Updated Server Buffering Range:', this.serverBufferingRange);
@@ -176,6 +187,13 @@ class CustomBufferController extends BufferController {
 
         const url = new URL(hls.url!);
         url.searchParams.set('cache_key', crypto.randomUUID().split('-')[0]);
+        // Master Playlist の再読込後も、ユーザーが選んだ音声を維持する。
+        const selectedAudioTrack = hls.audioTrack;
+        hls.once(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+            if (selectedAudioTrack >= 0 && selectedAudioTrack < hls.audioTracks.length) {
+                hls.audioTrack = selectedAudioTrack;
+            }
+        });
         hls.trigger(Hls.Events.MANIFEST_LOADING, {
             url: url.toString(),
         });

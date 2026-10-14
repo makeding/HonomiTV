@@ -272,10 +272,15 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
         for (const extended_event_descriptor of extended_event_descriptors) {
             // 一応 items 内の item が複数あることを想定してループしているが、運用上は1つしか存在しないはず (?)
             for (const item of extended_event_descriptor.items) {
-                // 項目名が空の場合のみ、本文をバイナリレベルで一つ前のものにつなげてからデコードする
+                // 項目名が空なら直前の本文へつなげ、先頭の項目なら見出しなしの詳細として保持する
                 // ref: ARIB TR-B14 第四分冊 第四編 第1部 4.4.3
                 if (item.item_description_length === 0) {
-                    detail_array[detail_array.length - 1].raw_text = Buffer.concat([detail_array[detail_array.length - 1].raw_text, item.item_char]);
+                    const previous_detail = detail_array[detail_array.length - 1];
+                    if (previous_detail === undefined) {
+                        detail_array.push({head: '', raw_text: item.item_char});
+                    } else {
+                        previous_detail.raw_text = Buffer.concat([previous_detail.raw_text, item.item_char]);
+                    }
                 } else {
                     let head = ProgramUtils.formatString(new TsChar(item.item_description_char).decode());
                     // 項目名が重複する場合はタブ文字を追加して区別する
@@ -297,6 +302,10 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
             // 見出しが空の場合、固定で「番組内容」としておく
             if (head_hankaku === '') {
                 head_hankaku = '番組内容';
+            }
+            // 正規化で見出しが重複しても、どちらの本文も上書きせず表示する。
+            while (Object.prototype.hasOwnProperty.call(program.detail, head_hankaku)) {
+                head_hankaku += '\t';
             }
             // 本文
             const text_hankaku = ProgramUtils.formatString(new TsChar(detail.raw_text).decode()).trim();

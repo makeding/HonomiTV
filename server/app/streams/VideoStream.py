@@ -36,6 +36,7 @@ from app.utils.TSKeyFrameSeeker import (
     TSKeyFrameSeeker,
     TSStreamInfo,
 )
+from app.utils.TSSecondaryAudioExtractor import TSSecondaryAudioExtractor
 
 
 @dataclass
@@ -682,13 +683,18 @@ class VideoStream:
         self.__ensureVirtualSegments(playlist_duration_seconds, is_recording = True)
 
 
-    async def getVirtualPlaylist(self, cache_key: str | None = None) -> str:
+    async def getVirtualPlaylist(
+        self,
+        cache_key: str | None = None,
+        audio: Literal['primary', 'secondary'] = 'primary',
+    ) -> str:
         """
         仮想 HLS M3U8 プレイリストを取得する
         返却時点では仮想 HLS M3U8 プレイリストに記載されているセグメントのデータは存在せず (「仮想」のゆえん)、随時エンコードされる
 
         Args:
             cache_key (str | None): キャッシュ制御用のキー (None の場合は新しいキーを生成する)
+            audio (Literal['primary', 'secondary']): 配信する音声トラック
 
         Returns:
             str: 仮想 HLS M3U8 プレイリスト
@@ -734,8 +740,10 @@ class VideoStream:
                 virtual_playlist += '#EXT-X-GAP\n'
             # セグメントの長さ (秒, 小数点以下6桁まで)
             virtual_playlist += f'#EXTINF:{segment.duration_seconds:.6f},\n'
-            # キャッシュ避けのためにキャッシュキーを付与する
-            virtual_playlist += f'segment?session_id={self.session_id}&sequence={segment.sequence_index}&cache_key={cache_key}\n'
+            # キャッシュ避けのためにキャッシュキーを付与する。
+            # 副音声は同じエンコード済み TS から取り出すため、生成セッションやシーケンスは主音声と共有する。
+            audio_query = '&audio=secondary' if audio == 'secondary' else ''
+            virtual_playlist += f'segment?session_id={self.session_id}&sequence={segment.sequence_index}&cache_key={cache_key}{audio_query}\n'
 
         if self.recorded_program.recorded_video.status != 'Recording':
             virtual_playlist += '#EXT-X-ENDLIST\n'
@@ -1053,7 +1061,11 @@ class VideoStream:
             logging.warning(f'{self.log_prefix} Failed to save segment map entries:', exc_info=ex)
 
 
-    async def getSegment(self, segment_sequence: int) -> bytes | None:
+    async def getSegment(
+        self,
+        segment_sequence: int,
+        audio: Literal['primary', 'secondary'] = 'primary',
+    ) -> bytes | None:
         """
         エンコードされた HLS セグメントを取得する
         呼び出された時点でエンコードされていない場合は既存のエンコードタスクを終了し、
@@ -1061,9 +1073,13 @@ class VideoStream:
 
         Args:
             segment_sequence (int): HLS セグメントのシーケンス番号 (self.segments のインデックスと一致する)
+            audio (Literal['primary', 'secondary']): 配信する音声トラック
 
         Returns:
-            bytes | None: HLS セグメントとしてエンコードされた MPEG-TS ストリーム (シーケンス番号が不正な場合は None)
+            bytes | None: HLS セグメントとしてエンコードされた MPEG-TS ストリーム (シーケンス番号が不正または中断時は None)
+
+        Raises:
+            RuntimeError: エンコーダーが空のセグメントで終了した場合
         """
 
         # セッションのアクティブ状態を維持する
@@ -1172,8 +1188,18 @@ class VideoStream:
                         self.__registerVideoEncodingTaskRef(self._video_encoding_task_ref)
                         logging.info(f'{self.log_prefix}[Segment {encoding_start_sequence}] New Encoding Task Started.')
 
-            # セグメントデータの Future が完了したらそのデータを返す
-            encoded_segment_ts = await asyncio.shield(segment.encoded_segment_ts_future)
+            # seek / destroy 中の Future 交換と異なり、空データの正常完了はエンコーダー失敗として応答へ伝える。
+            segment_future = segment.encoded_segment_ts_future
+            encoded_segment_ts = await asyncio.shield(segment_future)
+            if len(encoded_segment_ts) == 0:
+                if self._is_destroyed is True or segment.encoded_segment_ts_future is not segment_future:
+                    return None
+                raise RuntimeError(f'Encoded segment is empty. [sequence: {segment_sequence}]')
+
+            # 副音声は同じ生成結果を共有し、HTTP 応答直前だけ単一音声の TS に整形する。
+            result_segment_ts = encoded_segment_ts
+            if audio == 'secondary':
+                result_segment_ts = TSSecondaryAudioExtractor.extract(encoded_segment_ts)
             segment.is_encoded_segment_ts_future_readed = True
 
             # 読み取り済みのセグメントが MAX_READED_SEGMENTS 個以上ある場合、一番古いセグメントのデータを初期化する
@@ -1184,7 +1210,7 @@ class VideoStream:
                 await oldest_segment.resetState()
                 logging.info(f'{self.log_prefix}[Segment {oldest_segment.sequence_index}] Reset segment data to free memory.')
 
-            return encoded_segment_ts
+            return result_segment_ts
         finally:
             # 並行リクエスト数をデクリメント
             self._active_segment_requests -= 1
