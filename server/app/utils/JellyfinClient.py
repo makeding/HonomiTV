@@ -52,7 +52,8 @@ class JellyfinClient:
 
     @classmethod
     def _authorization_headers(cls) -> dict[str, str]:
-        # Jellyfin の認証情報はこのヘッダーにだけ載せ、URL クエリへ api_key を追加しない。
+        # Jellyfin 12 で削除された旧ヘッダーを使わず、ログインを含む全リクエストで標準の Authorization を使う。
+        # 認証情報はこのヘッダーにだけ載せ、URL クエリへ api_key を追加しない。
         authorization = (
             'MediaBrowser Client="HonomiTV", Device="HonomiTV Server", '
             f'DeviceId="konomitv-server", Version="{VERSION}"'
@@ -61,7 +62,6 @@ class JellyfinClient:
             authorization += f', Token="{cls._access_token}"'
         return {
             'Accept': 'application/json',
-            'X-Emby-Authorization': authorization,
             'Authorization': authorization,
         }
 
@@ -79,13 +79,7 @@ class JellyfinClient:
                 async with HTTPX_CLIENT() as client:
                     response = await client.post(
                         f'{cls._base_url()}/Users/AuthenticateByName',
-                        headers={
-                            'Accept': 'application/json',
-                            'X-Emby-Authorization': (
-                                'MediaBrowser Client="HonomiTV", Device="HonomiTV Server", '
-                                f'DeviceId="konomitv-server", Version="{VERSION}"'
-                            ),
-                        },
+                        headers=cls._authorization_headers(),
                         json={'Username': config.username, 'Pw': config.password},
                         timeout=10,
                     )

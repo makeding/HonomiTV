@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -49,6 +50,40 @@ class JellyfinClientTest(unittest.IsolatedAsyncioTestCase):
             await JellyfinClient._authenticate()  # pyright: ignore[reportPrivateUsage]
             self.assertEqual(client.post.await_args.kwargs['json'], {'Username': 'user', 'Pw': ''})
             self.assertEqual(JellyfinClient._access_token, 'test-token')  # pyright: ignore[reportPrivateUsage]
+
+    async def test_cold_start_uses_standard_authorization_when_legacy_headers_are_unsupported(self) -> None:
+        config = self._config()
+        config.password = ''
+        requests: list[httpx.Request] = []
+
+        # Jellyfin 12 と同じく旧ヘッダーだけの認証を拒否し、ログイン後のトークンも実リクエストで確認する。
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            authorization = request.headers.get('Authorization', '')
+            if not authorization.startswith('MediaBrowser '):
+                return httpx.Response(400, text='Error processing request.')
+            self.assertNotIn('X-Emby-Authorization', request.headers)
+            for field in ('Client', 'Device', 'DeviceId', 'Version'):
+                self.assertIn(f'{field}="', authorization)
+            if request.url.path == '/Users/AuthenticateByName':
+                self.assertNotIn('Token=', authorization)
+                self.assertEqual(request.content, b'{"Username":"user","Pw":""}')
+                return httpx.Response(200, json={'AccessToken': 'test-token', 'User': {'Id': 'test-user'}})
+            self.assertEqual(request.url.path, '/LiveTv/Channels')
+            self.assertIn('Token="test-token"', authorization)
+            self.assertEqual(request.url.params['UserId'], 'test-user')
+            self.assertNotIn('api_key', request.url.params)
+            return httpx.Response(200, json={'Items': [{'Id': 'channel', 'Name': 'ネットテレビ'}]})
+
+        with (
+            patch('app.utils.JellyfinClient.GetJellyfinConfig', return_value=config),
+            patch('app.utils.JellyfinClient.HTTPX_CLIENT', side_effect=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handle_request))),
+            patch.object(JellyfinClient, '_access_token', None),
+            patch.object(JellyfinClient, '_user_id', None),
+        ):
+            channels = await JellyfinClient.get_channels()
+        self.assertEqual(channels, [{'Id': 'channel', 'Name': 'ネットテレビ'}])
+        self.assertEqual(len(requests), 2)
 
     async def test_playback_info_authenticates_before_building_user_id_and_uses_streaming_context(self) -> None:
         async def authenticate() -> None:
