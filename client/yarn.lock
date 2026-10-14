@@ -4933,7 +4933,8 @@ mitt@^3.0.1:
 
 "mpeg2toh264@github:tsukumijima/mpeg2toh264#69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1":
   version "0.0.1"
-  resolved "https://codeload.github.com/tsukumijima/mpeg2toh264/tar.gz/69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1"
+  resolved "https://codeload.github.com/tsukumijima/mpeg2toh264/tar.gz/69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1#732101f9f9e5a91cabeff842d69f5357d64881ea"
+  integrity sha512-gUlJ/A1FGQN9xx+eTyAsuXCdljaF3wC4FmTF2cI2WHpVuiDAEs4K++MMAHqfzVwl7w+oTSef/h1VZ67Jsc1CTA==
 
 mpegts.js@^1.7.3, "mpegts.js@github:tsukumijima/mpegts.js#bf4e49d0ff004cf7546237393a62c66e4b926dca":
   version "1.8.0"
