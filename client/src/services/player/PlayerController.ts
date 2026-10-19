@@ -18,6 +18,7 @@ import KeyboardShortcutManager from '@/services/player/managers/KeyboardShortcut
 import LiveCommentManager from '@/services/player/managers/LiveCommentManager';
 import LiveDataBroadcastingManager from '@/services/player/managers/LiveDataBroadcastingManager';
 import LiveEventManager from '@/services/player/managers/LiveEventManager';
+import LiveHistoryManager from '@/services/player/managers/LiveHistoryManager';
 import LiveSessionPlaybackManager from '@/services/player/managers/LiveSessionPlaybackManager';
 import MediaSessionManager from '@/services/player/managers/MediaSessionManager';
 import RecordedCMSkipManager from '@/services/player/managers/RecordedCMSkipManager';
@@ -1621,6 +1622,7 @@ class PlayerController {
         if (this.playback_mode === 'Live') {
             // ライブ視聴時に設定する PlayerManager
             this.player_managers = [
+                new LiveHistoryManager(this.player),
                 ...(this.live_session_info !== null ? [new LiveSessionPlaybackManager(this.player, (reason) => {
                     // DPlayer 自体は残し、標準の通知と再起動ボタンを使う。
                     void this.live_session.close();

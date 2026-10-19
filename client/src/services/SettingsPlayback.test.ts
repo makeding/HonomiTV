@@ -18,6 +18,15 @@ afterEach(() => {
 });
 
 describe('既存の履歴クラウド同期だけで現在位置を送る', () => {
+    it('ライブは録画 ID や完了時間を捏造せず既存設定 PUT に添える', async () => {
+        const progress = {channel_id: 'NID4-SID101', playback_time: 1234567890};
+        expect(await Settings.updateClientSettings(settings, progress)).toBe(true);
+        expect(APIClient.put).toHaveBeenCalledTimes(1);
+        expect(APIClient.put).toHaveBeenCalledWith('/settings/client', {
+            ...settings, playback_progress: null, live_playback_progress: progress,
+        });
+    });
+
     it('登録自体は通信せず、既存の PUT に現在位置を添える', async () => {
         cleanups.push(Settings.bindPlaybackProgress(() => ({video_id: 1, playback_position: 1205, duration: 1807})));
         expect(APIClient.put).not.toHaveBeenCalled();

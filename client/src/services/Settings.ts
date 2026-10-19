@@ -196,6 +196,11 @@ export interface IHistoryPlaybackProgress {
     duration: number;
 }
 
+export interface ILiveHistoryPlaybackProgress {
+    channel_id: string;
+    playback_time: number;
+}
+
 class Settings {
 
     // 再生中の時間軸だけを既存の設定・履歴同期へ添付する。追加の API やタイマーは作らない。
@@ -236,7 +241,7 @@ class Settings {
      * @param settings クライアント設定
      * @return 成功した場合は true
      */
-    static async updateClientSettings(settings: IClientSettings): Promise<boolean> {
+    static async updateClientSettings(settings: IClientSettings, live_progress: ILiveHistoryPlaybackProgress | null = null): Promise<boolean> {
 
         // API リクエストを実行
         const progress = Settings.playback_progress_source?.() ?? null;
@@ -245,6 +250,7 @@ class Settings {
             progress : null;
         const response = await APIClient.put<IClientSettings>('/settings/client', {
             ...settings, playback_progress,
+            ...(live_progress !== null ? {live_playback_progress: live_progress} : {}),
         });
 
         // 設定同期は再生や画面操作を妨げない補助処理なので、通信失敗や更新競合は次回の同期へ委ねる

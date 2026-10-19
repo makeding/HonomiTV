@@ -1008,6 +1008,12 @@ class HistoryPlaybackProgress(BangumiPlaybackProgressRequest):
 
 class WatchedHistoryUpdate(WatchedHistory):
     playback_progress: Annotated[HistoryPlaybackProgress | None, Field(default=None)]
+    live_playback_progress: Annotated[LiveHistoryPlaybackProgress | None, Field(default=None)]
+
+class LiveHistoryPlaybackProgress(BaseModel):
+    # 表示用 ID ではなく、録画番組の channel_id と同じ放送チャンネル ID を受け取る。
+    channel_id: Annotated[str, Field(min_length=1)]
+    playback_time: Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 class BangumiPlaybackProgressResponse(BaseModel):
     status: Literal['Completed', 'AlreadyCompleted', 'Pending', 'NotEligible']

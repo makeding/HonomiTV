@@ -41,27 +41,51 @@ class CMSectionsDetectorPolicyTest(unittest.TestCase):
         self.assertTrue(CMSectionsDetector.shouldAnalyze('MMT/TLV', True, 'Fallback'))
 
 
-    def test_logo_absence_candidates_require_more_than_nine_seconds_after_recording_start(self) -> None:
-        """冒頭のロゴ非表示と、9秒以下の一時的な消失は CM 候補にしない。"""
+    def test_long_opening_and_later_logo_absence_become_cm_sections(self) -> None:
+        """冒頭も途中と同じ長さ条件で CM 候補と最終区間に残る。"""
 
         detector = CMSectionsDetector(
             file_path=anyio.Path('recorded.ts'),
-            duration_sec=60.0,
+            duration_sec=146.0,
             container_format='MPEG-TS',
         )
-        # 冒頭12秒はロゴ無し、その後は表示、30秒以降に15秒以上のロゴ消失を置く。
-        ## 0.5秒サンプリングで、冒頭区間を除外しつつ後半の長い消失だけ残ることを確認する。
+        # 冒頭と末尾に40秒のロゴ消失を置き、途中の6秒の消失は除外する。
+        ## 実際の平滑化から最終区間の長さフィルタまで通し、冒頭 CM が保持されることを確認する。
         presence = np.concatenate((
-            np.zeros(24, dtype=np.float32),
-            np.ones(36, dtype=np.float32),
-            np.zeros(32, dtype=np.float32),
+            np.zeros(80, dtype=np.float32),
+            np.ones(60, dtype=np.float32),
+            np.zeros(12, dtype=np.float32),
+            np.ones(60, dtype=np.float32),
+            np.zeros(80, dtype=np.float32),
         ))
 
         intervals = detector._CMSectionsDetector__findLogoAbsentIntervals(presence)
+        sections = detector._CMSectionsDetector__buildCMSections(intervals, [])
 
-        self.assertEqual(len(intervals), 1)
-        self.assertGreater(intervals[0][0], 0.0)
-        self.assertGreater(intervals[0][1] - intervals[0][0], 9.0)
+        self.assertEqual(len(intervals), 2)
+        self.assertEqual(intervals[0][0], 0.0)
+        self.assertGreater(intervals[1][0], 100.0)
+        self.assertEqual(len(sections), 2)
+        self.assertEqual(sections[0]['start_time'], 0.0)
+
+
+    def test_short_opening_and_later_logo_absence_are_excluded(self) -> None:
+        """冒頭の特例をなくしても、短いロゴ消失は既存の長さ条件で除外される。"""
+
+        detector = CMSectionsDetector(
+            file_path=anyio.Path('recorded.ts'),
+            duration_sec=72.0,
+            container_format='MPEG-TS',
+        )
+        # 冒頭と途中に6秒のロゴ消失を置き、どちらも候補にならないことを確認する。
+        presence = np.concatenate((
+            np.zeros(12, dtype=np.float32),
+            np.ones(60, dtype=np.float32),
+            np.zeros(12, dtype=np.float32),
+            np.ones(60, dtype=np.float32),
+        ))
+
+        self.assertEqual(detector._CMSectionsDetector__findLogoAbsentIntervals(presence), [])
 
 
 class CMSectionsDetectorConcurrencyTest(unittest.IsolatedAsyncioTestCase):

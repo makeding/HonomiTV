@@ -1,4 +1,58 @@
+from datetime import datetime
+from time import time
 from typing import Any
+
+from tortoise.timezone import get_default_timezone
+
+from app import schemas
+from app.models.RecordedProgram import RecordedProgram
+
+
+async def ResolveLiveWatchedHistory(progress: schemas.LiveHistoryPlaybackProgress | None) -> list[dict[str, Any]]:
+    """
+    ライブ映像の放送時刻を、同じ番組を保存した録画の再開位置に変換する。
+
+    Args:
+        progress (schemas.LiveHistoryPlaybackProgress | None): 実際に進行した映像のチャンネルと放送時刻。
+
+    Returns:
+        list[dict[str, Any]]: 入庫済みの対応録画だけに対する視聴履歴。
+    """
+
+    # 未入庫や欠損メタデータは次回のチェックポイントに任せ、架空の録画・開始時刻を作らない。
+    if progress is None:
+        return []
+    now = time()
+    if progress.playback_time > now:
+        return []
+    try:
+        picture_time = datetime.fromtimestamp(progress.playback_time, get_default_timezone())
+    except (ValueError, OverflowError, OSError):
+        return []
+    recordings = await RecordedProgram.filter(
+        channel_id=progress.channel_id, start_time__lte=picture_time, end_time__gt=picture_time,
+        recorded_video__status__in=['Recording', 'Recorded'],
+    ).prefetch_related('recorded_video')
+    items: list[dict[str, Any]] = []
+    for program in recordings:
+        video = program.recorded_video
+        start = video.recording_start_time
+        if start is None or picture_time < start:
+            continue
+        position = (picture_time - start).total_seconds()
+        # 録画中の duration は解析時点の値であるため、伸び続ける現在位置の上限には使わない。
+        if video.status == 'Recorded':
+            if video.duration <= 0:
+                continue
+            position = min(position, video.duration)
+            if video.recording_end_time is not None:
+                position = min(position, max(0.0, (video.recording_end_time - start).total_seconds()))
+        # 並行する別端末との順序には受信時刻でなく、実際に観測した映像時刻を使う。
+        items.append(schemas.WatchedHistoryItem(
+            video_id=program.id, last_playback_position=position,
+            created_at=progress.playback_time, updated_at=progress.playback_time,
+        ).model_dump())
+    return items
 
 
 def MergeWatchedHistory(

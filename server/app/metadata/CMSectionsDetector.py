@@ -624,7 +624,7 @@ class CMSectionsDetector:
         # ロゴあり割合が一定を下回る (=ロゴが消え続けている) サンプルを CM 候補とする
         is_absent = smoothed < self.LOGO_ABSENT_FRACTION
 
-        # 連続する CM 候補サンプルを1つの区間にまとめ、長さと録画冒頭かどうかを確認する
+        # 連続する CM 候補サンプルを1つの区間にまとめ、長さを確認する
         intervals: list[list[float]] = []
         index = 0
         sample_count = len(is_absent)
@@ -636,9 +636,9 @@ class CMSectionsDetector:
                 start_time = index / self.SAMPLE_FPS
                 end_time = (end_index - 1) / self.SAMPLE_FPS
                 duration = end_time - start_time
-                # 録画開始時点ですでにロゴが無い区間は判定材料にせず、9秒を超える消失だけを残す。
-                ## これにより冒頭のロゴ非表示や極限背景での短い誤判定が CM 候補にならない。
-                if start_time > 0.0 and duration > self.MIN_LOGO_ABSENT_DURATION:
+                # 録画冒頭も途中と同じく、9秒を超えるロゴ消失だけを CM 候補として残す。
+                ## 極限背景などによる短い誤判定は長さで除外し、冒頭の CM を一律に見落とさない。
+                if duration > self.MIN_LOGO_ABSENT_DURATION:
                     intervals.append([start_time, end_time])
                 index = end_index
             else:

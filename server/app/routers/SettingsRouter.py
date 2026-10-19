@@ -11,12 +11,13 @@ from app.config import ClientSettings, Config, SaveConfig, ServerSettings
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser, GetCurrentUser
 from app.utils.BangumiPlaybackSync import SyncHistoryPlaybackProgress
-from app.WatchedHistory import MergeWatchedHistory
+from app.WatchedHistory import MergeWatchedHistory, ResolveLiveWatchedHistory
 
 
 class ClientSettingsUpdateRequest(ClientSettings):
     # 現在の再生報告はリクエスト専用であり、保存設定や一括履歴には含めない。
     playback_progress: Annotated[schemas.HistoryPlaybackProgress | None, Field(default=None)]
+    live_playback_progress: Annotated[schemas.LiveHistoryPlaybackProgress | None, Field(default=None)]
 
 
 # ルーター
@@ -96,9 +97,11 @@ async def ClientSettingsUpdateAPI(
         ## Pydantic モデルのままだと JSON にシリアライズできないので怒られる
         updated_settings = dict(client_settings)
         updated_settings.pop('playback_progress', None)
+        updated_settings.pop('live_playback_progress', None)
+        live_items = await ResolveLiveWatchedHistory(client_settings.live_playback_progress)
         updated_settings['watched_history'] = MergeWatchedHistory(
             current_client_settings.watched_history,
-            client_settings.watched_history,
+            client_settings.watched_history + live_items,
             client_settings.video_watched_history_max_count,
         )
         current_user.client_settings = updated_settings
@@ -160,9 +163,11 @@ async def WatchedHistoryUpdateAPI(
     async with lock:
         await current_user.refresh_from_db(fields=['client_settings'])
         client_settings = ClientSettings.model_validate(current_user.client_settings)
+        # ライブ視聴開始時に録画が未入庫でも、毎回 DB を解決して途中入庫を取り込む。
+        live_items = await ResolveLiveWatchedHistory(watched_history.live_playback_progress)
         merged_history = MergeWatchedHistory(
             client_settings.watched_history,
-            [item.model_dump() for item in watched_history.items],
+            [item.model_dump() for item in watched_history.items] + live_items,
             client_settings.video_watched_history_max_count,
         )
         updated_settings = dict(client_settings)

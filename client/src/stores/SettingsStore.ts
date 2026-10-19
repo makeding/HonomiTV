@@ -5,7 +5,7 @@ import { toRaw } from 'vue';
 
 import type { IBlueskyReplyThreadState, ITwitterReplyThreadState } from '@/utils/TweetUtils';
 
-import Settings, { IClientSettings, IMutedCommentKeywords } from '@/services/Settings';
+import Settings, { IClientSettings, ILiveHistoryPlaybackProgress, IMutedCommentKeywords } from '@/services/Settings';
 import Utils from '@/utils';
 
 
@@ -737,7 +737,7 @@ const useSettingsStore = defineStore('settings', {
          * ログイン時かつ同期が有効な場合、このクライアントの設定をサーバーに同期する
          * @param force ログイン中なら同期が有効かに関わらず実行する (デフォルト: false)
          */
-        async syncClientSettingsToServer(force: boolean = false): Promise<void> {
+        async syncClientSettingsToServer(force: boolean = false, live_progress: ILiveHistoryPlaybackProgress | null = null): Promise<void> {
 
             // ログインしていない時、同期が無効なときは実行しない
             if (Utils.getAccessToken() === null || (this.settings.sync_settings === false && force === false)) {
@@ -762,7 +762,7 @@ const useSettingsStore = defineStore('settings', {
             // サーバーに設定データをアップロード
             // このとき同一の最終同期時刻をサーバー側にも保管することで、サーバーから新しい設定データを同期する際に
             // 古い設定データへの巻き戻しが発生するのを防ぐ
-            const success = await Settings.updateClientSettings(sync_settings);
+            const success = await Settings.updateClientSettings(sync_settings, live_progress);
 
             // 設定データの同期に成功した場合のみ、最終同期時刻を実際のクライアント設定 (this.settings) に反映
             // 当然ここで反映した最終同期時刻は LocalStorage にも記録される

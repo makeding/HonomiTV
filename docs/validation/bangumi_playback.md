@@ -12,8 +12,25 @@
 
 ## Acceptance
 
+### Live viewing history
+
+- Web and Android TV send the canonical broadcast channel ID and the wall-clock time of the advancing live picture as optional `live_playback_progress: {channel_id, playback_time}` (Unix seconds). Web attaches it to the existing `PUT /api/settings/client` and reads history through the existing settings pull; TV uses `PUT /api/settings/client/watched-history`. No second progress upload is added. Checkpoints run every 10 seconds of active playback, with the last observed checkpoint saved on pause/exit/channel switch. Paused, buffering and failed playback do not advance history.
+- The server resolves recordings on that channel whose programme interval contains the picture time. Both `Recording` and `Recorded` rows qualify; a recording inserted after live playback starts is discovered by the next checkpoint. Unrecorded programmes create no history. Programme transitions use the picture time, including live buffer delay, rather than the latest EPG card.
+- Resume positions are relative to the actual `recording_start_time`, including recording margins and partial recordings, and require a known start time. An unfinished recording's scanned duration must not truncate live progress. Completed recordings clamp to their actual recorded end/duration. Existing history limits, per-user ownership and last-update merge rules apply. Old clients and bulk-history payloads retain their existing behavior.
+- This saves recording history only. Live checkpoints do not invoke Bangumi completion or fabricate a completed-recording duration. No schema migration, external provider write, new UI or historical backfill is included.
+- The initial picture wall-clock is estimated from device time minus buffered media; subsequent checkpoints follow actual media-time advancement. This does not claim frame-accurate broadcast-clock synchronization and assumes a correctly synchronized device clock.
+- Web respects the existing account/settings-sync opt-out. A playback session's pending checkpoint and response must not move into another account after logout or account switching.
+- Verify authenticated settings/history PUT/GET using real SQLite rows: no recording, late insertion, recording margins/partial recording, missing start, completed recording, channel/programme transitions, invalid reports and independent users. Verify Web/TV media-time tracking, payloads and final checkpoints. Isolated HTTP regression is distinct from user-managed server, browser live-stream and physical-TV acceptance.
+
 - Exercise authenticated PUT /api/settings/client and PUT /api/settings/client/watched-history (plus the retained compatibility POST /api/bangumi/videos/{id}/progress) for CS333 single episodes and explicit 1-6 / 7-12 ranges at just below and exactly 20-minute slot thresholds, slot transitions, seeks, duplicate updates and unresolved mappings.
 - Preserve ordinary CM/90% results, authentication, provider failure propagation and cross-season resolution.
 - Run server lint/type checks, direct policy/API regression tests, Web lint/type checks and TV history payload tests/compile. Report isolated HTTP tests separately from user-managed API and actual Bangumi-account/device acceptance.
 
 - The old Bangumi progress POST remains only for released clients (same owner/dependency/removal condition/deadline as the threshold field). Updated Web and TV clients have no call to it; all entry points delegate to the same owning backend service.
+
+## Live history verification (2026-10-18)
+
+- Passed 6 isolated server HTTP regressions (5 live-history cases plus the existing history/Bangumi isolation case), using real in-memory SQLite, real JWT authentication and both Web settings / TV history PUT entry points with complete readback.
+- Passed 12 focused Web tests covering payloads, media-time clocks, lifecycle checkpoints, pending-save conflation and account/sync boundaries; `yarn lint` and `yarn typecheck` passed.
+- Ruff passed; focused Pyright for `WatchedHistory.py`, `SettingsRouter.py` and `schemas.py` passed. Full `uv run task lint` still reports the existing unrelated `TwitterScrapeBrowser.py:1849` unnecessary `isinstance` error.
+- The user-managed API was not running locally. No service was started/restarted, and browser live-stream / physical Android TV acceptance and deployment remain unverified.
