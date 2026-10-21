@@ -112,8 +112,8 @@ export class PlayerUtils {
 
     /**
      * Network Information API から現在接続されているネットワーク回線の種類を取得する
-     * navigator.connection.type が利用できない場合は null を返す
-     * "Wi-Fi" には Cellular 以外のすべてのネットワークが含まれる
+     * navigator.connection.type が利用できない場合や unknown の場合は null を返す
+     * "Wi-Fi" には種別を取得できた Cellular 以外のネットワークが含まれる
      * @returns ネットワークの種類 (Wi-Fi / Cellular)、取得できなかった場合は null
      */
     static getNetworkCircuitType(): 'Wi-Fi' | 'Cellular' | null {
@@ -121,10 +121,10 @@ export class PlayerUtils {
             switch (navigator.connection.type) {
                 case 'cellular':
                     return 'Cellular';
-                // 複数の Android 端末での検証の結果、モバイル回線 (4G/5G) に接続されているにも関わらず "unknown" が返されることがある
-                // 一方 Wi-Fi 接続時は確実に "wi-fi" が返されるため、"unknown" の場合は "Cellular" として扱う
+                // unknown は Wi-Fi 接続時にも返されうるため、モバイル回線と推測しない。
+                // PlayerController は不明な回線に Wi-Fi 向け設定を使い、480p / HEVC の誤適用を防ぐ。
                 case 'unknown':
-                    return 'Cellular';
+                    return null;
                 default:
                     return 'Wi-Fi';
             }

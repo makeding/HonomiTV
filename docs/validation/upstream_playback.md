@@ -11,6 +11,7 @@
 ## Observable playback contract
 
 - Selecting 1080p (60fps) uses that quality for live and recorded playback; it must not fall back to the first quality because of a display-name mismatch. Explicit resume choices remain authoritative.
+- Automatically select the mobile quality profile only when `navigator.connection.type` explicitly reports `cellular`. An `unknown` or unavailable connection type uses the Wi-Fi profile in both live and recorded playback, without inferring cellular service from `effectiveType` or enabling the mobile defaults (480p / HEVC data saver). An explicit in-player profile selection remains authoritative until leaving the watch screen.
 - Metadata changes before video duration is known do not throw MediaSession exceptions. Leaving the player stops caption rendering before asynchronous teardown.
 - Closing Document Picture-in-Picture resumes frame delivery only when playback was active and teardown has not started. A paused video stays paused.
 - EPG details whose first item has no heading remain visible. Normalizing duplicate headings never discards either item's text.
