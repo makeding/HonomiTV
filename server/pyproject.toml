@@ -2,7 +2,7 @@
 name = "KonomiTV"
 version = "0.14.1"
 description = "KonomiTV: Kept Organized, Notably Optimized, Modern Interface TV media server"
-requires-python = ">=3.11.4,<3.12"
+requires-python = ">=3.11.4,<3.15"
 dependencies = [
     "aerich==0.9.1",
     "aiofiles>=24.1.0,<25",
@@ -73,7 +73,7 @@ src_folder = "./"
 [tool.ruff]
 # インデントの幅を4スペースに設定
 indent-width = 4
-# Python 3.11 を利用する
+# サポートする最小 Python バージョン (3.11.4) を利用する
 target-version = "py311"
 # data/, thirdparty/ ディレクトリは対象から除外する
 extend-exclude = ["data/", "thirdparty/"]
@@ -101,7 +101,7 @@ lines-after-imports = 2
 
 [tool.pyright]
 # Python バージョンを指定
-pythonVersion = "3.11"
+pythonVersion = "3.14"
 # Pyright 実行時に server/.venv/ を確実に参照させる
 # この設定により Codex サンドボックス上から Pyright を実行すると依存関係を解決できない問題を回避できる
 venvPath = "."

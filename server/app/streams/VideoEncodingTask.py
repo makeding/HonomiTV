@@ -1742,19 +1742,18 @@ class VideoEncodingTask:
             self._tsreadex_feed_task = None
             logging.debug(f'{self.video_stream.log_prefix} Final cleanup completed.')
 
-            # このエンコードタスクがキャンセルされている場合は何もしない
-            if self._is_cancelled is True:
-                return
+            # キャンセル済みのタスクには完了セグメントを通知せず、完了状態にも遷移させない
+            ## finally から return すると Python 3.14 で例外を抑制するため、以降の正常終了処理だけを条件化する
+            if self._is_cancelled is False:
+                # 最後のセグメントが完了していない場合は、現在のバッファを future にセット
+                if current_segment is not None and not current_segment.encoded_segment_ts_future.done():
+                    current_segment.encoded_segment_ts_future.set_result(bytes(encoded_segment))
+                    current_segment.encode_status = 'Completed'
+                    logging.info(f'{self.video_stream.log_prefix}[Segment {current_sequence}] Successfully Encoded Final HLS Segment.')
 
-            # 最後のセグメントが完了していない場合は、現在のバッファを future にセット
-            if current_segment is not None and not current_segment.encoded_segment_ts_future.done():
-                current_segment.encoded_segment_ts_future.set_result(bytes(encoded_segment))
-                current_segment.encode_status = 'Completed'
-                logging.info(f'{self.video_stream.log_prefix}[Segment {current_sequence}] Successfully Encoded Final HLS Segment.')
-
-            # エンコードタスクでのすべての処理を完了した
-            self._is_finished = True
-            logging.info(f'{self.video_stream.log_prefix} Finished the Encoding Task.')
+                # エンコードタスクでのすべての処理を完了した
+                self._is_finished = True
+                logging.info(f'{self.video_stream.log_prefix} Finished the Encoding Task.')
 
 
     def cancel(self) -> None:
