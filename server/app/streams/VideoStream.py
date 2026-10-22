@@ -665,9 +665,18 @@ class VideoStream:
         if self._ts_source_base_dts is None and snapshot.source_base_dts is not None:
             self._ts_source_base_dts = snapshot.source_base_dts
 
+        # 現時点でメディア内時刻を継続追跡できるのは MPEG-TS だけ。
+        ## MPEG-4 / MMT/TLV は DB の既知 duration を維持し、ファイルサイズや壁時計から再生可能時刻を推測しない。
+        if recorded_video.container_format != 'MPEG-TS':
+            return playlist_duration_seconds
+
         # tracker の推定値は「末尾 PCR までは読めそう」という値であり、HLS セグメントとして安定して配れる境界とは限らない。
         ## 追いかけ再生では後端 playlist を常に 2 セグメント分遅らせ、書き込み中の末尾へ到達しないようにする。
-        recording_playlist_duration_seconds = max(playlist_duration_seconds, snapshot.available_duration_seconds)
+        recording_playlist_duration_seconds = (
+            snapshot.available_duration_seconds
+            if snapshot.is_timeline_ready is True
+            else playlist_duration_seconds if snapshot.is_metadata_fallback_valid is True else 0.001
+        )
         recording_playlist_edge_buffer_seconds = self._segment_duration_seconds * self.RECORDING_PLAYLIST_EDGE_BUFFER_SEGMENTS
         return max(recording_playlist_duration_seconds - recording_playlist_edge_buffer_seconds, 0.001)
 

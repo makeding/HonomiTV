@@ -256,12 +256,23 @@ const removeFromWatchedHistory = () => {
 
 // オフライン保存サムネイルの読み込み失敗時はサーバー側サムネイルへ切り替える
 const shouldUseServerThumbnail = ref(false);
+// 録画中カードは同じ URL のままなので、一覧の定期更新ごとにだけ再検証する世代番号を保持する
+const recordingThumbnailRevision = ref(0);
 watch(() => [props.offlineVideo?.generation_id, props.program.id], () => {
     shouldUseServerThumbnail.value = false;
 });
+watch(() => props.program, () => {
+    if (props.program.recorded_video.status === 'Recording') {
+        recordingThumbnailRevision.value += 1;
+    }
+});
 const offlineThumbnailURL = computed(() => {
     if (props.offlineVideo === null || shouldUseServerThumbnail.value === true) {
-        return `${Utils.api_base_url}/videos/${props.program.id}/thumbnail`;
+        const baseURL = `${Utils.api_base_url}/videos/${props.program.id}/thumbnail`;
+        if (props.program.recorded_video.status === 'Recording') {
+            return `${baseURL}?recording_revision=${recordingThumbnailRevision.value}`;
+        }
+        return baseURL;
     }
     return OfflineVideos.getAssetURL(props.offlineVideo, 'thumbnail.webp');
 });

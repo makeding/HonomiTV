@@ -16,6 +16,10 @@ import useSettingsStore from '@/stores/SettingsStore';
 // PlayerController のインスタンス
 // data() 内に記述すると再帰的にリアクティブ化され重くなる上リアクティブにする必要自体がないので、グローバル変数にしている
 let player_controller: PlayerController | null = null;
+// 追いかけ再生中の録画時長などを更新するタイマー
+let recording_metadata_refresh_timer: number | null = null;
+const RECORDING_METADATA_REFRESH_INTERVAL = 30 * 1000;
+let playback_session_generation = 0;
 
 export default defineComponent({
     name: 'Video-Watch',
@@ -60,6 +64,9 @@ export default defineComponent({
         // 再生セッションを初期化する
         async init() {
 
+            // 破棄済みセッションの遅延レスポンスが、同じ録画を開き直した新しいセッションへ混ざらないよう世代を分ける。
+            const session_generation = ++playback_session_generation;
+
             // URL 上の録画番組 ID が未定義なら実行しない (フェイルセーフ)
             // 基本あり得ないはずだが、念のため
             if (this.$route.params.video_id === undefined) {
@@ -98,6 +105,8 @@ export default defineComponent({
                 this.$router.push({path: '/not-found/'});
                 return;
             }
+            // 取得待ちの間に破棄・切り替えられた旧セッションは、現在の番組情報を上書きしない。
+            if (session_generation !== playback_session_generation) return;
             this.playerStore.recorded_program = recorded_program;
             this.playerStore.is_offline_playback = offline_video !== null;
             this.playerStore.offline_video = offline_video;
@@ -118,11 +127,49 @@ export default defineComponent({
                 playback_rate: null,
                 seek_seconds,
             });
+
+            // PlayerController 初期化中に破棄された場合は、旧セッションの定期更新を後から作らない。
+            if (session_generation !== playback_session_generation) return;
+
+            // HLS の再生位置は維持したまま、録画中だけ詳細 API の実メディア時長をストアへ反映する。
+            if (recorded_program.recorded_video.status === 'Recording' && offline_video === null) {
+                let is_metadata_refresh_in_flight = false;
+                recording_metadata_refresh_timer = window.setInterval(async () => {
+                    if (is_metadata_refresh_in_flight === true) return;
+                    is_metadata_refresh_in_flight = true;
+                    try {
+                        const refreshed_program = await Videos.fetchVideo(video_id);
+                        if (
+                            refreshed_program === null ||
+                            session_generation !== playback_session_generation ||
+                            this.playerStore.recorded_program.id !== video_id
+                        ) return;
+                        this.playerStore.recorded_program = refreshed_program;
+                        if (refreshed_program.recorded_video.status !== 'Recording' && recording_metadata_refresh_timer !== null) {
+                            window.clearInterval(recording_metadata_refresh_timer);
+                            recording_metadata_refresh_timer = null;
+                        }
+                    } catch (error) {
+                        // 一時的な取得失敗では再生を止めず、次の定期更新で再試行する。
+                        console.warn('[Video-Watch] Failed to refresh recording metadata.', error);
+                    } finally {
+                        is_metadata_refresh_in_flight = false;
+                    }
+                }, RECORDING_METADATA_REFRESH_INTERVAL);
+            }
         },
 
         // 再生セッションを破棄する
         // 再生する録画番組を切り替える際にも実行される
         async destroy() {
+
+            // 実行中のメタデータ取得結果も含め、これ以前のセッションからの更新を無効化する。
+            playback_session_generation += 1;
+
+            if (recording_metadata_refresh_timer !== null) {
+                window.clearInterval(recording_metadata_refresh_timer);
+                recording_metadata_refresh_timer = null;
+            }
 
             // PlayerController を破棄
             if (player_controller !== null) {

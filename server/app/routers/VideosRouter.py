@@ -6,7 +6,7 @@ import pathlib
 import re
 from datetime import datetime
 from email.utils import parsedate
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import anyio
 from ariblib.sections import TimeOffsetSection
@@ -37,6 +37,10 @@ from app.metadata.TSInfoAnalyzer import TSInfoAnalyzer
 from app.models.RecordedProgram import RecordedProgram
 from app.models.User import User
 from app.routers.UsersRouter import GetCurrentAdminUser
+from app.streams.RecordingPlaybackTracker import (
+    RecordingPlaybackTracker,
+    RecordingPlaybackVideo,
+)
 from app.utils.DisconnectAwareFileResponse import DisconnectAwareFileResponse
 from app.utils.DriveIOLimiter import DriveIOLimiter
 from app.utils.JikkyoClient import JikkyoClient
@@ -402,8 +406,44 @@ async def ConvertRowToRecordedProgram(row: dict[str, Any]) -> schemas.RecordedPr
         'updated_at': row['updated_at'],
     }
 
-    # Pydantic モデルに変換して返す
-    return schemas.RecordedProgram.model_validate(recorded_program_dict)
+    # Pydantic モデルに変換し、録画中であれば実際に書き込まれたメディア時間を反映する
+    recorded_program = schemas.RecordedProgram.model_validate(recorded_program_dict)
+    await ApplyRecordingPlaybackSnapshot(recorded_program)
+    return recorded_program
+
+
+async def ApplyRecordingPlaybackSnapshot(
+    recorded_program: RecordedProgram | schemas.RecordedProgram,
+) -> None:
+    """
+    録画中番組のレスポンスへ、実際のメディア進行状況を反映する
+
+    DB に保存された初回解析時点の値は変更せず、API レスポンス上の録画時間・ファイル情報だけを更新する。
+    MPEG-TS の PCR / DTS を取得できた場合だけ duration を伸ばし、未対応コンテナを壁時計時刻で推測しない。
+
+    Args:
+        recorded_program (RecordedProgram | schemas.RecordedProgram): API へ返す録画番組情報
+
+    Returns:
+        None
+    """
+
+    recorded_video = recorded_program.recorded_video
+    if recorded_video.status != 'Recording':
+        return
+
+    snapshot = await RecordingPlaybackTracker.getCurrentSnapshot(
+        recorded_program.id,
+        cast(RecordingPlaybackVideo, recorded_video),
+    )
+    recorded_video.file_size = snapshot.file_size
+    if snapshot.file_modified_at is not None:
+        recorded_video.file_modified_at = snapshot.file_modified_at
+    if snapshot.is_timeline_ready is True:
+        # tracker が同一ファイル内の単調増加と差し替え時の時間軸リセットを所有するため、その値を正として返す。
+        recorded_video.duration = snapshot.available_duration_seconds
+    elif snapshot.is_metadata_fallback_valid is False:
+        recorded_video.duration = 0.0
 
 
 async def GetRecordedProgram(video_id: Annotated[int, Path(description='録画番組の ID 。')]) -> RecordedProgram:
@@ -518,8 +558,9 @@ async def GetThumbnailResponse(
             headers = headers,
         )
 
-    # 録画中のファイルは常にデフォルトのサムネイル画像を返す
-    if recorded_program.recorded_video.status == 'Recording':
+    # 録画中はシーク用タイルを生成しないため、タイル要求には常にデフォルト画像を返す。
+    ## 代表画像は安定した書き込み済み区間から早期生成されるため、存在する場合は後段で通常どおり返す。
+    if recorded_program.recorded_video.status == 'Recording' and return_tiled is True:
         return CreateDefaultThumbnailResponse()
 
     # サムネイル画像のパスを生成
@@ -1330,6 +1371,9 @@ async def VideoAPI(
     # 解析前の ORM インスタンスには古い値が残るため、DB 保存後は関連レコードを含めて取り直す。
     if is_refreshed is True:
         recorded_program = await GetRecordedProgram(recorded_program.id)
+
+    # 録画中は DB の初回解析値ではなく、ファイル内で観測できた最新のメディア時間をレスポンスへ反映する。
+    await ApplyRecordingPlaybackSnapshot(recorded_program)
 
     return recorded_program
 

@@ -20,11 +20,16 @@ from app.config import Config
 from app.constants import JST, THUMBNAILS_DIR
 from app.metadata.CMSectionsDetector import CMSectionsDetector
 from app.metadata.MetadataAnalyzer import MetadataAnalyzer
+from app.metadata.RecordingThumbnailGenerator import RecordingThumbnailGenerator
 from app.metadata.SeriesIndexer import SeriesIndexer
 from app.metadata.ThumbnailGenerator import ThumbnailGenerator
 from app.models.Channel import Channel
 from app.models.RecordedProgram import RecordedProgram
 from app.models.RecordedVideo import RecordedVideo
+from app.streams.RecordingPlaybackTracker import (
+    RecordingPlaybackTracker,
+    RecordingPlaybackVideo,
+)
 from app.streams.VideoSegmentPlanner import VideoSegmentPlanner
 from app.utils import (
     LimitWorkerProcessResourcePriority,
@@ -115,6 +120,15 @@ class RecordedScanTask:
     # EPGStation が把握している直近の録画済み一覧を同期する間隔 (秒)
     EPGSTATION_RECENT_RECORDED_SYNC_INTERVAL_SECONDS: ClassVar[int] = 60
 
+    # 録画中の代表サムネイル生成条件を再確認する間隔 (秒)
+    EARLY_THUMBNAIL_POLL_INTERVAL_SECONDS: ClassVar[float] = 15.0
+
+    # 録画中の代表サムネイル抽出に失敗した場合の再試行間隔 (秒)
+    EARLY_THUMBNAIL_RETRY_INTERVAL_SECONDS: ClassVar[float] = 30.0
+
+    # キーフレーム探索・3候補の FFmpeg 抽出・WebP 保存を含む1回の実行上限 (秒)
+    EARLY_THUMBNAIL_GENERATION_TIMEOUT_SECONDS: ClassVar[float] = 45.0
+
     # 録画中ファイルの最小データ長 (秒)
     MINIMUM_RECORDING_SECONDS: ClassVar[int] = 60
 
@@ -186,6 +200,14 @@ class RecordedScanTask:
 
         # バックグラウンドタスクの状態管理
         self._background_tasks: dict[anyio.Path, asyncio.Task[None]] = {}
+
+        # 録画中の代表サムネイル生成タスクをファイルパスごとに1本だけ保持する。
+        ## 参照箇所: __scheduleEarlyRecordingThumbnail(), __cancelEarlyRecordingThumbnail()
+        ## 前提条件: 録画完了処理はこのタスクを停止してから最終サムネイル生成へ進む。
+        self._early_thumbnail_tasks: dict[anyio.Path, asyncio.Task[None]] = {}
+        # 生成済み代表サムネイルが対応するファイル実体を保持する。
+        ## 同じパスの録画ファイルが置換された場合だけ、既存画像を録画中に再生成するために使う。
+        self._early_thumbnail_sources: dict[anyio.Path, tuple[int, str, int, int]] = {}
 
         # 再生開始前のファイルメタデータ再解析タスクをファイルパスごとに共有する。
         ## 参照箇所: refreshRecordedFileMetadataIfNeeded()
@@ -421,6 +443,10 @@ class RecordedScanTask:
 
         # 録画バックエンド同期はローカル監視と独立して起動できるため、先に必ず停止する。
         await self.stopBackendRecordingSync()
+
+        # ローカル監視を起動していない EDCB / EPGStation 構成でも録画中サムネイルタスクは動作するため、
+        # _is_running の判定より先に全タスクを停止する。
+        await self.__cancelAllEarlyRecordingThumbnails()
 
         # 既に停止中の場合は何もしない
         if not self._is_running:
@@ -1061,7 +1087,14 @@ class RecordedScanTask:
                     if (force_update is False and
                         existing_recorded_video_summary is not None and
                         existing_recorded_video_summary.status == 'Recording'):
+                        # メタデータ再解析を省略する通常経路でも、約5分時点の代表サムネイル生成は継続する。
+                        ## 起動時にすでに録画中だったファイルも、一括スキャンまたはバックエンド同期からここへ到達する。
+                        self.__scheduleEarlyRecordingThumbnail(file_path)
                         return
+                else:
+                    # 録画完了・ファイル置換の解析へ進む前に、古い録画状態を持つ生成タスクを確実に停止する。
+                    ## 子 FFmpeg と一時 WebP の後始末まで待ってから、最終サムネイル生成へ進む。
+                    await self.__cancelEarlyRecordingThumbnail(file_path)
 
                 if active_recording_file_paths.is_reliable is False and is_file_system_recording:
                     # まだ DB に登録されていない＆ファイルサイズが前回から変化していない場合
@@ -1286,6 +1319,8 @@ class RecordedScanTask:
                 ## "Recording" 状態の録画ファイルはまだ録画が完了していないので、サムネイル生成などの解析タスクは実行しない
                 ## DB 保存に失敗した状態で開始すると、RecordedVideo が存在しないままサムネイル生成だけが進んでしまうため、この処理は永続化後に実行する必要がある
                 if recorded_program.recorded_video.status == 'Recorded':
+                    # バックエンド状態が解析中に変わった場合にも、最終生成より先に録画中タスクを停止する。
+                    await self.__cancelEarlyRecordingThumbnail(file_path)
                     # files_only が True の場合は、CM 区間検出・サムネイル生成・キーフレーム解析をスキップ
                     if not files_only and file_path not in self._background_tasks:
                         # 通知が必要かどうかを判定（新規ファイルまたは Recording → Recorded の状態変化）
@@ -1298,6 +1333,9 @@ class RecordedScanTask:
                         )
                         task = asyncio.create_task(self.__runBackgroundAnalysis(recorded_program, should_notify))
                         self._background_tasks[file_path] = task
+                else:
+                    # 初回メタデータ保存で Recording レコードが作成された直後から、実メディア進捗の監視を開始する。
+                    self.__scheduleEarlyRecordingThumbnail(file_path)
 
                 # wait_background_analysis が True かつ files_only が False の場合のみ、バックグラウンド解析タスクが完了するまで待つ
                 # 録画番組メタデータ再解析 API では、API レスポンスの返却をもってメタデータ再解析が完全に完了したことをユーザーに伝える必要があるため
@@ -1596,6 +1634,246 @@ class RecordedScanTask:
             if preserve_analysis_metadata is False:
                 db_recorded_video.cm_sections = None
             await db_recorded_video.save()
+
+
+
+    def __scheduleEarlyRecordingThumbnail(self, file_path: anyio.Path) -> None:
+        """
+        録画中の代表サムネイル生成タスクを、ファイルパスごとに1本だけ起動する。
+
+        Args:
+            file_path (anyio.Path): 録画中ファイルのパス。
+
+        Returns:
+            None
+        """
+
+        existing_task = self._early_thumbnail_tasks.get(file_path)
+        if existing_task is not None and existing_task.done() is False:
+            return
+
+        task = asyncio.create_task(self.__runEarlyRecordingThumbnail(file_path))
+        self._early_thumbnail_tasks[file_path] = task
+
+
+    async def __cancelEarlyRecordingThumbnail(self, file_path: anyio.Path) -> None:
+        """
+        指定ファイルの録画中代表サムネイル生成を停止し、一時ファイルの後始末まで待つ。
+
+        Args:
+            file_path (anyio.Path): 停止対象の録画ファイルパス。
+
+        Returns:
+            None
+        """
+
+        task = self._early_thumbnail_tasks.pop(file_path, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._early_thumbnail_sources.pop(file_path, None)
+
+
+    async def __cancelAllEarlyRecordingThumbnails(self) -> None:
+        """
+        実行中の録画中代表サムネイル生成をすべて停止する。
+
+        Returns:
+            None
+        """
+
+        tasks = list(self._early_thumbnail_tasks.values())
+        self._early_thumbnail_tasks.clear()
+        self._early_thumbnail_sources.clear()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+    async def __runEarlyRecordingThumbnail(self, file_path: anyio.Path) -> None:
+        """
+        実メディア進捗が番組開始から約5分へ達した時点で、録画中の代表サムネイルを生成する。
+
+        Args:
+            file_path (anyio.Path): 追記中の MPEG-TS ファイルパス。
+
+        Returns:
+            None
+        """
+
+        task = asyncio.current_task()
+        try:
+            while True:
+                # DB の現在状態を毎回読み直し、録画完了・削除・別形式への置換をタスク自身でも検出する。
+                recorded_video = await RecordedVideo.get_or_none(
+                    file_path=str(file_path),
+                ).select_related('recorded_program')
+                if recorded_video is None or recorded_video.status != 'Recording':
+                    return
+                if recorded_video.container_format != 'MPEG-TS':
+                    # 現在の共有トラッカーが PCR/DTS から進捗を確定できる MPEG-TS だけを対象にする。
+                    ## MMT/TLV・MPEG-4 は時刻を推測せず、録画完了後の既存フローへ任せる。
+                    return
+
+                try:
+                    source_stat = await file_path.stat()
+                except FileNotFoundError:
+                    return
+                source_identity = (
+                    recorded_video.id,
+                    recorded_video.file_hash,
+                    source_stat.st_dev,
+                    source_stat.st_ino,
+                )
+                thumbnail_path = anyio.Path(str(THUMBNAILS_DIR)) / f'{recorded_video.file_hash}.webp'
+
+                # 同じファイル実体向けに完成済みの画像があれば、そのまま録画完了まで保持する。
+                ## 再起動後は DB の file_hash が同じ画像を現在ファイル向けとみなし、不要な再抽出を避ける。
+                if await thumbnail_path.is_file():
+                    generated_source = self._early_thumbnail_sources.get(file_path)
+                    if generated_source is None or generated_source == source_identity:
+                        self._early_thumbnail_sources[file_path] = source_identity
+                        return
+
+                # 一覧・再生 API と同じ共有トラッカーから、PCR/DTS に基づく実際の書き込み進捗を取得する。
+                snapshot = await RecordingPlaybackTracker.getCurrentSnapshot(
+                    recorded_video.recorded_program_id,
+                    cast(RecordingPlaybackVideo, recorded_video),
+                )
+                if (
+                    snapshot.is_ready is False or
+                    snapshot.is_timeline_ready is False or
+                    snapshot.stream_info is None or
+                    snapshot.source_base_dts is None
+                ):
+                    await asyncio.sleep(self.EARLY_THUMBNAIL_POLL_INTERVAL_SECONDS)
+                    continue
+
+                candidate_offsets = RecordingThumbnailGenerator.calculateCandidateOffsets(
+                    recorded_video.recorded_program.recording_start_margin,
+                    snapshot.available_duration_seconds,
+                )
+                if len(candidate_offsets) == 0:
+                    await asyncio.sleep(self.EARLY_THUMBNAIL_POLL_INTERVAL_SECONDS)
+                    continue
+
+                # 同じ出力ディレクトリの決定的な一時名を使い、割り込み後の残骸も次回開始前に限定削除する。
+                temporary_thumbnail_path = anyio.Path(str(THUMBNAILS_DIR)) / (
+                    f'.early-{recorded_video.id}-{recorded_video.file_hash}.webp'
+                )
+                if await temporary_thumbnail_path.is_file():
+                    await temporary_thumbnail_path.unlink()
+
+                try:
+                    generator = RecordingThumbnailGenerator(
+                        pathlib.Path(str(file_path)),
+                        snapshot.stream_info,
+                        snapshot.source_base_dts,
+                        snapshot.file_size,
+                    )
+
+                    # 録画完了後の解析と同じ実行枠・ドライブ枠を使い、複数録画でも抽出負荷を直列化する。
+                    async with ProcessLimiter.getSemaphore('RecordedScanTask', max_concurrency=1):
+                        async with await DriveIOLimiter.getSemaphore(file_path):
+                            # 実行枠を待っている間にファイルが置換・切り詰められた場合は、古いスナップショットを使わない。
+                            try:
+                                extraction_source_stat = await file_path.stat()
+                            except FileNotFoundError:
+                                return
+                            extraction_source_identity = (
+                                recorded_video.id,
+                                recorded_video.file_hash,
+                                extraction_source_stat.st_dev,
+                                extraction_source_stat.st_ino,
+                            )
+                            if (
+                                extraction_source_identity != source_identity or
+                                extraction_source_stat.st_size < snapshot.file_size
+                            ):
+                                logging.info(f'{file_path}: Early thumbnail source changed before extraction; retrying.')
+                                generated = False
+                            else:
+                                try:
+                                    generated = await asyncio.wait_for(
+                                        generator.generate(
+                                            candidate_offsets,
+                                            pathlib.Path(str(temporary_thumbnail_path)),
+                                        ),
+                                        timeout=self.EARLY_THUMBNAIL_GENERATION_TIMEOUT_SECONDS,
+                                    )
+                                except TimeoutError:
+                                    logging.warning(
+                                        f'{file_path}: Early thumbnail generation timed out. '
+                                        f'[timeout: {self.EARLY_THUMBNAIL_GENERATION_TIMEOUT_SECONDS:.1f}s]'
+                                    )
+                                    generated = False
+
+                    if generated is False or await temporary_thumbnail_path.is_file() is False:
+                        await asyncio.sleep(self.EARLY_THUMBNAIL_RETRY_INTERVAL_SECONDS)
+                        continue
+
+                    # 完成画像を公開する直前に、DB とファイル実体が同じ録画を指していることを再確認する。
+                    ## この確認は録画完了時のキャンセルと合わせ、古いタスクが最終サムネイルを上書きするのを防ぐ。
+                    latest_recorded_video = await RecordedVideo.get_or_none(
+                        id=recorded_video.id,
+                    )
+                    try:
+                        latest_source_stat = await file_path.stat()
+                    except FileNotFoundError:
+                        return
+                    latest_source_identity = (
+                        recorded_video.id,
+                        recorded_video.file_hash,
+                        latest_source_stat.st_dev,
+                        latest_source_stat.st_ino,
+                    )
+                    if (
+                        latest_recorded_video is None or
+                        latest_recorded_video.status != 'Recording' or
+                        latest_recorded_video.file_path != str(file_path) or
+                        latest_recorded_video.file_hash != recorded_video.file_hash
+                    ):
+                        return
+                    if (
+                        latest_source_identity != source_identity or
+                        latest_source_stat.st_size < snapshot.file_size
+                    ):
+                        logging.info(f'{file_path}: Early thumbnail source changed before publication; retrying.')
+                        await asyncio.sleep(self.EARLY_THUMBNAIL_RETRY_INTERVAL_SECONDS)
+                        continue
+                    if latest_recorded_video.thumbnail_info is not None and await thumbnail_path.is_file():
+                        # 手動の完全生成が先に終わった場合も、完成済み代表サムネイルを録画中画像で置き換えない。
+                        return
+
+                    # WebP のエンコード完了後、同じファイルシステム上の replace で一度に公開する。
+                    await temporary_thumbnail_path.replace(thumbnail_path)
+                    self._early_thumbnail_sources[file_path] = source_identity
+                    logging.info(
+                        f'{file_path}: Early recording thumbnail published. '
+                        f'[available_duration: {snapshot.available_duration_seconds:.2f}s, '
+                        f'candidates: {candidate_offsets}]'
+                    )
+                    return
+                finally:
+                    # 成功・失敗・キャンセルのいずれでも、このタスク専用の一時 WebP を残さない。
+                    if await temporary_thumbnail_path.is_file():
+                        await temporary_thumbnail_path.unlink()
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:
+            logging.error(f'{file_path}: Error in early recording thumbnail task:', exc_info=ex)
+        finally:
+            # 完了した旧タスクが、同じパスへ後から登録された新タスクを辞書から消さないよう同一性を確認する。
+            if task is not None and self._early_thumbnail_tasks.get(file_path) is task:
+                self._early_thumbnail_tasks.pop(file_path, None)
 
 
 
@@ -1993,6 +2271,9 @@ class RecordedScanTask:
         # 同一ファイルパスへの DB レコード操作を排他制御する
         async with file_lock:
             try:
+                # 削除された録画を参照する代表サムネイル生成を止め、一時ファイルの削除まで待つ。
+                await self.__cancelEarlyRecordingThumbnail(file_path)
+
                 # 録画中とマークされていたファイルの場合は記録から削除
                 self._recording_files.pop(file_path, None)
 
