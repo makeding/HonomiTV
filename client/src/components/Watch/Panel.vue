@@ -41,6 +41,7 @@
             <Remocon class="watch-panel__remocon" v-if="show_remocon && supports_data_broadcasting"
                 :modelValue="remocon_panel_active && playerStore.is_remocon_display === true"
                 :dataBroadcasting="playerStore.is_data_broadcasting_display"
+                :hybridcastAvailable="playback_mode === 'Live' && playerStore.hybridcast_available"
                 @update:modelValue="playerStore.is_remocon_display = $event" />
         </div>
         <div class="watch-panel__navigation">

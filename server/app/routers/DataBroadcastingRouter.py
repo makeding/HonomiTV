@@ -6,7 +6,7 @@ import re
 import socket
 import time
 from typing import Annotated, cast
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 import aiohttp
 import httpx
@@ -35,11 +35,14 @@ ARIB_HTML5_EXTERNAL_PROXY_ALLOWED_HOSTS: frozenset[str] = frozenset({
     'api.nhk.or.jp',
     'beacon.nhk.jp',
     'img.nhk.jp',
+    'hc.nhk.or.jp',
+    'hc.nhk.jp',
     'nhk.jp',
     'qvc.jp',
     'qvc.scene7.com',
     'shv.nhk.jp',
     'tv-stream.nhk.jp',
+    'tvip.hc.skyperfectv.co.jp',
     'www.nhk-cs.jp',
     'www.nhk.or.jp',
 })
@@ -179,6 +182,13 @@ def ValidateARIBHTML5ExternalProxyURL(request_url: str) -> str:
             detail = 'Request URL host is not allowed',
         )
 
+    # SkyPerfecTV の実験は公開コンテンツだけに限定し、リダイレクト先にも同じ制約を適用する。
+    decoded_path = unquote(parsed_url.path)
+    if normalized_hostname == 'tvip.hc.skyperfectv.co.jp' and (
+        not decoded_path.startswith('/content-sky/') or '..' in decoded_path.split('/') or '\\' in decoded_path
+    ):
+        raise HTTPException(status_code = status.HTTP_403_FORBIDDEN, detail = 'Hybridcast public content GET only')
+
     return request_url
 
 
@@ -240,6 +250,14 @@ async def ARIBHTML5BrowserRequestProxyAPI(
 
     current_url = ValidateARIBHTML5ExternalProxyURL(request_url)
 
+    # Hybridcast の実験で必要なのは公開 CMS とアプリ資源のみ。
+    ## カード番号・アカウント情報を要求する gateway や POST は中継しない。
+    parsed_hybridcast_url = urlsplit(current_url)
+    if parsed_hybridcast_url.hostname == 'tvip.hc.skyperfectv.co.jp' and (
+        request.method != 'GET' or not parsed_hybridcast_url.path.startswith('/content-sky/')
+    ):
+        raise HTTPException(status_code = status.HTTP_403_FORBIDDEN, detail = 'Hybridcast public content GET only')
+
     # POST 本文は視聴者参加やビーコン用途だけを想定し、巨大な本文をメモリへ読み込まない。
     request_body = b''
     if request.method == 'POST':
@@ -281,6 +299,8 @@ async def ARIBHTML5BrowserRequestProxyAPI(
     request_headers = {
         'Accept': request.headers.get('Accept', '*/*'),
         'Accept-Language': 'ja',
+        # HTML5 放送受信機として要求し、PC 向け案内ページへの振り分けを防ぐ。
+        'User-Agent': 'Hybridcast/1.0',
         'Cache-Control': request.headers.get('Cache-Control', 'no-cache'),
         'Pragma': 'no-cache',
     }
@@ -310,6 +330,9 @@ async def ARIBHTML5BrowserRequestProxyAPI(
         # リダイレクト先も毎回 URL ホワイトリストと公開 IP Resolver を通す。
         ## 301 / 302 / 303 は一般的なブラウザ挙動に合わせて GET へ切り替え、307 / 308 は本文を維持する。
         for redirect_count in range(ARIB_HTML5_EXTERNAL_PROXY_MAX_REDIRECTS + 1):
+            # 他の許可ホストからの 307 / 308 でも、SkyPerfecTV へ本文を転送しない。
+            if urlsplit(current_url).hostname == 'tvip.hc.skyperfectv.co.jp' and upstream_method != 'GET':
+                raise HTTPException(status_code = status.HTTP_403_FORBIDDEN, detail = 'Hybridcast public content GET only')
             response = await session.request(
                 method = upstream_method,
                 url = current_url,

@@ -32,6 +32,13 @@
 - The same preview rendered CS101 (service 600101) after manual reload following an observed `DATA_STREAM_ENDED`. Direct and proxied HTTP 200 streams each delivered approximately 0.8 MB during a bounded 12-second check. The initial disconnection cause remains undetermined; recovery and BML rendering were observed, but sustained reception was not established. The temporary preview was stopped and its 7,280-byte launcher removed after acceptance.
 - Standalone-data checks passed: client ESLint/TypeScript and 14 selected regression tests; server Ruff/Pyright and three data-broadcasting tests. Server tests use isolated ASGI requests and an in-memory database, not a running deployment or real EDCB tuner.
 
+### Hybridcast integration
+
+- Generic receiver APIs, BML state and key dispatch belong to libaribhtml5. HonomiTV owns AIT selection, network policy, lifecycle and broadcaster adaptations.
+- Discover application URLs from received BML and matching XML AIT. Keep the existing internet setting, cancel startup on channel changes, and preserve return to BML.
+- Keep application navigation inside the proxy scope and the display at 16:9. Station-specific adaptations must remain narrowly scoped.
+- Local interaction verified public-help navigation and NHK program-guide switching. Broadcast-triggered production launch and full station functionality remain unverified.
+
 - Run client ESLint, TypeScript and direct regression tests for quality selection, metadata readiness, PiP teardown, EPG preservation, HLS/offline audio and sidecar selection. Run server Ruff/Pyright plus affected API/file-response and audio/subtitle tests.
 - Validate uv lockfiles and dependency synchronization for server and installer; audit executable commands and build definitions for superseded Poetry usage. Production installs exclude development-only dependencies; development and lint install the dev group.
 - Request affected application consumer entry points where a current user-managed API and suitable recordings are available. Inspect desktop/narrow player interaction and recovery, including audio changes, seeks, PiP, leaving/re-entering playback, and subtitles.

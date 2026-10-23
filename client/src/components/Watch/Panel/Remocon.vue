@@ -4,7 +4,7 @@
             'remote-control-container--data-broadcasting': dataBroadcasting,
         }"
         @click="$emit('update:modelValue', false)">
-        <div class="remote-control elevation-6" tabindex="0" @click.stop>
+        <div class="remote-control elevation-6" :class="{'remote-control--hybridcast': hybridcastAvailable || playerStore.is_hybridcast_display}" tabindex="0" @click.stop>
             <div v-ripple class="remote-control__close d-flex align-center rounded-circle cursor-pointer px-2 py-2"
                 @click="$emit('update:modelValue', false)">
                 <Icon icon="fluent:dismiss-12-filled" width="23px" height="23px" />
@@ -45,6 +45,18 @@
                     <button v-ripple class="remote-control-button-yellow bg-yellow-darken-3 text-text" data-arib-key-code="24">黄</button>
                 </div>
             </div>
+            <div class="remote-control__hybridcast" v-if="hybridcastAvailable || playerStore.is_hybridcast_display">
+                <button v-ripple data-hybridcast-action="Toggle">
+                    {{ playerStore.is_hybridcast_display ? 'BML に戻る' : 'Hybridcast' }}
+                </button>
+                <button v-if="playerStore.hybridcast_public_help_available" data-hybridcast-action="PublicHelp">
+                    公開ヘルプ（実験）
+                </button>
+                <div class="remote-control__hybridcast-status" aria-live="polite">
+                    {{ playerStore.is_hybridcast_loading ? '読み込み中…' : playerStore.hybridcast_error }}
+                    <button v-if="playerStore.hybridcast_error" data-hybridcast-action="Retry">再試行</button>
+                </div>
+            </div>
             <div class="remote-control__number-key">
                 <button v-ripple data-remocon-id="1" data-arib-key-code="6">1</button>
                 <button v-ripple data-remocon-id="2" data-arib-key-code="7">2</button>
@@ -66,9 +78,13 @@
 
 import { defineComponent, PropType } from 'vue';
 
+import usePlayerStore from '@/stores/PlayerStore';
+
 export default defineComponent({
     name: 'Panel-Remocon',
+    data() { return {playerStore: usePlayerStore()}; },
     props: {
+        hybridcastAvailable: {type: Boolean, default: false},
         modelValue: {
             type: Boolean as PropType<boolean>,
             required: true,
@@ -117,6 +133,21 @@ export default defineComponent({
         border-radius: 8px;
         background: rgb(var(--v-theme-background));
         user-select: none;
+
+        &--hybridcast {
+            height: auto;
+            min-height: 650px;
+        }
+        .remote-control__hybridcast {
+            margin: 12px 0;
+            button { width: 100%; min-height: 36px; border-radius: 6px; background: rgb(var(--v-theme-background-lighten-1)); }
+        }
+        .remote-control__hybridcast-status {
+            min-height: 100px;
+            padding-top: 8px;
+            font-size: 12px;
+            overflow-wrap: anywhere;
+        }
 
         .remote-control__close {
             position: absolute !important;

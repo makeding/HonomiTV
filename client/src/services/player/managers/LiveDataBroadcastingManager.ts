@@ -5,8 +5,11 @@ import { Deinterlacer } from 'mpeg2toh264/yadif';
 import { isEqual } from 'ohash';
 import { AribKeyCode, BMLBrowser, BMLBrowserFontFace } from 'web-bml';
 
+import type { HybridcastLaunchRequest } from '@/services/player/hybridcast/XMLAIT';
+
 import router from '@/router';
 import APIClient from '@/services/APIClient';
+import HybridcastSession from '@/services/player/hybridcast/HybridcastSession';
 import PlayerManager from '@/services/player/PlayerManager';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
@@ -49,6 +52,10 @@ class LiveDataBroadcastingManager implements PlayerManager {
     // Vue.js は data() で設定した変数を再帰的に監視するが、BMLBrowser 内の JS-Interpreter のインスタンスが
     // Vue.js の監視対象に入ると謎のエラーが発生してしまうため、プロパティを Hard Private にして監視対象から外す
     #bml_browser: BMLBrowser | null = null;
+
+    private hybridcast: HybridcastSession | null = null;
+    private hybridcast_generation = 0;
+    private hybridcastRequest: {request: HybridcastLaunchRequest; publicHelp: boolean} | null = null;
 
     // BML ブラウザの幅と高さ
     private bml_browser_width: number = 960;
@@ -155,6 +162,18 @@ class LiveDataBroadcastingManager implements PlayerManager {
                 fonts: {
                     roundGothic: LiveDataBroadcastingManager.ROUND_GOTHIC,
                     squareGothic: LiveDataBroadcastingManager.SQUARE_GOTHIC,
+                },
+                // BML は起動要求だけを発行し、XML AIT と HTML5 のライフサイクルは宿主が所有する。
+                startAITControlledApp: request => {
+                    // BML 側の ID は 16 進文字列、XML AIT 側は 10 進表記。
+                    if (!/^[0-9a-f]{1,8}$/i.test(request.organizationId) ||
+                        !/^[0-9a-f]{1,4}$/i.test(request.applicationId)) return NaN;
+                    void this_.startHybridcast({...request,
+                        organizationId: parseInt(request.organizationId, 16),
+                        applicationId: parseInt(request.applicationId, 16),
+                        greg: [...request.greg],
+                    });
+                    return 0;
                 },
                 // ステータス更新時のイベント
                 indicator: {
@@ -539,6 +558,63 @@ class LiveDataBroadcastingManager implements PlayerManager {
     }
 
 
+    /** アプリの退出時も BML の受信とページ状態は維持する。 */
+    private async stopHybridcast(): Promise<void> {
+        ++this.hybridcast_generation;
+        const session = this.hybridcast;
+        this.hybridcast = null;
+        if (this.container_element) this.container_element.style.visibility = '';
+        const store = usePlayerStore();
+        store.is_hybridcast_display = false;
+        store.is_hybridcast_loading = false;
+        store.hybridcast_error = null;
+        await session?.destroy();
+    }
+
+    /** 明示的な実験入口と BML の通常起動要求で、同じ宿主を利用する。 */
+    private async startHybridcast(request: HybridcastLaunchRequest, publicHelp = false): Promise<void> {
+        const generation = this.session_generation;
+        const cancellation = this.hybridcast_generation + 1;
+        await this.stopHybridcast();
+        if (generation !== this.session_generation || cancellation !== this.hybridcast_generation) return;
+        this.hybridcastRequest = {request, publicHelp};
+        const store = usePlayerStore();
+        store.hybridcast_available = true;
+        store.hybridcast_public_help_available = request.organizationId === 4153 && request.applicationId === 1;
+        if (!useSettingsStore().settings.enable_internet_access_from_data_broadcasting) {
+            store.hybridcast_error = '通信が無効です。設定の「データ放送」からインターネット接続を有効にして再試行してください。[HYBRIDCAST_NETWORK_DISABLED]';
+            return;
+        }
+        const channel = useChannelsStore().channel.current;
+        if (publicHelp && !store.hybridcast_public_help_available) return;
+        store.is_hybridcast_display = true;
+        store.is_hybridcast_loading = true;
+        if (this.container_element) this.container_element.style.visibility = 'hidden';
+        const fail = (code: string) => {
+            if (generation !== this.session_generation || this.hybridcast !== session) return;
+            store.is_hybridcast_loading = false;
+            const reason = code === 'HYBRIDCAST_ADAPTER_MISMATCH' ? '放送局のアプリが更新され、実験用の調整を適用できません。' :
+                'アプリの取得または実行に失敗しました。通信状態や放送アプリの対応状況を確認してください。';
+            store.hybridcast_error = reason + ' 再試行するか、BML に戻れます。[' + code + ']';
+        };
+        const session = new HybridcastSession(this.player.template.videoWrap, {
+            original_network_id: channel.network_id ?? undefined,
+            transport_stream_id: channel.transport_stream_id ?? undefined,
+            service_id: channel.service_id ?? undefined,
+        }, () => { void this.stopHybridcast(); }, fail, () => {
+            if (this.hybridcast === session) store.is_hybridcast_loading = false;
+        });
+        this.hybridcast = session;
+        try {
+            await session.start(request, publicHelp);
+        } catch (error) {
+            const code = error instanceof Error && /^HYBRIDCAST_[A-Z_]+$/.test(error.message) ?
+                error.message : 'HYBRIDCAST_START_FAILED';
+            fail(code);
+        }
+    }
+
+
     /**
      * リモコンのボタンを初期化する
      */
@@ -549,49 +625,75 @@ class LiveDataBroadcastingManager implements PlayerManager {
         this.remocon_button_event_abort_controller = new AbortController();
 
         // リモコンのボタンをクリックしたときのイベントを登録
-        const buttons = this.remocon_element.querySelectorAll('button');
-        for (const button of buttons) {
-            button.addEventListener('click', async () => {
+        this.remocon_element.addEventListener('click', async (event) => {
+            const button = (event.target as Element).closest<HTMLButtonElement>('button');
+            if (button === null || !this.remocon_element.contains(button)) return;
+            const hybridcastAction = button.dataset.hybridcastAction;
+            if (hybridcastAction === 'Toggle') {
+                if (this.hybridcast !== null) await this.stopHybridcast();
+                else if (this.hybridcastRequest !== null) await this.startHybridcast(this.hybridcastRequest.request);
+                return;
+            }
+            if (hybridcastAction === 'PublicHelp' && this.hybridcastRequest !== null) {
+                await this.startHybridcast(this.hybridcastRequest.request, true);
+                return;
+            }
+            if (hybridcastAction === 'Retry' && this.hybridcastRequest !== null) {
+                const {request, publicHelp} = this.hybridcastRequest;
+                await this.startHybridcast(request, publicHelp);
+                return;
+            }
+            // HTML5 アプリ表示中は BML やチャンネル選択へ同じキーを二重送信しない。
+            if (this.hybridcast !== null) {
+                const key = Number(button.dataset.aribKeyCode);
+                const number = Number(button.dataset.remoconId);
+                const map: Record<number, number> = {1: 38, 2: 40, 3: 37, 4: 39, 18: 13,
+                    19: 461, 20: 457, 21: 406, 22: 403, 23: 404, 24: 405};
+                const code = number >= 1 && number <= 10 ? (number === 10 ? 48 : 48 + number) : map[key];
+                if (key === 20) await this.stopHybridcast();
+                else if (code !== undefined) this.hybridcast.dispatchKey(code);
+                return;
+            }
+            if (hybridcastAction !== undefined) return;
 
-                // ARIB 仕様上のキーコード
-                const arib_key_code = (parseInt(button.dataset.aribKeyCode!) as AribKeyCode);
+            // ARIB 仕様上のキーコード
+            const arib_key_code = (parseInt(button.dataset.aribKeyCode!) as AribKeyCode);
 
-                // リモコン ID (番号キーのみ)
-                const remocon_id = button.dataset.remoconId ? parseInt(button.dataset.remoconId) : null;
+            // リモコン ID (番号キーのみ)
+            const remocon_id = button.dataset.remoconId ? parseInt(button.dataset.remoconId) : null;
 
-                // 番号キーでかつ現在データ放送が番号キーを使っていない場合は、そのチャンネルに切り替える
-                if (remocon_id !== null && this.is_bml_browser_using_numeric_key === false) {
+            // 番号キーでかつ現在データ放送が番号キーを使っていない場合は、そのチャンネルに切り替える
+            if (remocon_id !== null && this.is_bml_browser_using_numeric_key === false) {
 
-                    // 切り替え先のチャンネルを取得する
-                    // チャンネルタイプは現在視聴中のチャンネルと同じ
-                    const switch_channel_type = channels_store.channel.current.type;
-                    const switch_channel = channels_store.getChannelByRemoconID(switch_channel_type, remocon_id);
+                // 切り替え先のチャンネルを取得する
+                // チャンネルタイプは現在視聴中のチャンネルと同じ
+                const switch_channel_type = channels_store.channel.current.type;
+                const switch_channel = channels_store.getChannelByRemoconID(switch_channel_type, remocon_id);
 
-                    // チャンネルが取得できていれば、ルーティングをそのチャンネルに置き換える
-                    // 押されたキーに対応するリモコン ID のチャンネルがない場合や、現在と同じチャンネル ID の場合は何も起こらない
-                    if (switch_channel !== null && switch_channel.display_channel_id !== channels_store.display_channel_id) {
-                        router.push({path: `/tv/watch/${switch_channel.display_channel_id}`});
-                    }
-                    return;
+                // チャンネルが取得できていれば、ルーティングをそのチャンネルに置き換える
+                // 押されたキーに対応するリモコン ID のチャンネルがない場合や、現在と同じチャンネル ID の場合は何も起こらない
+                if (switch_channel !== null && switch_channel.display_channel_id !== channels_store.display_channel_id) {
+                    router.push({path: `/tv/watch/${switch_channel.display_channel_id}`});
+                }
+                return;
 
                 // それ以外の場合は、BML ブラウザにキーイベントを送信する
                 // データ放送機能無効時は何もしない
                 // TODO: BML ブラウザがクラッシュした場合 processKeyDown() あたりから例外が送出されるが、途中で握り潰されている？のかキャッチできない
-                } else {
-                    if (this.#bml_browser !== null) {
-                        if (remocon_id === 10) {
-                            // リモコン番号が 10 の場合のみ、"0" のキーイベントも送信する
-                            this.#bml_browser.content.processKeyDown(AribKeyCode.Digit0);
-                            this.#bml_browser.content.processKeyUp(AribKeyCode.Digit0);
-                            await Utils.sleep(0.1);  // 若干待つのがポイント
-                        }
-                        this.#bml_browser.content.processKeyDown(arib_key_code);
-                        this.#bml_browser.content.processKeyUp(arib_key_code);
+            } else {
+                if (this.#bml_browser !== null) {
+                    if (remocon_id === 10) {
+                        // リモコン番号が 10 の場合のみ、"0" のキーイベントも送信する
+                        this.#bml_browser.content.processKeyDown(AribKeyCode.Digit0);
+                        this.#bml_browser.content.processKeyUp(AribKeyCode.Digit0);
+                        await Utils.sleep(0.1);  // 若干待つのがポイント
                     }
+                    this.#bml_browser.content.processKeyDown(arib_key_code);
+                    this.#bml_browser.content.processKeyUp(arib_key_code);
                 }
+            }
 
-            }, {signal: this.remocon_button_event_abort_controller.signal});
-        }
+        }, {signal: this.remocon_button_event_abort_controller.signal});
     }
 
 
@@ -780,8 +882,12 @@ class LiveDataBroadcastingManager implements PlayerManager {
      * LiveDataBroadcastingManager での処理を終了し、破棄する
      */
     public async destroy(): Promise<void> {
-        const channels_store = useChannelsStore();
         ++this.session_generation;
+        await this.stopHybridcast();
+        this.hybridcastRequest = null;
+        usePlayerStore().hybridcast_available = false;
+        usePlayerStore().hybridcast_public_help_available = false;
+        const channels_store = useChannelsStore();
         if (this.data_load_timeout !== null) clearTimeout(this.data_load_timeout);
         this.data_load_timeout = null;
         // 通常チャンネルへ戻った時に、データ放送用の面板や失敗理由を残さない。

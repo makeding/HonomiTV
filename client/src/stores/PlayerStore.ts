@@ -120,6 +120,12 @@ const usePlayerStore = defineStore('player', {
         is_data_broadcasting_display: false,
         // 純データ放送の失敗理由。プレイヤーと隣接する再試行操作へ表示し、退出時に破棄する。
         data_broadcasting_error: null as string | null,
+        // Hybridcast の状態は視聴セッション内だけで保持し、ユーザー設定として永続化しない。
+        is_hybridcast_display: false,
+        is_hybridcast_loading: false,
+        hybridcast_error: null as string | null,
+        hybridcast_available: false,
+        hybridcast_public_help_available: false,
 
         // データ放送中の視聴パネルを表示するか
         // 通常時の is_panel_display とは分離し、データ放送のために開いたパネルでユーザー設定を上書きしない
