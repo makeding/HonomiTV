@@ -99,6 +99,21 @@ const router = createRouter({
             component: () => import('@/views/Mylist.vue'),
         },
         {
+            path: '/captures/',
+            name: 'Captures',
+            component: () => import('@/views/Captures.vue'),
+        },
+        {
+            path: '/captures/search',
+            name: 'Captures Search',
+            component: () => import('@/views/Captures.vue'),
+        },
+        {
+            path: '/captures/folders/:folder_id(\\d+)',
+            name: 'Capture Folder',
+            component: () => import('@/views/Captures.vue'),
+        },
+        {
             path: '/offline-videos/',
             name: 'Offline Videos',
             component: () => import('@/views/OfflineVideos.vue'),
@@ -273,9 +288,15 @@ router.beforeResolve(async (to, from, next) => {
         '/videos/watch/',
         '/series/on-air',
     ];
-    if (document.startViewTransition && !no_transition_routes.some((route) => to.path.startsWith(route) && from.path.startsWith(route))) {
-        document.startViewTransition(() => {
-            next();
+    const startViewTransition = document.startViewTransition?.bind(document);
+    if (startViewTransition && !no_transition_routes.some((route) => to.path.startsWith(route) && from.path.startsWith(route))) {
+        // 非同期ガードは next() を呼ぶ前に完了してはいけない。
+        // 画面遷移の完了ではなく、View Transition が更新処理を開始するまで待つ。
+        await new Promise<void>((resolve) => {
+            startViewTransition(() => {
+                next();
+                resolve();
+            });
         });
     } else {
         next();

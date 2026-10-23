@@ -7,7 +7,6 @@
                 <SPHeaderBar />
                 <div class="channels-tab">
                     <div class="channels-tab__buttons" :style="{
-                        '--tab-length': Array.from(home_channels_list_with_pinned).length,
                         '--active-tab-index': active_tab_index,
                     }">
                         <v-btn variant="flat" class="channels-tab__button"
@@ -703,6 +702,12 @@ export default defineComponent({
         }
 
         .channels-tab__buttons {
+            // スクロール領域の可視幅ではなく、ボタンと同じ幅でハイライトを配置する。
+            // タブが収まりきらない場合も、選択位置と下線の位置を一致させる。
+            --channel-tab-width: 98px;
+            @include smartphone-vertical {
+                --channel-tab-width: 90px;
+            }
             display: flex;
             position: relative;
             align-items: center;
@@ -717,7 +722,8 @@ export default defineComponent({
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                width: 98px;
+                flex: 0 0 var(--channel-tab-width);
+                width: var(--channel-tab-width);
                 height: 100%;
                 padding: 0;
                 border-radius: 2.5px;
@@ -731,7 +737,6 @@ export default defineComponent({
                     font-size: 15px;
                 }
                 @include smartphone-vertical {
-                    width: 90px;
                     font-size: 15px;
                 }
             }
@@ -740,7 +745,7 @@ export default defineComponent({
                 position: absolute;
                 left: 0;
                 bottom: 0;
-                width: calc(100% / var(--tab-length, 0));
+                width: var(--channel-tab-width);
                 height: 3px;
                 background: rgb(var(--v-theme-primary));
                 transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.5, 1);
