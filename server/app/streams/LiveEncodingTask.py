@@ -34,6 +34,7 @@ from app.streams.LivePSIDataArchiver import LivePSIDataArchiver
 from app.utils import GetBackendForReceiving, GetMirakurunAPIEndpointURL
 from app.utils.edcb.EDCBTuner import EDCBTuner
 from app.utils.edcb.PipeStreamReader import PipeStreamReader
+from app.utils.MirakurunStreamFormat import MirakurunStreamFormat
 
 
 if TYPE_CHECKING:
@@ -557,7 +558,7 @@ class LiveEncodingTask:
         program_present: Program | None,
     ) -> None:
         """
-        BS4K の MMTS を Mirakurun からデコードなしで受信し、そのままライブストリームへ配信する。
+        BS4K の MMTS を Mirakurun から受信し、そのままライブストリームへ配信する。
 
         Args:
             config (ServerSettings): サーバー設定
@@ -569,7 +570,7 @@ class LiveEncodingTask:
         """
 
         # エンコードを行わないため、通常の LiveEncodingTask.run() と異なり tsreadex / エンコーダーは起動しない
-        ## Raw MMTS は Mirakurun の BS4K 専用経路であり、Mirakurun 側のデコーダーを decode=0 で明示的に無効化する
+        ## format=tlv 対応の Mirakurun では B61 復号を有効にしたまま TLV を受け取り、旧実装では従来どおり decode=0 を使う
         logging.info(f'{self.live_stream.log_prefix} Raw MMTS passthrough is enabled.')
 
         # チューナーを確保できるまで待機する
@@ -582,13 +583,18 @@ class LiveEncodingTask:
         mirakurun_service_id = int(str(channel.network_id).zfill(5) + str(channel.service_id).zfill(5))
 
         # Mirakurun の Service Stream API へ HTTP リクエストを開始
-        ## decode=0 により Mirakurun 側の dantto4k / mmtsDecoder 相当の変換を通さず、MMTS をそのまま受け取る
+        ## OpenAPI が format を公開していれば、dantto4k などの TS 変換を避けつつ B61 復号済み TLV を受け取れる
         self.live_stream.setStatus('Standby', 'チューナーを起動しています…')
         response: aiohttp.ClientResponse | None = None
         session = aiohttp.ClientSession()
         try:
+            stream_url = await MirakurunStreamFormat.getServiceStreamURL(
+                mirakurun_service_id,
+                'tlv',
+                fallback_decode = False,
+            )
             response = await session.get(
-                url = GetMirakurunAPIEndpointURL(f'/api/services/{mirakurun_service_id}/stream?decode=0'),
+                url = stream_url,
                 headers = {**API_REQUEST_HEADERS, 'X-Mirakurun-Priority': '0'},
                 timeout = aiohttp.ClientTimeout(connect=15, sock_connect=15, sock_read=15)
             )
@@ -806,7 +812,8 @@ class LiveEncodingTask:
         else:
             logging.info(f'{self.live_stream.log_prefix} Title: 番組情報がありません')
 
-        # BS4K Raw MMTS は Mirakurun から decode=0 で受け取った MMTS をそのまま配信する
+        # BS4K Raw MMTS は Mirakurun から TLV のまま受け取り、そのまま配信する
+        ## format 対応時は decode=1 で B61 復号を行い、旧実装では従来どおり decode=0 を使う
         ## tsreadex / エンコーダーは MPEG-TS 前提の経路なので、Raw MMTS ではここで専用タスクへ分岐する
         if self.live_stream.quality == 'raw-mmts':
             if (
@@ -1099,14 +1106,18 @@ class LiveEncodingTask:
                 mirakurun_service_id = int(str(channel.network_id).zfill(5) + str(channel.service_id).zfill(5))
 
                 # Mirakurun の Service Stream API へ HTTP リクエストを開始
+                ## format=tlv 対応時は B61 復号済みの TLV を FFmpeg の libaribtlv 入力として受け取る
+                ## 通常の MPEG-TS 入力も対応時は format=ts を明示し、デコーダー設定に出力形式を委ねない
                 self.live_stream.setStatus('Standby', 'チューナーを起動しています…')
                 session = aiohttp.ClientSession()
                 try:
+                    stream_url = await MirakurunStreamFormat.getServiceStreamURL(
+                        mirakurun_service_id,
+                        'tlv' if is_mmt_live_transcode is True else 'ts',
+                        fallback_decode = False if is_mmt_live_transcode is True else None,
+                    )
                     response = await session.get(
-                        url = GetMirakurunAPIEndpointURL(
-                            f'/api/services/{mirakurun_service_id}/stream' +
-                            ('?decode=0' if is_mmt_live_transcode is True else '')
-                        ),
+                        url = stream_url,
                         headers = {**API_REQUEST_HEADERS, 'X-Mirakurun-Priority': '0'},
                         timeout = aiohttp.ClientTimeout(connect=15, sock_connect=15, sock_read=15)
                     )

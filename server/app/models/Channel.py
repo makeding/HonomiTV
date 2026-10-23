@@ -244,10 +244,14 @@ class Channel(TortoiseModel):
                 channel.id = channel_id
                 channel.service_id = int(service['serviceId'])
                 channel.network_id = int(service['networkId'])
-                # Mirakurun のチャンネル情報には TSID が含まれないが、地デジは運用上 NID と TSID が同一なので補完できる
-                ## ここで埋めておくと、録画メタデータがまだ再スキャンされていない Channel でも MP4 再生時に実 TSID を使える
-                ## BS/CS など NID から TSID を推測できないチャンネルでは、既存レコードの transport_stream_id を触らない
-                if channel_type == 'GR':
+                # 新しい Mirakurun は service.streamId として実 TSID を返すため、検証済みの値だけを保存する。
+                ## 省略された既存 Mirakurun / mirakc 応答では、録画メタデータなどが持つ既存 TSID を失わない。
+                stream_id = service.get('streamId')
+                if isinstance(stream_id, int) and not isinstance(stream_id, bool) and 0 <= stream_id <= 0xffff:
+                    channel.transport_stream_id = stream_id
+                # Mirakurun の旧チャンネル情報には TSID が含まれないが、地デジは運用上 NID と TSID が同一なので補完できる。
+                ## 既存の実 TSID を上書きせず、未登録の場合だけフォールバックする。
+                elif channel_type == 'GR' and channel.transport_stream_id is None:
                     channel.transport_stream_id = channel.network_id
                 channel.remocon_id = int(service['remoteControlKeyId']) if ('remoteControlKeyId' in service) else 0
                 channel.type = channel_type
