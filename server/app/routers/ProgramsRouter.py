@@ -5,20 +5,36 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
 import ariblib.constants
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+import httpx
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Response,
+    status,
+)
 from pydantic import TypeAdapter
 from tortoise import connections
 
 from app import logging, schemas
 from app.config import Config
-from app.constants import JST
+from app.constants import HTTPX_CLIENT, JST
 from app.models.Channel import Channel
 from app.routers.ReservationConditionsRouter import EncodeEDCBSearchKeyInfo
 from app.routers.ReservationsRouter import GetCtrlCmdUtil
-from app.utils import NormalizeToJSTDatetime, ParseDatetimeStringToJST
+from app.utils import (
+    GetBackendForChannelAndProgram,
+    GetMirakurunAPIEndpointURL,
+    NormalizeToJSTDatetime,
+    ParseDatetimeStringToJST,
+)
 from app.utils.edcb import EventInfo, ReserveDataRequired, SearchKeyInfo
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
+from app.utils.GGuide import GetGGuideImages
 from app.utils.JellyfinClient import (
     JellyfinClient,
     JellyfinError,
@@ -399,6 +415,39 @@ async def ProgramSearchAPI(
         programs.append(program)
 
     return schemas.Programs(total=len(programs), programs=programs)
+
+
+@router.get('/gguide/images/{asset_id}', response_class=Response)
+async def GGuideImageAPI(asset_id: Annotated[str, Path(pattern=r'^[a-f0-9]{64}$')]) -> Response:
+    """
+    構成済み Mirakurun の Gガイド画像を同一 API 経由で配信する。
+
+    Args:
+        asset_id: Mirakurun が発行した SHA-256 画像 ID。
+
+    Returns:
+        Response: PNG または JPEG の画像。
+    """
+
+    # 任意 URL のプロキシにはせず、画像 ID と接続済みバックエンドだけを利用する。
+    if GetBackendForChannelAndProgram() != 'Mirakurun':
+        raise HTTPException(404, 'GGuide images are not available for this backend')
+    try:
+        async with HTTPX_CLIENT() as client:
+            response = await client.get(GetMirakurunAPIEndpointURL(f'/api/gguide/assets/{asset_id}'))
+            response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        status_code = error.response.status_code if error.response.status_code in (404, 422) else 502
+        raise HTTPException(status_code, 'GGuide image is unavailable') from error
+    except httpx.HTTPError as error:
+        raise HTTPException(502, 'Cannot connect to the GGuide image provider') from error
+    mime_type = response.headers.get('content-type', '').split(';')[0]
+    if mime_type not in ('image/png', 'image/jpeg'):
+        raise HTTPException(502, 'Invalid GGuide image content type')
+    return Response(response.content, media_type=mime_type, headers={
+        'Cache-Control': 'private, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
+    })
 
 
 @router.get(
@@ -803,6 +852,17 @@ async def TimeTableAPI(
     # result_channels のみを TypeAdapter で一括バリデートし、date_range は直接構築する
     channels_adapter = TypeAdapter(list[schemas.TimeTableChannel])
     validated_channels = channels_adapter.validate_python(result_channels)
+    # データベースに画像情報を複製せず、現在の放送回への確定した関連付けだけを補う。
+    gguide_images = await GetGGuideImages()
+    for entry in validated_channels:
+        groups = [entry.programs, *(subchannel.programs for subchannel in entry.subchannels or [])]
+        for programs in groups:
+            for program in programs:
+                if isinstance(program, schemas.TimeTableProgram):
+                    program.gguide_image_id = gguide_images.get((
+                        program.network_id, program.service_id, program.event_id,
+                        round(program.start_time.timestamp() * 1000),
+                    ))
     iptv_channels, iptv_error = await iptv_task
     all_channels = [*validated_channels, *iptv_channels]
     if target_channel_ids is not None:

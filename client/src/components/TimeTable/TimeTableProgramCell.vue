@@ -34,6 +34,22 @@
             </div>
             <!-- タイトル -->
             <div class="timetable-program-cell__title" v-html="decoratedTitle"></div>
+            <!-- 短い番組は展開時に表示する。読み込みや失敗で画像枠の高さを変えない。 -->
+            <v-img v-if="gguideImageURL && (isExpanded || cellHeight >= 200)"
+                class="timetable-program-cell__image" :src="gguideImageURL" :key="imageRetry"
+                height="96" min-height="96" max-height="96">
+                <template #placeholder>
+                    <div class="timetable-program-cell__image-error">
+                        <v-progress-circular indeterminate size="20" width="2" />
+                    </div>
+                </template>
+                <template #error>
+                    <div class="timetable-program-cell__image-error">
+                        <span>画像の読み込みに失敗しました</span>
+                        <v-btn variant="text" size="x-small" @click.stop="imageRetry++">再試行</v-btn>
+                    </div>
+                </template>
+            </v-img>
             <!-- 説明 (常に表示、はみ出た分は隠れる) -->
             <div class="timetable-program-cell__description" v-html="decoratedDescription"></div>
             <!-- アクションボタン (選択時のみ表示) -->
@@ -150,6 +166,12 @@ const timetableStore = useTimeTableStore();
 // 状態
 const isHovered = ref(false);
 const cellRef = ref<HTMLElement | null>(null);
+const imageRetry = ref(0);
+// バックエンドのアドレスをブラウザーへ露出させず、HTTPS の API から取得する。
+const gguideImageURL = computed(() => {
+    const id = 'gguide_image_id' in props.program ? props.program.gguide_image_id : null;
+    return id ? `${Utils.api_base_url}/programs/gguide/images/${id}` : null;
+});
 const expandedHeight = ref<number>(0);
 
 // 定数
@@ -658,6 +680,21 @@ watch(isExpanded, async (value) => {
 
     &__error-icon {
         color: rgb(var(--v-theme-error));
+    }
+
+    &__image {
+        flex-shrink: 0;
+        margin-top: 4px;
+    }
+
+    &__image-error {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        font-size: 11px;
+        color: rgba(0, 0, 0, 0.7);
     }
 
     // タイトル

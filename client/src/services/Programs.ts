@@ -173,6 +173,7 @@ export interface ITimeTableSubchannel {
  * 番組表向けの番組情報 (IProgram に予約情報を追加したもの)
  */
 export type ITimeTableProgram = (IProgram & {
+    gguide_image_id?: string | null;
     reservation: ITimeTableProgramReservation | null;
 }) | IIPTVProgram;
 

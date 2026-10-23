@@ -196,6 +196,8 @@ class TimeTableSubchannel(BaseModel):
     programs: list[TimeTableProgram]
 
 class TimeTableProgram(Program):
+    # Mirakurun の放送回照合済み Gガイド画像。未取得・未対応の場合は None。
+    gguide_image_id: str | None = None
     # 予約情報 (EDCB バックエンド時かつ予約がある場合のみ設定)
     reservation: TimeTableProgramReservation | None = None
 
