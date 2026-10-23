@@ -25,7 +25,7 @@ interface IPSIArchivedDataContext {
 }
 
 export interface ILivePSIArchivedDataDecoder {
-    run(decoded_callback: (message: ResponseMessage | IProgramPF) => void): void;
+    run(decoded_callback: (message: ResponseMessage | IProgramPF) => void, error_callback?: (reason: string) => void): void;
     destroy(): void;
 }
 
@@ -71,7 +71,7 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
      * EDCB Legacy WebUI での実装を参考にした
      * ref: https://github.com/xtne6f/EDCB/blob/work-plus-s-230212/ini/HttpPublic/legacy/util.lua#L444-L497
      */
-    public run(decoded_callback: (message: ResponseMessage | IProgramPF) => void): void {
+    public run(decoded_callback: (message: ResponseMessage | IProgramPF) => void, error_callback?: (reason: string) => void): void {
         // 放送識別子を持たないチャンネルに PSI デコーダーを起動しない。
         if (this.channel.service_id === null || !this.channel.capabilities.data_broadcasting) return;
 
@@ -112,18 +112,27 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
         });
 
         // ライブ PSI/SI アーカイブデータストリーミング API の URL を作成
-        const psi_archived_data_api_url = `${Utils.api_base_url}/streams/live/${this.channel.display_channel_id}/${this.api_quality}/psi-archived-data`;
+        const stream_base_url = `${Utils.api_base_url}/streams/live/${this.channel.display_channel_id}`;
+        const psi_archived_data_api_url = this.channel.is_datachannel === true ?
+            `${stream_base_url}/data-broadcasting` : `${stream_base_url}/${this.api_quality}/psi-archived-data`;
 
         // ライブ PSI/SI アーカイブデータストリーミング API にリクエスト
         // 以降の処理はエンドレスなので非同期で実行
         this.psi_archived_data_api_abort_controller = new AbortController();
-        fetch(psi_archived_data_api_url, {signal: this.psi_archived_data_api_abort_controller.signal}).then(async (response) => {
+        const abort_controller = this.psi_archived_data_api_abort_controller;
+        fetch(psi_archived_data_api_url, {signal: abort_controller.signal}).then(async (response) => {
+
+            // エラー応答を TS として解釈しない。サーバーの安全なエラーコードも保持する。
+            if (!response.ok) {
+                const detail = await response.json().catch(() => null);
+                throw new Error(`データ放送の受信を開始できません。チューナーの接続や空きを確認してください。${detail?.detail ?? `HTTP ${response.status}`}`);
+            }
 
             // ReadableStreamDefaultReader を取得
             const reader = response.body?.getReader();
             if (reader === undefined) {
                 console.error('[PSIArchivedDataDecoder] PSI/SI archived data API response body is not ReadableStream.');
-                return;
+                throw new Error('データ放送の受信を開始できません。ブラウザを更新してください。[DATA_STREAM_UNAVAILABLE]');
             }
 
             let last_pcr = -1;
@@ -136,9 +145,18 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
                 // 基本サーバー側からのレスポンス出力が打ち切られる前にこちらから abort() するので発生しない
                 if (result.done) {
                     console.log('[PSIArchivedDataDecoder] PSI/SI archived data finished.');
+                    if (this.channel.is_datachannel === true) {
+                        throw new Error('データ放送の受信が途切れました。チューナーの接続を確認してください。[DATA_STREAM_ENDED]');
+                    }
                     break;
                 }
                 // console.log(`[PSIArchivedDataDecoder] PSI/SI archived data received. (length: ${result.value.length})`);
+
+                // 独立データ放送は元の TS をそのままデコードし、動画タスクや psisiarc を待たない。
+                if (this.channel.is_datachannel === true) {
+                    ts_stream.parse(Buffer.from(result.value));
+                    continue;
+                }
 
                 // 今まで受信した PSI/SI アーカイブデータと結合
                 const add_data: Uint8Array = result.value;
@@ -173,7 +191,10 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
             }
 
         }).catch((error) => {
-            // 何もしない
+            // 退出時の意図した中断は表示せず、現在の受信失敗だけを呼び出し元へ返す。
+            if (!abort_controller.signal.aborted) {
+                error_callback?.(error instanceof Error ? error.message : 'データ放送の受信に失敗しました。[DATA_STREAM_FAILED]');
+            }
         });
 
         console.log('[PSIArchivedDataDecoder] TS decoder initialized.');

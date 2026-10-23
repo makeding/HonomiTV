@@ -214,6 +214,7 @@ async def ChannelsAPI(
             'jikkyo_force': channel.jikkyo_force,
             'is_subchannel': channel.is_subchannel,
             'is_radiochannel': channel.is_radiochannel,
+            'is_datachannel': channel.is_datachannel,
             'is_watchable': True,
             # 地デジチャンネルの地域名のリスト (デバッグ用)
             # 広域放送局の場合は複数の地域名が含まれる
@@ -307,7 +308,7 @@ async def ChannelsAPI(
         # サブチャンネル & 現在の番組情報が存在しないなら、表示フラグを False に設定
         ## 現在放送中のサブチャンネルのみをチャンネルリストに表示するような挙動とする
         ## 一般的にサブチャンネルは常に放送されているわけではないため、放送されていない時にチャンネルリストに表示する必要はない
-        if channel_dict['is_subchannel'] is True and channel_dict['program_present'] is None:
+        if channel.is_datachannel is False and channel_dict['is_subchannel'] is True and channel_dict['program_present'] is None:
             channel_dict['is_display'] = False
 
         # 現在の視聴者数を取得

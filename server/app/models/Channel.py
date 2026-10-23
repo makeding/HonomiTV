@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 import httpx
 from tortoise import fields, transactions
@@ -34,6 +34,23 @@ ALREADY_CLOSED_BS_SERVICE_IDS = [103, 104, 238, 241, 258, 263]
 
 
 class Channel(TortoiseModel):
+
+    # 起動前と定期更新で取得する受信バックエンドのサービス種別を保持する。
+    # 録画用の永続レコードには依存させず、成功したチャンネル更新の最後にだけ差し替える。
+    _data_channel_ids: ClassVar[set[str]] = set()
+
+    @property
+    def is_datachannel(self) -> bool:
+        """
+        受信バックエンドが独立データ放送として通知したチャンネルかを返す。
+
+        Args:
+            なし
+
+        Returns:
+            bool: 最後に成功した探索で独立データ放送として通知されていれば True。
+        """
+        return self.id in self._data_channel_ids
 
     # データベース上のテーブル名
     class Meta(TortoiseModel.Meta):
@@ -185,16 +202,19 @@ class Channel(TortoiseModel):
             for service in services:
 
                 # type が 0x01 (デジタルTVサービス) / 0x02 (デジタル音声サービス) / 0xa1 (161: 臨時映像サービス) /
-                # 0xa2 (162: 臨時音声サービス) / 0xad (173: 超高精細度4K専用TVサービス) 以外のサービスを弾く
-                ## ワンセグ・データ放送 (type:0xC0) やエンジニアリングサービス (type:0xA4) など
+                # 0xa2 (162: 臨時音声サービス) / 0xad (173: 超高精細度4K専用TVサービス) / 0xc0 (データサービス) 以外を弾く
+                ## 0xC0 は独立データ放送として受け付けるが、同じ種別を使う地デジのワンセグは除外する。
+                ## エンジニアリングサービス (type:0xA4) などは引き続き除外する。
                 ## 詳細は ARIB STD-B10 第2部 6.2.13 に記載されている
                 ## https://web.archive.org/web/20140427183421if_/http://www.arib.or.jp/english/html/overview/doc/2-STD-B10v5_3.pdf#page=153
-                if service['type'] not in [0x01, 0x02, 0xa1, 0xa2, 0xad]:
+                if service['type'] not in [0x01, 0x02, 0xa1, 0xa2, 0xad, 0xc0]:
                     continue
 
                 # 不明なネットワーク ID のチャンネルを弾く
                 channel_type = TSInformation.getNetworkType(service['networkId'])
                 if channel_type == 'OTHER':
+                    continue
+                if service['type'] == 0xc0 and channel_type == 'GR':
                     continue
 
                 # チャンネル ID
@@ -313,6 +333,12 @@ class Channel(TortoiseModel):
                 same_remocon_id_counts,
             )
 
+        # 失敗した更新で直前の正常なサービス種別を消さないよう、トランザクション完了後に公開する。
+        cls._data_channel_ids = {
+            f'NID{service["networkId"]}-SID{service["serviceId"]:03d}' for service in services
+            if service['type'] == 0xc0 and TSInformation.getNetworkType(service['networkId']) not in ['GR', 'OTHER']
+        }
+
 
     @classmethod
     async def updateFromEDCB(cls) -> None:
@@ -384,16 +410,19 @@ class Channel(TortoiseModel):
             for service in services:
 
                 # type が 0x01 (デジタルTVサービス) / 0x02 (デジタル音声サービス) / 0xa1 (161: 臨時映像サービス) /
-                # 0xa2 (162: 臨時音声サービス) / 0xad (173: 超高精細度4K専用TVサービス) 以外のサービスを弾く
-                ## ワンセグ・データ放送 (type:0xC0) やエンジニアリングサービス (type:0xA4) など
+                # 0xa2 (162: 臨時音声サービス) / 0xad (173: 超高精細度4K専用TVサービス) / 0xc0 (データサービス) 以外を弾く
+                ## 0xC0 は独立データ放送として受け付けるが、同じ種別を使う地デジのワンセグは除外する。
+                ## エンジニアリングサービス (type:0xA4) などは引き続き除外する。
                 ## 詳細は ARIB STD-B10 第2部 6.2.13 に記載されている
                 ## https://web.archive.org/web/20140427183421if_/http://www.arib.or.jp/english/html/overview/doc/2-STD-B10v5_3.pdf#page=153
-                if service['service_type'] not in [0x01, 0x02, 0xa1, 0xa2, 0xad]:
+                if service['service_type'] not in [0x01, 0x02, 0xa1, 0xa2, 0xad, 0xc0]:
                     continue
 
                 # 不明なネットワーク ID のチャンネルを弾く
                 channel_type = TSInformation.getNetworkType(service['onid'])
                 if channel_type == 'OTHER':
+                    continue
+                if service['service_type'] == 0xc0 and channel_type == 'GR':
                     continue
 
                 # チャンネル ID
@@ -531,6 +560,11 @@ class Channel(TortoiseModel):
                 same_network_id_counts,
                 same_remocon_id_counts,
             )
+        # EDCB でもバックエンドの明示的な種別だけを使い、SID や番組情報の欠落から推測しない。
+        cls._data_channel_ids = {
+            f'NID{service["onid"]}-SID{service["sid"]:03d}' for service in services
+            if service['service_type'] == 0xc0 and TSInformation.getNetworkType(service['onid']) not in ['GR', 'OTHER']
+        }
 
 
     @classmethod

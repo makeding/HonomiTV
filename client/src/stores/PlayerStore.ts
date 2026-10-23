@@ -118,6 +118,8 @@ const usePlayerStore = defineStore('player', {
 
         // データ放送アプリケーションが表示されているか
         is_data_broadcasting_display: false,
+        // 純データ放送の失敗理由。プレイヤーと隣接する再試行操作へ表示し、退出時に破棄する。
+        data_broadcasting_error: null as string | null,
 
         // データ放送中の視聴パネルを表示するか
         // 通常時の is_panel_display とは分離し、データ放送のために開いたパネルでユーザー設定を上書きしない
@@ -252,6 +254,7 @@ const usePlayerStore = defineStore('player', {
                 }
             })();
             this.is_data_broadcasting_display = false;
+            this.data_broadcasting_error = null;
             this.tv_panel_active_tab = useSettingsStore().settings.tv_panel_active_tab;
             this.video_panel_active_tab = useSettingsStore().settings.video_panel_active_tab;
             this.twitter_active_tab = useSettingsStore().settings.twitter_active_tab;

@@ -48,6 +48,8 @@ export interface IChannel {
     jikkyo_force: number | null;
     is_subchannel: boolean;
     is_radiochannel: boolean;
+    // サービス種別は受信バックエンドが判定する。旧サーバーでは未提供のため省略可能。
+    is_datachannel?: boolean;
     is_watchable: boolean;
     source: 'Broadcast' | 'Jellyfin';
     capabilities: IChannelCapabilities;
@@ -76,6 +78,7 @@ export const ILiveChannelDefault: ILiveChannel = {
     jikkyo_force: null,
     is_subchannel: false,
     is_radiochannel: false,
+    is_datachannel: false,
     is_watchable: true,
     source: 'Broadcast',
     capabilities: {

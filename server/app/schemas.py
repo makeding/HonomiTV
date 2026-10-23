@@ -59,6 +59,7 @@ class Channel(PydanticModel):
     jikkyo_force: int | None = None
     is_subchannel: bool = False
     is_radiochannel: bool = False
+    is_datachannel: bool = False
     is_watchable: bool = False
     source: Literal['Broadcast'] = 'Broadcast'
     capabilities: ChannelCapabilities = BroadcastChannelCapabilities

@@ -10,11 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 from fastapi.requests import Request
 from fastapi.responses import Response, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
+from starlette.background import BackgroundTask
 from starlette.types import Receive
 
 from app import logging, schemas
 from app.constants import API_REQUEST_HEADERS
 from app.models.Channel import Channel
+from app.streams.LiveDataBroadcastingStream import LiveDataBroadcastingStream
 from app.streams.LiveStream import LiveStream, LiveStreamStatus
 from app.streams.StreamEncodingOptions import (
     LiveStreamQualityWithOptions,
@@ -43,6 +45,32 @@ async def ValidateChannelID(display_channel_id: Annotated[str, Path(description=
         )
 
     return display_channel_id
+
+
+@router.get('/{display_channel_id}/data-broadcasting', response_class=StreamingResponse)
+async def LiveDataBroadcastingStreamAPI(
+    display_channel_id: Annotated[str, Depends(ValidateChannelID)],
+) -> StreamingResponse:
+    """
+    独立データ放送を映像エンコーダーに依存せず配信する。
+
+    Args:
+        display_channel_id (str): 視聴対象のチャンネル ID。
+
+    Returns:
+        StreamingResponse: 復号済み MPEG-TS。
+    """
+
+    # 通常の動画チャンネルを誤ってこの経路で再生しない。
+    channel = await Channel.get(display_channel_id=display_channel_id)
+    if not channel.is_watchable or not channel.is_datachannel:
+        raise HTTPException(422, 'Standalone data channel is required [DATA_CHANNEL_REQUIRED]')
+    stream = LiveDataBroadcastingStream(channel)
+    await stream.open()
+    return StreamingResponse(
+        stream.chunks(), media_type='video/mp2t', background=BackgroundTask(stream.close),
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
+    )
 
 
 async def ValidateQuality(

@@ -6,6 +6,7 @@
         'watch-player--pure-black': settingsStore.settings.use_pure_black_player_background,
         'watch-player--data-broadcasting': playerStore.is_data_broadcasting_display,
         'watch-player--net': playback_mode === 'Live' && channelsStore.channel.current.type === 'IPTV',
+        'watch-player--standalone-data': playback_mode === 'Live' && channelsStore.channel.current.is_datachannel === true,
     }">
         <div class="watch-player__background-wrapper">
             <div class="watch-player__background" :class="{
@@ -20,6 +21,14 @@
             :class="{'watch-player__buffering--display': playerStore.is_video_buffering}">
         </v-progress-circular>
         <div class="watch-player__dplayer"></div>
+        <div v-if="playback_mode === 'Live' && channelsStore.channel.current.is_datachannel === true"
+            class="watch-player__data-status" :class="{'watch-player__data-status--error': playerStore.data_broadcasting_error}">
+            <template v-if="playerStore.data_broadcasting_error">
+                <p role="alert">{{playerStore.data_broadcasting_error}}</p>
+                <v-btn variant="tonal" @click="playerStore.event_emitter.emit('PlayerRestartRequired', {message: 'データ放送を再読み込みしています…'})">再試行</v-btn>
+            </template>
+            <p v-else-if="playerStore.is_loading" role="status">データ放送を読み込んでいます…</p>
+        </div>
         <div class="watch-player__dplayer-setting-cover"
             :class="{'watch-player__dplayer-setting-cover--display': playerStore.is_player_setting_panel_open}"
             @click="handleSettingCoverClick"></div>
@@ -89,8 +98,33 @@ const handleSettingCoverClick = () => {
 </script>
 <style lang="scss">
 
+.watch-player--standalone-data {
+    // 音声・動画のないサービスには再生・画質・PiP 操作を表示しない。再起動・全画面・音量は維持する。
+    .dplayer-play-icon, .dplayer-mobile-play, .dplayer-quality, .dplayer-pip-icon {
+        display: none !important;
+    }
+    .watch-player__data-status {
+        position: absolute;
+        top: calc(50% + 44px);
+        left: 16px;
+        right: 16px;
+        z-index: 12;
+        text-align: center;
+        pointer-events: none;
+        &--error {
+            top: 50%;
+            transform: translateY(-50%);
+            padding: 20px;
+            background: rgb(var(--v-theme-background));
+            border-radius: 8px;
+            pointer-events: auto;
+            p { margin-bottom: 16px; overflow-wrap: anywhere; }
+        }
+    }
+}
+
 // DPlayer のデフォルトスタイルを上書き
-.watch-player--net {
+.watch-player--net, .watch-player--standalone-data {
     // 実況非対応のネット視聴には、操作しても効果のないコメント設定を表示しない。
     .dplayer-setting-showdan,
     .dplayer-setting-danunlimit,

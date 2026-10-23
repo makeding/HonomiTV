@@ -9,6 +9,7 @@ import router from '@/router';
 import APIClient from '@/services/APIClient';
 import PlayerManager from '@/services/player/PlayerManager';
 import useChannelsStore from '@/stores/ChannelsStore';
+import usePlayerStore from '@/stores/PlayerStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils, { PlayerUtils } from '@/utils';
 import { ILivePSIArchivedDataDecoder } from '@/workers/LivePSIArchivedDataDecoder';
@@ -69,6 +70,13 @@ class LiveDataBroadcastingManager implements PlayerManager {
     // PSI/SI アーカイブデータデコーダーのインスタンス
     private live_psi_archived_data_decoder: Comlink.Remote<ILivePSIArchivedDataDecoder> | null = null;
 
+    // 非同期の Worker/BML 応答を現在の視聴世代に限定する。
+    private session_generation = 0;
+    private data_load_timeout: ReturnType<typeof setTimeout> | null = null;
+    private standalone_failed = false;
+    // 独立データ放送のために自動で開いたリモコン・タブだけを退出時に復元する。
+    private previous_panel_state: {tab: 'Program' | 'Channel' | 'Comment' | 'Twitter'; remocon: boolean} | null = null;
+
     /**
      * コンストラクタ
      * @param player DPlayer のインスタンス
@@ -93,8 +101,26 @@ class LiveDataBroadcastingManager implements PlayerManager {
      */
     public async init(): Promise<void> {
         const channels_store = useChannelsStore();
+        const player_store = usePlayerStore();
+        const generation = ++this.session_generation;
+        const is_standalone = channels_store.channel.current.is_datachannel === true;
+        this.standalone_failed = false;
 
-        const is_data_broadcasting_enabled = useSettingsStore().settings.tv_show_data_broadcasting;
+        // この画面自体がデータ放送なので、通常番組に重ねるデータ放送の表示設定には依存させない。
+        if (is_standalone) {
+            this.previous_panel_state = {tab: player_store.tv_panel_active_tab, remocon: player_store.is_remocon_display};
+            player_store.tv_panel_active_tab = 'Program';
+            player_store.is_remocon_display = true;
+            player_store.is_data_broadcasting_display = true;
+            player_store.is_data_broadcasting_panel_display = true;
+            player_store.data_broadcasting_error = null;
+            player_store.live_stream_status = 'Standby';
+            this.data_load_timeout = setTimeout(() => {
+                this.failStandalone('データ放送の画面を読み込めませんでした。放送内容を受信できていないか、ページに未対応の可能性があります。[DATA_BML_TIMEOUT]');
+            }, 30000);
+        }
+
+        const is_data_broadcasting_enabled = is_standalone || useSettingsStore().settings.tv_show_data_broadcasting;
         console.log(`[LiveDataBroadcastingManager] BMLBrowser: ${is_data_broadcasting_enabled ? 'enabled' : 'disabled'}`);
 
         // リモコンのボタンを初期化
@@ -344,6 +370,17 @@ class LiveDataBroadcastingManager implements PlayerManager {
             this.bml_browser_width = 960;
             this.bml_browser_height = 540;
 
+            // EIT を送らない独立データ放送でも起動できるよう、既知の放送識別子だけを先に渡す。
+            // 未取得の番組名・イベント・時刻は捏造せず null とし、実際の TS 情報で後から更新される。
+            if (is_standalone) {
+                const channel = channels_store.channel.current;
+                this.#bml_browser.emitMessage({
+                    type: 'programInfo', originalNetworkId: channel.network_id, networkId: channel.network_id,
+                    transportStreamId: channel.transport_stream_id, serviceId: channel.service_id,
+                    eventId: null, eventName: null, startTimeUnixMillis: null, durationSeconds: null, indefiniteDuration: null,
+                });
+            }
+
             // BML ブラウザが保持する FontFace をこの時点で全て明示的にロードしておき、画面のチラつきを防ぐ
             for (const font of (this.#bml_browser as any).fonts) {
                 font.load();  // ロード完了を待たない
@@ -351,6 +388,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
 
             // BML ブラウザがロードされたときのイベント
             this.#bml_browser.addEventListener('load', (event) => {
+                if (generation !== this.session_generation || this.standalone_failed) return;
                 console.log('[LiveDataBroadcastingManager] BMLBrowser: load', event.detail);
 
                 // BML ブラウザの要素に幅と高さを設定
@@ -363,11 +401,21 @@ class LiveDataBroadcastingManager implements PlayerManager {
                 this.calculateBMLBrowserScaleFactor(this.player.template.videoWrap.clientWidth, this.player.template.videoWrap.clientHeight);
 
                 // 映像の要素をデータ放送内に移動
-                this.moveVideoElementToBMLBrowser();
+                if (is_standalone) {
+                    if (this.data_load_timeout !== null) clearTimeout(this.data_load_timeout);
+                    this.data_load_timeout = null;
+                    player_store.is_loading = false;
+                    player_store.is_video_buffering = false;
+                    player_store.is_background_display = false;
+                    player_store.live_stream_status = 'ONAir';
+                } else {
+                    this.moveVideoElementToBMLBrowser();
+                }
             });
 
             // BML ブラウザの表示状態が変化したときのイベント
             this.#bml_browser.addEventListener('invisible', (event) => {
+                if (generation !== this.session_generation || this.standalone_failed) return;
                 if (event.detail === true) {
                     // 非表示状態
                     // データ放送内に移動していた映像の要素を DPlayer に戻す
@@ -381,7 +429,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
                     // 表示状態
                     // 映像の要素をデータ放送内に移動
                     console.log('[LiveDataBroadcastingManager] BMLBrowser: visible');
-                    this.moveVideoElementToBMLBrowser();
+                    if (!is_standalone) this.moveVideoElementToBMLBrowser();
                     // BML ブラウザのコンテナ要素を display: block にする
                     if (this.container_element !== null) {
                         this.container_element.style.display = 'block';
@@ -417,11 +465,18 @@ class LiveDataBroadcastingManager implements PlayerManager {
             this.toggleRemoconButtonsLoading(false);
             return;
         }
-        this.live_psi_archived_data_decoder = await new LivePSIArchivedDataDecoderProxy(channels_store.channel.current, current_api_quality);
+        const decoder = await new LivePSIArchivedDataDecoderProxy(channels_store.channel.current, current_api_quality);
+        // Worker 作成を待つ間に退出していた場合、旧チャンネルを受信させない。
+        if (generation !== this.session_generation || this.standalone_failed) {
+            decoder.destroy();
+            return;
+        }
+        this.live_psi_archived_data_decoder = decoder;
 
         // デコードを開始
         // デコーダーは Web Worker 上で実行される (コールバックを Comlink.proxy() で包むのがポイント)
         this.live_psi_archived_data_decoder.run(Comlink.proxy(async (message) => {
+            if (generation !== this.session_generation || this.standalone_failed) return;
 
             // データ放送有効時のみ
             if (this.#bml_browser !== null) {
@@ -476,6 +531,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
                     }
                 }
             }
+        }), Comlink.proxy((reason: string) => {
+            if (is_standalone && generation === this.session_generation) this.failStandalone(reason);
         }));
 
         console.log('[LiveDataBroadcastingManager] Initialized.');
@@ -724,6 +781,18 @@ class LiveDataBroadcastingManager implements PlayerManager {
      */
     public async destroy(): Promise<void> {
         const channels_store = useChannelsStore();
+        ++this.session_generation;
+        if (this.data_load_timeout !== null) clearTimeout(this.data_load_timeout);
+        this.data_load_timeout = null;
+        // 通常チャンネルへ戻った時に、データ放送用の面板や失敗理由を残さない。
+        if (this.previous_panel_state !== null) {
+            const player_store = usePlayerStore();
+            player_store.tv_panel_active_tab = this.previous_panel_state.tab;
+            player_store.is_remocon_display = this.previous_panel_state.remocon;
+            player_store.is_data_broadcasting_display = false;
+            player_store.data_broadcasting_error = null;
+            this.previous_panel_state = null;
+        }
 
         // ライブ PSI/SI アーカイブデータデコーダーを終了
         if (this.live_psi_archived_data_decoder !== null) {
@@ -773,6 +842,25 @@ class LiveDataBroadcastingManager implements PlayerManager {
 
             console.log('[LiveDataBroadcastingManager] Destroyed.');
         }
+    }
+    /**
+     * 純データ放送の待機を止め、画面上の再試行操作と一緒に原因を表示する。
+     * @param reason 安全なエラーコードを含む失敗理由
+     */
+    private failStandalone(reason: string): void {
+        if (this.standalone_failed) return;
+        this.standalone_failed = true;
+        if (this.data_load_timeout !== null) clearTimeout(this.data_load_timeout);
+        this.data_load_timeout = null;
+        const player_store = usePlayerStore();
+        player_store.is_loading = false;
+        player_store.is_video_buffering = false;
+        player_store.live_stream_status = 'Offline';
+        player_store.data_broadcasting_error = reason;
+        // 再試行が押されるまでチューナーを占有しない。
+        this.live_psi_archived_data_decoder?.destroy();
+        this.live_psi_archived_data_decoder = null;
+        this.toggleRemoconButtonsLoading(false);
     }
 }
 

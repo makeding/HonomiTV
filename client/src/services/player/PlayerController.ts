@@ -620,7 +620,7 @@ class PlayerController {
             // ループ再生 (ライブ視聴では無効)
             loop: (this.playback_mode === 'Live' || is_recording_chase_playback === true) ? false : true,
             // 自動再生
-            autoplay: true,
+            autoplay: !(this.playback_mode === 'Live' && channels_store.channel.current.is_datachannel === true),
             // AirPlay 機能 (うまく動かないため無効化)
             airplay: false,
             // ショートカットキー（こちらで制御するため無効化）
@@ -664,6 +664,16 @@ class PlayerController {
 
                 // ライブ視聴: チャンネル情報がセットされているはず
                 if (this.playback_mode === 'Live') {
+                    // 純データ放送は動画バックエンドを起動せず、既存 BML Manager が TS を受信する。
+                    if (channels_store.channel.current.is_datachannel === true) {
+                        return {url: '', type: 'data-broadcasting', customType: {'data-broadcasting': (video, player) => {
+                            // 空 URL をページ自身へのメディアリクエストに変えず、動画操作も開始させない。
+                            video.removeAttribute('src');
+                            player.play = () => {};
+                            player.pause = () => {};
+                            player.toggle = () => {};
+                        }}};
+                    }
                     if (this.live_session_required && this.live_session_info === null) {
                         return {url: '', type: 'normal'};
                     }
@@ -934,7 +944,7 @@ class PlayerController {
             })(),
 
             // コメントの設定
-            danmaku: this.playback_mode === 'Live' && channels_store.channel.current.type === 'IPTV' ? undefined : {
+            danmaku: this.playback_mode === 'Live' && (channels_store.channel.current.type === 'IPTV' || channels_store.channel.current.is_datachannel === true) ? undefined : {
                 // コメントするユーザー名: 便宜上 KonomiTV に固定 (実際には利用されない)
                 user: 'KonomiTV',
                 // コメントの流れる速度
@@ -1379,7 +1389,9 @@ class PlayerController {
         this.player.controller.setAutoHide = (time: number) => {};
 
         // DPlayer に動画再生系のイベントハンドラーを登録する
-        this.setupVideoPlaybackHandler();
+        if (!(this.playback_mode === 'Live' && channels_store.channel.current.is_datachannel === true)) {
+            this.setupVideoPlaybackHandler();
+        }
 
         // DPlayer のフルスクリーン関係のメソッドを無理やり上書きし、KonomiTV の UI と統合する
         this.setupFullscreenHandler();
@@ -1480,7 +1492,7 @@ class PlayerController {
             console.warn('\u001b[31m[PlayerController] PlayerRestartRequired event received. Message: ', event.message);
 
             // ライブ視聴: iOS 17.0 以下で mpegts.js がサポートされていない場合は再起動できない
-            if (this.playback_mode === 'Live' && this.live_session_required === false && mpegts.isSupported() !== true) {  // mpegts.js 非対応環境では undefined が返る
+            if (this.playback_mode === 'Live' && channels_store.channel.current.is_datachannel !== true && this.live_session_required === false && mpegts.isSupported() !== true) {  // mpegts.js 非対応環境では undefined が返る
                 console.warn('\u001b[31m[PlayerController] PlayerRestartRequired event received, but mpegts.js is not supported. Ignored.');
                 // iOS 17.0 以下は mpegts.js がサポートされていないため、再生できない
                 this.player?.notice('iOS (Safari) 17.0 以下での視聴には対応していません。速やかに iOS を 17.1 以降に更新してください。', -1, undefined, '#FF6F6A');
@@ -1622,7 +1634,7 @@ class PlayerController {
         if (this.playback_mode === 'Live') {
             // ライブ視聴時に設定する PlayerManager
             this.player_managers = [
-                new LiveHistoryManager(this.player),
+                ...(channels_store.channel.current.is_datachannel !== true ? [new LiveHistoryManager(this.player)] : []),
                 ...(this.live_session_info !== null ? [new LiveSessionPlaybackManager(this.player, (reason) => {
                     // DPlayer 自体は残し、標準の通知と再起動ボタンを使う。
                     void this.live_session.close();
@@ -1632,8 +1644,8 @@ class PlayerController {
                     player_store.live_stream_status = 'Offline';
                     this.player?.notice(`${reason} プレイヤーの再起動ボタンで再試行できます。`, -1, undefined, '#FF6F6A');
                 })] : []),
-                ...(this.live_session_required === false ? [new LiveEventManager(this.player)] : []),
-                ...(channels_store.channel.current.type !== 'IPTV' && this.live_session_required === false ?
+                ...(this.live_session_required === false && channels_store.channel.current.is_datachannel !== true ? [new LiveEventManager(this.player)] : []),
+                ...(channels_store.channel.current.type !== 'IPTV' && channels_store.channel.current.is_datachannel !== true && this.live_session_required === false ?
                     [new LiveCommentManager(this.player)] : []),
                 ...(this.live_session_required === false ? [this.player.quality?.type === 'tlv' ?
                     new TLVDataBroadcastingManager(this.player, this.playback_mode) :
