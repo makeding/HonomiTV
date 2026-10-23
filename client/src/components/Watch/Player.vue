@@ -108,7 +108,8 @@ const handleSettingCoverClick = () => {
         top: calc(50% + 44px);
         left: 16px;
         right: 16px;
-        z-index: 12;
+        // 受信状態は映像より前、ナビゲーション・切局操作より後ろに表示する。
+        z-index: 2;
         text-align: center;
         pointer-events: none;
         &--error {
@@ -706,6 +707,11 @@ _::-webkit-full-page-media, _:future, :root .dplayer-subtitle-icon[aria-label='�
     // プレイヤー側の操作ボタンは application canvas より前に置く。
     &.watch-player--data-broadcasting .watch-player__button {
         z-index: 2;
+    }
+
+    // 専用データ放送のエラー中も切局・パネル操作を妨げない。
+    &.watch-player--standalone-data .watch-player__button {
+        z-index: 3;
     }
 
     // TLV の調谐中は application canvas が先に生成されるため、通常の GR / BS / CS と同じ

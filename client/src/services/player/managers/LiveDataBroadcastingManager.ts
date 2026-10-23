@@ -82,7 +82,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
     private data_load_timeout: ReturnType<typeof setTimeout> | null = null;
     private standalone_failed = false;
     // 独立データ放送のために自動で開いたリモコン・タブだけを退出時に復元する。
-    private previous_panel_state: {tab: 'Program' | 'Channel' | 'Comment' | 'Twitter'; remocon: boolean} | null = null;
+    private previous_panel_state: {remocon: boolean} | null = null;
 
     /**
      * コンストラクタ
@@ -115,8 +115,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
 
         // この画面自体がデータ放送なので、通常番組に重ねるデータ放送の表示設定には依存させない。
         if (is_standalone) {
-            this.previous_panel_state = {tab: player_store.tv_panel_active_tab, remocon: player_store.is_remocon_display};
-            player_store.tv_panel_active_tab = 'Program';
+            this.previous_panel_state = {remocon: player_store.is_remocon_display};
+            // 選択中のパネルは維持し、受信開始・再試行でユーザーの操作場所を変更しない。
             player_store.is_remocon_display = true;
             player_store.is_data_broadcasting_display = true;
             player_store.is_data_broadcasting_panel_display = true;
@@ -893,7 +893,6 @@ class LiveDataBroadcastingManager implements PlayerManager {
         // 通常チャンネルへ戻った時に、データ放送用の面板や失敗理由を残さない。
         if (this.previous_panel_state !== null) {
             const player_store = usePlayerStore();
-            player_store.tv_panel_active_tab = this.previous_panel_state.tab;
             player_store.is_remocon_display = this.previous_panel_state.remocon;
             player_store.is_data_broadcasting_display = false;
             player_store.data_broadcasting_error = null;
