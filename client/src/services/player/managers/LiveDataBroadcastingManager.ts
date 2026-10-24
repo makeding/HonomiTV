@@ -10,6 +10,7 @@ import type { HybridcastLaunchRequest } from '@/services/player/hybridcast/XMLAI
 import router from '@/router';
 import APIClient from '@/services/APIClient';
 import HybridcastSession from '@/services/player/hybridcast/HybridcastSession';
+import { adaptSkyPerfecTVBML } from '@/services/player/hybridcast/SkyPerfecTV';
 import PlayerManager from '@/services/player/PlayerManager';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
@@ -56,6 +57,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
     private hybridcast: HybridcastSession | null = null;
     private hybridcast_generation = 0;
     private hybridcastRequest: {request: HybridcastLaunchRequest; publicHelp: boolean} | null = null;
+    // 検証済み CS101 BML を調整したセッションでは、起動先を公開ヘルプに限定する。
+    private sky_public_help_bml = false;
 
     // BML ブラウザの幅と高さ
     private bml_browser_width: number = 960;
@@ -172,7 +175,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
                         organizationId: parseInt(request.organizationId, 16),
                         applicationId: parseInt(request.applicationId, 16),
                         greg: [...request.greg],
-                    });
+                    }, this_.sky_public_help_bml && parseInt(request.organizationId, 16) === 4153 &&
+                        parseInt(request.applicationId, 16) === 1);
                     return 0;
                 },
                 // ステータス更新時のイベント
@@ -528,10 +532,15 @@ class LiveDataBroadcastingManager implements PlayerManager {
                     }
                 }
 
-                // TS ストリームのデコード結果を BML ブラウザにそのまま送信する
+                // TS ストリームのデコード結果を BML ブラウザに送信する
                 // IProgramPF は KonomiTV の UI 表示用の番組情報イベントなので、BML ブラウザには送信しない
                 if (message.type !== 'IProgramPF') {
-                    this.#bml_browser.emitMessage(message);
+                    const channel = channels_store.channel.current;
+                    const adapted = await adaptSkyPerfecTVBML(message, channel.network_id, channel.service_id);
+                    // ハッシュ確認を待つ間に選局・終了していた場合、旧文書を新しいブラウザへ渡さない。
+                    if (generation !== this.session_generation || this.standalone_failed || this.#bml_browser === null) return;
+                    if (adapted !== message) this.sky_public_help_bml = true;
+                    this.#bml_browser.emitMessage(adapted);
                 }
             }
 
@@ -631,7 +640,10 @@ class LiveDataBroadcastingManager implements PlayerManager {
             const hybridcastAction = button.dataset.hybridcastAction;
             if (hybridcastAction === 'Toggle') {
                 if (this.hybridcast !== null) await this.stopHybridcast();
-                else if (this.hybridcastRequest !== null) await this.startHybridcast(this.hybridcastRequest.request);
+                else if (this.hybridcastRequest !== null) {
+                    const {request, publicHelp} = this.hybridcastRequest;
+                    await this.startHybridcast(request, publicHelp);
+                }
                 return;
             }
             if (hybridcastAction === 'PublicHelp' && this.hybridcastRequest !== null) {
@@ -885,6 +897,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
         ++this.session_generation;
         await this.stopHybridcast();
         this.hybridcastRequest = null;
+        this.sky_public_help_bml = false;
         usePlayerStore().hybridcast_available = false;
         usePlayerStore().hybridcast_public_help_available = false;
         const channels_store = useChannelsStore();
