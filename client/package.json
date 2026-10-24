@@ -33,7 +33,7 @@
         "floating-vue": "^5.2.2",
         "hls.js": "^1.6.9",
         "idb": "^8.0.3",
-        "libaribhtml5": "0.1.8",
+        "libaribhtml5": "0.1.9",
         "mitt": "^3.0.1",
         "mpeg2toh264": "github:tsukumijima/mpeg2toh264#69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1",
         "mpegts.js": "github:tsukumijima/mpegts.js#bf4e49d0ff004cf7546237393a62c66e4b926dca",

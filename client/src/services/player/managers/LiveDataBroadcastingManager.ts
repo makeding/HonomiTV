@@ -612,7 +612,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
             service_id: channel.service_id ?? undefined,
         }, () => { void this.stopHybridcast(); }, fail, () => {
             if (this.hybridcast === session) store.is_hybridcast_loading = false;
-        });
+        }, publicHelp);
         this.hybridcast = session;
         try {
             await session.start(request, publicHelp);

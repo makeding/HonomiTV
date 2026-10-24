@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
@@ -44,7 +45,10 @@ class GGuideAssets:
     assets: tuple[GGuideAsset, ...]
 
 
-async def GetGGuideAssets() -> GGuideAssets:
+_assets_request_task: asyncio.Task[GGuideAssets] | None = None
+
+
+async def FetchGGuideAssets() -> GGuideAssets:
     """
     Mirakurun が公開する Gガイド素材を取得する。
 
@@ -74,6 +78,34 @@ async def GetGGuideAssets() -> GGuideAssets:
         except ValidationError:
             continue
     return GGuideAssets(status='Available', assets=tuple(assets))
+
+
+async def GetGGuideAssets() -> GGuideAssets:
+    """
+    同時に届いた Gガイド素材要求で Mirakurun へ重複アクセスしない。
+
+    Args:
+        None
+
+    Returns:
+        GGuideAssets: 素材と、利用可否を表す取得結果。
+    """
+
+    # 番組表 API とコレクション API は同じ素材一覧を同時に要求するため、進行中の取得を共有する。
+    if GetBackendForChannelAndProgram() != 'Mirakurun':
+        return GGuideAssets(status='Unsupported', assets=())
+
+    global _assets_request_task
+    if _assets_request_task is None or _assets_request_task.done():
+        _assets_request_task = asyncio.create_task(FetchGGuideAssets())
+    request_task = _assets_request_task
+    try:
+        # 呼び出し側の切断で共有中の上流要求まで中断し、他の待機者を失敗させない。
+        return await asyncio.shield(request_task)
+    finally:
+        # 完了した要求だけを解放し、まだ待機中の共有要求は後続呼び出しにも使う。
+        if request_task.done() and _assets_request_task is request_task:
+            _assets_request_task = None
 
 
 async def GetGGuideImages() -> dict[tuple[int, int, int, int], str]:

@@ -1,7 +1,6 @@
 import { AribReceiverHost, ServiceWorkerBroadcastVfs } from 'libaribhtml5';
 
 
-import { SKY_HELP_PREFIX } from './SkyPerfecTV';
 import { HybridcastLaunchRequest, resolveXMLAIT } from './XMLAIT';
 
 import type { ProgramInfo, RuntimeWindow } from 'libaribhtml5';
@@ -25,7 +24,8 @@ export default class HybridcastSession {
     private disposed = false;
 
     constructor(container: HTMLElement, program: ProgramInfo, private readonly onExit: () => void,
-        private readonly onError: (code: string) => void, private readonly onReady: () => void) {
+        private readonly onError: (code: string) => void, private readonly onReady: () => void,
+        private readonly publicHelp = false) {
         // 動画面と BML の DOM は保持し、同じ視聴枠の上に HTML5 の面だけを重ねる。
         Object.assign(this.viewport.style, {position: 'absolute', inset: '0', pointerEvents: 'none', zIndex: '4'});
         Object.assign(this.iframe.style, {
@@ -35,8 +35,9 @@ export default class HybridcastSession {
         this.iframe.title = 'Hybridcast';
         this.iframe.tabIndex = -1;
         container.append(this.viewport, this.iframe);
+        const broadcastBaseUrl = publicHelp ? '/api/data-broadcasting/hybridcast/' : '/data-broadcast/';
         this.host = new AribReceiverHost({
-            iframe: this.iframe, viewport: this.viewport, broadcastBaseUrl: '/data-broadcast/',
+            iframe: this.iframe, viewport: this.viewport, broadcastBaseUrl,
             allowExternalNetwork: false, getDeviceIdentifier: () => null,
             userAgent: 'Hybridcast/1.0',
             onLaunchDataBroadcastingBrowser: () => this.onExit(),
@@ -82,14 +83,16 @@ export default class HybridcastSession {
         }
         // 公開ヘルプでは BML の選局状態を要求する導入ページを経由せず、検証済みアプリへ入る。
         if (publicHelp) entry.pathname = '/content-sky/app/index.html';
-        await this.backend.initialize();
+        // 公開ヘルプは固定ホストの同一オリジン API から直接配信するため、空の VFS Worker を登録しない。
+        if (!publicHelp) await this.backend.initialize();
         if (this.disposed) return;
         this.host.setBmlGreg(request.greg);
         this.host.setApplicationInformation({
             type: 'ISDB-HTML', organizationId: request.organizationId, applicationId: request.applicationId,
             controlCode: 'AUTOSTART',
         });
-        const root = publicHelp ? SKY_HELP_PREFIX : `/data-broadcast/.external/${entry.protocol.slice(0, -1)}/${entry.hostname}/`;
+        const root = publicHelp ? '/api/data-broadcasting/hybridcast/' :
+            `/data-broadcast/.external/${entry.protocol.slice(0, -1)}/${entry.hostname}/`;
         this.host.loadApplication(`${root}${entry.pathname.slice(1)}${entry.search}${entry.hash}`);
     }
 
