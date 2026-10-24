@@ -126,7 +126,11 @@ describe('H ガイドの任意コレクション', () => {
             await flushPromises();
             expect(target.querySelector('.gguide--banner')).not.toBeNull();
             expect(target.querySelector('.gguide--landscape')).toBeNull();
-            resize([{contentRect: {width: 300}}] as ResizeObserverEntry[], {} as ResizeObserver);
+            // 実際に必要な幅は約 361px。480px 未満でも収まり、足りない場合だけ専用行へ戻す。
+            resize([{contentRect: {width: 370}}] as ResizeObserverEntry[], {} as ResizeObserver);
+            await flushPromises();
+            expect(target.querySelector('.gguide--banner')).not.toBeNull();
+            resize([{contentRect: {width: 360}}] as ResizeObserverEntry[], {} as ResizeObserver);
             await flushPromises();
             expect(target.querySelector('.gguide--banner')).toBeNull();
             expect(wrapper.get('.gguide--banner').findComponent(carousel).props('modelValue')).toBe(banner.id);

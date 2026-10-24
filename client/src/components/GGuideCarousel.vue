@@ -3,7 +3,7 @@
         <Teleport v-for="group in visibleGroups" :key="group.kind" :to="props.bannerTarget ?? 'body'"
             :disabled="group.kind !== 'Banner' || !canUseHeader">
             <section class="gguide" :class="[`gguide--${group.kind.toLowerCase()}`, {'gguide--header': group.kind === 'Banner' && canUseHeader}]"
-                :style="{'--gguide-banner-ratio': bannerRatio}"
+                :style="{'--gguide-header-width': `${headerBannerWidth}px`}"
                 :aria-label="`H ガイド ${group.kind}`"
                 @mouseenter="onMouseEnter" @mouseleave="onMouseLeave"
                 @focusin="isFocused = true" @focusout="onFocusOut">
@@ -116,8 +116,6 @@ const emit = defineEmits<{
 }>();
 const headerWidth = ref(0);
 let headerObserver: ResizeObserver | null = null;
-// ロゴと既存の操作ボタンが占めた後の実幅で判断し、画面幅だけでは押し込まない。
-const canUseHeader = computed(() => headerWidth.value >= 480);
 watch(() => props.bannerTarget, target => {
     headerObserver?.disconnect();
     headerWidth.value = target?.getBoundingClientRect().width ?? 0;
@@ -165,6 +163,9 @@ const groups = computed(() => (['Banner', 'Landscape', 'Poster'] as const).map(k
 // 選択中の画像には依存させず、スライド切り替えによるボタン位置の移動を防ぐ。
 const bannerRatio = computed(() => groups.value[0].assets.length ?
     Math.max(...groups.value[0].assets.map(asset => asset.width / asset.height)) : 728 / 136);
+const headerBannerWidth = computed(() => 57 * bannerRatio.value + 56);
+// ロゴと操作ボタンの後の実幅と、描画に使う幅を比較する。固定の余分な閾値を設けない。
+const canUseHeader = computed(() => headerWidth.value >= headerBannerWidth.value);
 // 放送回の四項目をすべて照合する。EID 再利用や同名番組に誤って移動しない。
 const matchedPrograms = computed(() => {
     const broadcasts = new Map<string, {program: ITimeTableProgram; channel: IChannel}>();
@@ -366,7 +367,7 @@ onBeforeUnmount(() => {
         }
     }
     &--header {
-        width: min(100%, calc(57px * var(--gguide-banner-ratio) + 56px));
+        width: min(100%, var(--gguide-header-width));
         height: 57px;
         margin: 0 0 0 auto;
         .gguide__frame { height: 57px; }

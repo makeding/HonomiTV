@@ -395,11 +395,10 @@ class Program(TortoiseModel):
                     program.video_codec = None
                     program.video_resolution = None
                     if 'video' in program_info:
-                        if program_info['video']['streamContent'] is not None:
-                            program.video_type = ariblib.constants.COMPONENT_TYPE \
-                                [program_info['video']['streamContent']].get(program_info['video']['componentType'], 'Unknown')
-                        else:
-                            program.video_type = 'Unknown'
+                        # ariblib 未定義の streamContent でも EPG 全体を中断しない。
+                        # 説明だけを Unknown とし、受信したコーデック・解像度はそのまま保持する。
+                        component_types = ariblib.constants.COMPONENT_TYPE.get(program_info['video']['streamContent'], {})
+                        program.video_type = component_types.get(program_info['video']['componentType'], 'Unknown')
                         program.video_codec = program_info['video']['type']
                         program.video_resolution = program_info['video']['resolution']
 
