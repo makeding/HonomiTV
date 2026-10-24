@@ -250,6 +250,8 @@ class TLVDataBroadcastingManager implements PlayerManager {
     private dispatch_data_key_after_install = false;
     private autostart_scheduled = false;
     private media_plane_adapter: DPlayerMediaPlaneAdapter | null = null;
+    private runtime_media_patch_observer: MutationObserver | null = null;
+    private runtime_iframe_load_handler: (() => void) | null = null;
     private visible = false;
     private previous_remocon_display: boolean | null = null;
 
@@ -269,8 +271,9 @@ class TLVDataBroadcastingManager implements PlayerManager {
 
         // Worker 自身を scope 配下へ配置しているため Service-Worker-Allowed ヘッダーは不要。
         this.vfs_backend = new ServiceWorkerBroadcastVfs({
-            workerUrl: '/data-broadcast/arib-vfs-sw.js',
-            baseUrl: '/data-broadcast/',
+            // Worker が VFS の応答を所有する。URL に版番号を付けず、登録済み Worker の
+            // 通常の更新処理へ任せることで、特定の生成物へ依存した更新経路を作らない。
+            workerUrl: '/data-broadcast/arib-vfs-sw.js', baseUrl: '/data-broadcast/',
         });
         this.vfs = new BroadcastVfsSession(this.vfs_backend, {
             onError: error => {
@@ -315,6 +318,16 @@ class TLVDataBroadcastingManager implements PlayerManager {
         // z=0 < z=1 < z=2 の順で外部映像面を application canvas の間へ合成する。
         // video 自体は DPlayer が生成した直系子要素のままなので、MSE 接続を失わない。
         this.player.template.videoWrapAspect.prepend(this.viewport, this.iframe);
+
+        // 文書内 bootstrap が失われた復元ページでも、load 済みの同一オリジン文書へ
+        // 直ちに runtime を導入する。AribReceiverHost より先に登録し、host の 404
+        // watchdog が動く前に installed メッセージを送れる順序を維持する。
+        this.runtime_iframe_load_handler = () => {
+            const target = this.iframe?.contentWindow as RuntimeWindow | null;
+            if (target === null || target.location.href === 'about:blank') return;
+            this.runtime_installer?.(target);
+        };
+        this.iframe.addEventListener('load', this.runtime_iframe_load_handler);
 
         const receiver_info = this.readReceiverInfo();
         this.media_plane_adapter = new DPlayerMediaPlaneAdapter(this.player);
@@ -391,6 +404,7 @@ class TLVDataBroadcastingManager implements PlayerManager {
         this.previous_installer = host_window.__ARIB_HTML5_INSTALL__;
         this.runtime_installer = target => {
             this.host?.installRuntime(target);
+            this.patchBroadcastMediaCanvas(target);
             this.installReceiverFontFallback(target);
             this.installNetworkProxy(target);
         };
@@ -432,6 +446,12 @@ class TLVDataBroadcastingManager implements PlayerManager {
         this.host?.setLctBackgroundColor(null);
         this.host?.destroy();
         this.host = null;
+        this.runtime_media_patch_observer?.disconnect();
+        this.runtime_media_patch_observer = null;
+        if (this.iframe !== null && this.runtime_iframe_load_handler !== null) {
+            this.iframe.removeEventListener('load', this.runtime_iframe_load_handler);
+        }
+        this.runtime_iframe_load_handler = null;
         this.viewport?.remove();
         this.iframe?.remove();
         this.viewport = null;
@@ -461,6 +481,44 @@ class TLVDataBroadcastingManager implements PlayerManager {
         }
         this.runtime_installer = undefined;
         console.log('[TLVDataBroadcastingManager] Destroyed.');
+    }
+
+    /**
+     * 同一オリジン文書の非対応 object だけを runtime の映像スロットへ置き換える。
+     * 映像と iframe の合成、背景の透過処理は既存の media-plane 実装に任せる。
+     */
+    private patchBroadcastMediaCanvas(target: RuntimeWindow): void {
+        const document = target.document;
+        const apply = (): void => {
+            for (const object of document.querySelectorAll<HTMLElement>(
+                'object[type="video/x-arib2-broadcast"]',
+            )) {
+                // 放送 CSS の object / video 向け寸法指定を維持する。
+                // div に変えると #vstream video の height: 100% が適用されず、
+                // 空スロットが高さ 0 となって外部 DPlayer まで非表示になる。
+                // src は設定せず、実際の映像は従来どおり元の DPlayer video で再生する。
+                const replacement = document.createElement('video');
+                for (const attribute of Array.from(object.attributes)) {
+                    if (attribute.name.toLowerCase() !== 'type') {
+                        replacement.setAttribute(attribute.name, attribute.value);
+                    }
+                }
+                replacement.setAttribute('data-arib-object', 'video/x-arib2-broadcast');
+                while (object.firstChild !== null) replacement.append(object.firstChild);
+                object.replaceWith(replacement);
+            }
+        };
+
+        this.runtime_media_patch_observer?.disconnect();
+        this.runtime_media_patch_observer = null;
+        apply();
+        if (document.documentElement !== null && typeof target.MutationObserver === 'function') {
+            this.runtime_media_patch_observer = new target.MutationObserver(apply);
+            this.runtime_media_patch_observer.observe(document.documentElement, {
+                childList: true,
+                subtree: true,
+            });
+        }
     }
 
     private async beginSession(): Promise<void> {

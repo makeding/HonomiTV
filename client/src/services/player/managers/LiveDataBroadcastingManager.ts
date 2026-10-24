@@ -115,6 +115,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
         const generation = ++this.session_generation;
         const is_standalone = channels_store.channel.current.is_datachannel === true;
         this.standalone_failed = false;
+        this.sky_public_help_bml = channels_store.channel.current.network_id === 6 &&
+            channels_store.channel.current.service_id === 101;
 
         // この画面自体がデータ放送なので、通常番組に重ねるデータ放送の表示設定には依存させない。
         if (is_standalone) {
@@ -608,7 +610,9 @@ class LiveDataBroadcastingManager implements PlayerManager {
         const store = usePlayerStore();
         store.hybridcast_available = true;
         store.hybridcast_public_help_available = request.organizationId === 4153 && request.applicationId === 1;
-        if (!useSettingsStore().settings.enable_internet_access_from_data_broadcasting) {
+        // 公開ヘルプは固定ホストをサーバー側の同一オリジン API から取得するため、
+        // BML の一般的な外部通信設定が無効でも実験入口を開ける。
+        if (!publicHelp && !useSettingsStore().settings.enable_internet_access_from_data_broadcasting) {
             store.hybridcast_error = '通信が無効です。設定の「データ放送」からインターネット接続を有効にして再試行してください。[HYBRIDCAST_NETWORK_DISABLED]';
             return;
         }
@@ -620,8 +624,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
         const fail = (code: string) => {
             if (generation !== this.session_generation || this.hybridcast !== session) return;
             store.is_hybridcast_loading = false;
-            const reason = code === 'HYBRIDCAST_ADAPTER_MISMATCH' ? '放送局のアプリが更新され、実験用の調整を適用できません。' :
-                'アプリの取得または実行に失敗しました。通信状態や放送アプリの対応状況を確認してください。';
+            const reason = 'アプリの取得または実行に失敗しました。通信状態や放送アプリの対応状況を確認してください。';
             store.hybridcast_error = reason + ' 再試行するか、BML に戻れます。[' + code + ']';
         };
         const session = new HybridcastSession(this.player.template.videoWrap, {

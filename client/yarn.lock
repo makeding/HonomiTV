@@ -4761,9 +4761,9 @@ levn@^0.4.1:
     prelude-ls "^1.2.1"
     type-check "~0.4.0"
 
-libaribhtml5@0.1.9:
+libaribhtml5@^0.1.9:
   version "0.1.9"
-  resolved "https://registry.yarnpkg.com/libaribhtml5/-/libaribhtml5-0.1.9.tgz?v=0.1.9#15e78d91691cf8f72e98af7f87ff2aba6b290ece"
+  resolved "https://registry.yarnpkg.com/libaribhtml5/-/libaribhtml5-0.1.9.tgz#15e78d91691cf8f72e98af7f87ff2aba6b290ece"
   integrity sha512-WWcqOG8ntdXd5uuSRUgMEe2Fk0UYZGeiQJuZxQBAYWXGVTc3lb8Px9/Eogkex076rPz+ZDrisdlDY7YtLfgyKg==
 
 locate-path@^6.0.0:

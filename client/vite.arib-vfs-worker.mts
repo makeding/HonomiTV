@@ -1,5 +1,5 @@
 import { adaptNHKProgramGuideNavigation } from './src/services/player/hybridcast/NHK';
-import { adaptSkyPerfecTVPublicHelp, SKY_HELP_PREFIX } from './src/services/player/hybridcast/SkyPerfecTV';
+import { SKY_HELP_PREFIX, SKY_PUBLIC_HELP_BOOTSTRAP } from './src/services/player/hybridcast/SkyPerfecTV';
 
 const EXTERNAL_PROXY_ALLOWED_HOSTS = [
     '4kdata-p.qvc.jp',
@@ -23,7 +23,7 @@ const EXTERNAL_PROXY_RUNTIME = String.raw`
   // location.href への直接代入は Fetch / XHR の差し替えでは捕捉できないため、
   // 許可ホスト上の文書も VFS Worker の scope 内に写像して receiver runtime を維持する。
   const SKY_HELP_PREFIX = ${JSON.stringify(SKY_HELP_PREFIX)};
-  const adaptSkyPerfecTVPublicHelp = ${adaptSkyPerfecTVPublicHelp.toString()};
+  const SKY_PUBLIC_HELP_BOOTSTRAP = ${JSON.stringify(SKY_PUBLIC_HELP_BOOTSTRAP)};
   const adaptNHKProgramGuideNavigation = ${adaptNHKProgramGuideNavigation.toString()};
   const EXTERNAL_PROXY_PREFIX = VFS_PREFIX + ".external/";
   const EXTERNAL_PROXY_ALLOWED_HOSTS = new Set(${JSON.stringify(EXTERNAL_PROXY_ALLOWED_HOSTS)});
@@ -103,14 +103,6 @@ const EXTERNAL_PROXY_RUNTIME = String.raw`
     }
     let source = await response.text();
     if (resolved.skyHelp) {
-      try {
-        source = await adaptSkyPerfecTVPublicHelp(source, resolved.upstreamUrl.href, 4153, 1);
-      } catch {
-        // 元の JavaScript の代わりに、現在の iframe からのみ受理される失敗通知を返す。
-        return new Response('parent.postMessage({type:"KonomiHybridcastError",code:"HYBRIDCAST_ADAPTER_MISMATCH"},location.origin)', {
-          status: 200, headers: { "Content-Type": "text/javascript", "Cache-Control": "no-store" }
-        });
-      }
       source = source.replace(/https?:\/\/tvip\.hc\.skyperfectv\.co\.jp\//g, SKY_HELP_PREFIX);
     }
     source = rewriteExternalProxyUrls(source);
@@ -120,7 +112,9 @@ const EXTERNAL_PROXY_RUNTIME = String.raw`
         basePath: resolved.rootPath,
         scopePath: resolved.rootPath,
         // Ajax で読む HTML 部品に runtime を再注入すると、挿入時に二重初期化される。
-        bootstrap: ["document", "iframe"].includes(request.destination) ? RUNTIME_BOOTSTRAP : undefined
+        bootstrap: ["document", "iframe"].includes(request.destination)
+          ? RUNTIME_BOOTSTRAP + (resolved.skyHelp ? SKY_PUBLIC_HELP_BOOTSTRAP : '')
+          : undefined
       });
     } else if (rewriteCss) {
       source = prepareBroadcastStylesheet(source, {

@@ -11,6 +11,61 @@
     const basePath = normalizeBasePath(scopePath);
     return `<script>
 (function installAribHtml5Runtime(attempt) {
+  var broadcastType = 'video/x-arib2-broadcast'
+  var scheduledObjects = new WeakSet()
+  function replaceBroadcastObject(object) {
+    if (!object || object.nodeType !== 1 ||
+        String(object.getAttribute('type') || '').trim().toLowerCase() !== broadcastType) return
+    // Keep broadcaster object/video sizing rules; a div loses them and collapses to zero height.
+    // This source-less element is only the slot; the host's existing video keeps playing.
+    var replacement = document.createElement('video')
+    for (var index = 0; index < object.attributes.length; index += 1) {
+      var attribute = object.attributes[index]
+      if (attribute.name.toLowerCase() === 'type') continue
+      replacement.setAttribute(attribute.name, attribute.value)
+    }
+    replacement.setAttribute('data-arib-object', broadcastType)
+    while (object.firstChild) replacement.appendChild(object.firstChild)
+    object.replaceWith(replacement)
+  }
+  function scanBroadcastObjects(root) {
+    if (!root) return
+    if (root.nodeType === 1 && root.matches && root.matches('object')) {
+      scheduleBroadcastObject(root)
+    }
+    if (!root.querySelectorAll) return
+    var objects = root.querySelectorAll('object')
+    for (var index = 0; index < objects.length; index += 1) {
+      scheduleBroadcastObject(objects[index])
+    }
+  }
+  function scheduleBroadcastObject(object) {
+    if (!object || scheduledObjects.has(object)) return
+    scheduledObjects.add(object)
+    setTimeout(function () {
+      scheduledObjects.delete(object)
+      replaceBroadcastObject(object)
+    }, 0)
+  }
+  function observeBroadcastObjects() {
+    scanBroadcastObjects(document)
+    if (!document.documentElement) {
+      queueMicrotask(observeBroadcastObjects)
+      return
+    }
+    var observer = new MutationObserver(function (records) {
+      for (var recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
+        var record = records[recordIndex]
+        for (var nodeIndex = 0; nodeIndex < record.addedNodes.length; nodeIndex += 1) {
+          scanBroadcastObjects(record.addedNodes[nodeIndex])
+        }
+      }
+    })
+    observer.observe(document.documentElement, { childList: true, subtree: true })
+  }
+  if (typeof document !== 'undefined' && typeof MutationObserver === 'function') {
+    observeBroadcastObjects()
+  }
   var install
   try {
     install = parent && parent.__ARIB_HTML5_INSTALL__
@@ -56,14 +111,7 @@
     return `/${base.replace(/^\/+|\/+$/g, "")}/`;
   }
   function rewriteBroadcastObjectMarkup(source) {
-    return source.replace(/<object\b[^>]*>/gi, (tag) => {
-      const broadcast = /\btype\s*=\s*(?:["']video\/x-arib2-broadcast["']|video\/x-arib2-broadcast)(?:\s|\/?>)/i.test(tag);
-      if (!broadcast) return tag;
-      return tag.replace(
-        /\s+type\s*=\s*(?:["']video\/x-arib2-broadcast["']|video\/x-arib2-broadcast)/i,
-        ' data-arib-type="video/x-arib2-broadcast"'
-      ).replace(/\s+data\s*=\s*(["'])(.*?)\1/i, " data-arib-data=$1$2$1");
-    });
+    return source;
   }
   function receiverPath(path, base, scope) {
     if (path.startsWith(scope)) return path;
@@ -275,8 +323,58 @@
 
   // location.href への直接代入は Fetch / XHR の差し替えでは捕捉できないため、
   // 許可ホスト上の文書も VFS Worker の scope 内に写像して receiver runtime を維持する。
+  const SKY_HELP_PREFIX = "/data-broadcast/.hybridcast/4153/1/public-help/";
+  const adaptSkyPerfecTVPublicHelp = function adaptSkyPerfecTVPublicHelp(source, url, organizationId, applicationId) {
+  const resource = new URL(url);
+  if (organizationId !== 4153 || applicationId !== 1 || resource.hostname !== "tvip.hc.skyperfectv.co.jp" || resource.pathname !== "/content-sky/app/js/main.min.js") return source;
+  if (source.includes("__KONOMI_PUBLIC_HELP__")) return source;
+  const onLoadPattern = /([A-Za-z_$][\w$]*)\.prototype\.onLoad=function/g;
+  let owner = null;
+  let start = -1;
+  let end = -1;
+  for (const match of source.matchAll(onLoadPattern)) {
+    if (match.index === void 0) continue;
+    const candidateOwner = match[1];
+    const candidateStart = match.index;
+    const nextPrototype = source.indexOf(`${candidateOwner}.prototype.`, candidateStart + match[0].length);
+    const candidateBody = source.slice(
+      candidateStart,
+      nextPrototype > candidateStart ? nextPrototype : candidateStart + 4e3
+    );
+    if (!candidateBody.includes("initSeqProd()") || !candidateBody.includes('Model.get("bcas")')) continue;
+    const candidateEnd = source.indexOf(`${candidateOwner}.prototype.onKeydown=`, candidateStart);
+    if (candidateEnd <= candidateStart) continue;
+    owner = candidateOwner;
+    start = candidateStart;
+    end = candidateEnd;
+    break;
+  }
+  if (owner === null || start < 0 || end <= start) return source;
+  const broadcastParamPattern = /Util\.bml\.loadBroadcastParam=function\([^)]*\)\{/;
+  if (!broadcastParamPattern.test(source)) return source;
+  source = source.replace(
+    broadcastParamPattern,
+    (match) => match + 'if(window.__KONOMI_PUBLIC_HELP__)return $.Deferred().resolve({VERSION:"0002",BML_NAME:"",parsedGreg:[]});'
+  );
+  const replacement = `${owner}.prototype.onLoad=(function(original){return function(){if(window.__KONOMI_PUBLIC_HELP__)return Action.call(function(){return $.when(LoadResouceString()).then(function(){Util.dom.setVobjInvisible();$("#startUpMessage").remove();return Action.changeScene("sv_help-list")})});return original.apply(this,arguments)}})(${owner}.prototype.onLoad),`;
+  return source.slice(0, start) + replacement + source.slice(end);
+};
+  const adaptNHKProgramGuideNavigation = function adaptNHKProgramGuideNavigation(source, url, rootPath) {
+  const resource = new URL(url);
+  if (resource.hostname !== "hc.nhk.jp" || ![
+    "/hc-program/common/js/hc_action.js",
+    "/hc-program/common/js/hc_action_bs4k8k.js"
+  ].includes(resource.pathname)) return source;
+  for (const page of ["index.html", "index_bs4k8k.html"]) {
+    source = source.replaceAll(
+      `window.location.href="/hc-program/${page}"`,
+      `window.location.href="${rootPath}hc-program/${page}"`
+    );
+  }
+  return source;
+};
   const EXTERNAL_PROXY_PREFIX = VFS_PREFIX + ".external/";
-  const EXTERNAL_PROXY_ALLOWED_HOSTS = new Set(["4kdata-p.qvc.jp","api.qvc.jp","api.nhk.or.jp","beacon.nhk.jp","img.nhk.jp","nhk.jp","qvc.jp","qvc.scene7.com","shv.nhk.jp","tv-stream.nhk.jp","www.nhk-cs.jp","www.nhk.or.jp"]);
+  const EXTERNAL_PROXY_ALLOWED_HOSTS = new Set(["4kdata-p.qvc.jp","api.qvc.jp","api.nhk.or.jp","beacon.nhk.jp","img.nhk.jp","hc.nhk.or.jp","hc.nhk.jp","nhk.jp","qvc.jp","qvc.scene7.com","shv.nhk.jp","tv-stream.nhk.jp","tvip.hc.skyperfectv.co.jp","www.nhk-cs.jp","www.nhk.or.jp"]);
   function externalProxyRoot(scheme, hostname) {
     return EXTERNAL_PROXY_PREFIX + scheme + "/" + hostname + "/";
   }
@@ -292,6 +390,11 @@
     return source;
   }
   function resolveExternalProxyUrl(url) {
+    if (url.pathname.startsWith(SKY_HELP_PREFIX)) {
+      const upstreamUrl = new URL(url.pathname.slice(SKY_HELP_PREFIX.length) + url.search, "https://tvip.hc.skyperfectv.co.jp/");
+      if (upstreamUrl.hostname !== "tvip.hc.skyperfectv.co.jp" || !upstreamUrl.pathname.startsWith("/content-sky/")) return null;
+      return { upstreamUrl, rootPath: SKY_HELP_PREFIX, skyHelp: true };
+    }
     if (!url.pathname.startsWith(EXTERNAL_PROXY_PREFIX)) return null;
     const relativePath = url.pathname.slice(EXTERNAL_PROXY_PREFIX.length);
     const separator = relativePath.indexOf("/");
@@ -310,32 +413,57 @@
   async function serveExternalProxy(request, url) {
     const resolved = resolveExternalProxyUrl(url);
     if (!resolved) return new Response("Bad external broadcast path", { status: 400 });
+    if (resolved.upstreamUrl.hostname === "tvip.hc.skyperfectv.co.jp" && request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Public content GET only", { status: 403 });
+    }
     const proxyUrl = new URL("/api/data-broadcasting/arib-html5/request", self.location.origin);
     proxyUrl.searchParams.set("url", resolved.upstreamUrl.href);
     const method = request.method === "HEAD" ? "GET" : request.method;
-    const response = await fetch(proxyUrl, {
+    let response = await fetch(proxyUrl, {
       method,
       headers: request.headers,
       body: method === "POST" ? await request.clone().arrayBuffer() : void 0,
       credentials: "same-origin"
     });
+    // NHK 番組表は画像 CDN のホストを hc.nhk.jp に置換するが、同ホストに未配置の画像がある。
+    // 画像要求の 404 に限って、既に許可済みの元画像 CDN の同一パスを参照する。
+    if (response.status === 404 && request.destination === "image" &&
+        resolved.upstreamUrl.hostname === "hc.nhk.jp" &&
+        resolved.upstreamUrl.pathname.startsWith("/static/assets/images/")) {
+      const imageUrl = new URL(resolved.upstreamUrl);
+      imageUrl.hostname = "img.nhk.jp";
+      proxyUrl.searchParams.set("url", imageUrl.href);
+      response = await fetch(proxyUrl, { credentials: "same-origin" });
+    }
     const headers = new Headers(response.headers);
     const type = headers.get("Content-Type") || "application/octet-stream";
     const rewriteHtml = /^text\/html(?:;|$)/i.test(type) || /^application\/xhtml\+xml(?:;|$)/i.test(type);
     const rewriteCss = /^text\/css(?:;|$)/i.test(type);
     const rewriteJavaScript = /(?:java|ecma)script/i.test(type);
-    if (!rewriteHtml && !rewriteCss && !rewriteJavaScript) {
+    // メニュー JSON に含まれる遷移先も同じ origin 写像を通す。
+    // HTML/JS だけを書き換えると、JSON からの location.href 代入で runtime を失う。
+    const rewriteJson = /^application\/(?:[\w.+-]+\+)?json(?:;|$)/i.test(type);
+    if (!rewriteHtml && !rewriteCss && !rewriteJavaScript && !rewriteJson) {
       return new Response(request.method === "HEAD" ? null : response.body, {
         status: response.status,
         headers
       });
     }
-    let source = rewriteExternalProxyUrls(await response.text());
+    let source = await response.text();
+    if (resolved.skyHelp) {
+      source = adaptSkyPerfecTVPublicHelp(source, resolved.upstreamUrl.href, 4153, 1);
+      source = source.replace(/https?:\/\/tvip\.hc\.skyperfectv\.co\.jp\//g, SKY_HELP_PREFIX);
+    }
+    source = rewriteExternalProxyUrls(source);
+    if (rewriteJavaScript) source = adaptNHKProgramGuideNavigation(source, resolved.upstreamUrl.href, resolved.rootPath);
     if (rewriteHtml) {
       source = prepareBroadcastHtml(source, {
         basePath: resolved.rootPath,
         scopePath: resolved.rootPath,
-        bootstrap: RUNTIME_BOOTSTRAP
+        // Ajax で読む HTML 部品に runtime を再注入すると、挿入時に二重初期化される。
+        bootstrap: ["document", "iframe"].includes(request.destination)
+          ? RUNTIME_BOOTSTRAP + (resolved.skyHelp ? '<script>window.__KONOMI_PUBLIC_HELP__=true</script>' : '')
+          : undefined
       });
     } else if (rewriteCss) {
       source = prepareBroadcastStylesheet(source, {
@@ -346,7 +474,10 @@
     headers.delete("Content-Encoding");
     headers.delete("Content-Length");
     headers.set("Cache-Control", "no-store");
-    headers.set("Content-Security-Policy", "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; frame-src 'none'");
+    // NHK の既存アプリは jQuery.getScript() の間接 eval で同一 origin の追加モジュールを実行する。
+    // 対象の放送アプリ origin だけに限定し、ネットワークの許可範囲は拡張しない。
+    const legacyScriptEvaluation = ["hc.nhk.jp", "hc.nhk.or.jp"].includes(resolved.upstreamUrl.hostname) ? " 'unsafe-eval'" : "";
+    headers.set("Content-Security-Policy", "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'" + legacyScriptEvaluation + "; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; frame-src 'none'");
     headers.set("X-Content-Type-Options", "nosniff");
     return new Response(request.method === "HEAD" ? null : source, {
       status: response.status,
@@ -456,8 +587,25 @@
   });
   self.addEventListener("fetch", (event) => {
     const url = new URL(event.request.url);
-    if (url.origin !== self.location.origin || !url.pathname.startsWith(VFS_PREFIX)) return;
-    if (url.pathname.startsWith(EXTERNAL_PROXY_PREFIX)) {
+    if (url.origin !== self.location.origin) return;
+    if (!url.pathname.startsWith(VFS_PREFIX)) {
+      // 外部文書内の JS が要求する /path は、その文書の上流 origin に属する。
+      // 呼出元 client を確認し、通常の HonomiTV ページからの要求には適用しない。
+      event.respondWith((async () => {
+        const client = event.clientId ? await self.clients.get(event.clientId) : null;
+        // navigation request の clientId は空の場合があるので、同一 origin の参照元も確認する。
+        const referrer = event.request.referrer ? new URL(event.request.referrer) : null;
+        const source = (client ? resolveExternalProxyUrl(new URL(client.url)) : null) ||
+          (referrer?.origin === self.location.origin ? resolveExternalProxyUrl(referrer) : null);
+        if (!source) return fetch(event.request);
+        const mapped = new URL(source.rootPath + url.pathname.slice(1) + url.search, self.location.origin);
+        // 文書 URL 自体を scope 内に戻す。本文だけを代理すると相対 URL とアプリ境界が壊れる。
+        if (event.request.mode === "navigate") return Response.redirect(mapped.href, 302);
+        return serveExternalProxy(event.request, mapped);
+      })());
+      return;
+    }
+    if (url.pathname.startsWith(EXTERNAL_PROXY_PREFIX) || url.pathname.startsWith(SKY_HELP_PREFIX)) {
       if (event.request.method !== "GET" && event.request.method !== "HEAD" && event.request.method !== "POST") return;
       event.respondWith(serveExternalProxy(event.request, url));
       return;

@@ -12,7 +12,7 @@ import aiohttp
 import httpx
 from aiohttp.abc import AbstractResolver, ResolveResult
 from fastapi import APIRouter, Form, HTTPException, Path, Query, Request, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 from ping3 import ping
 
 from app import logging, schemas
@@ -445,70 +445,6 @@ async def ARIBHTML5BrowserRequestProxyAPI(
     return StreamingResponse(
         GenerateResponseBody(),
         status_code = response.status,
-        headers = response_headers,
-    )
-
-
-@router.get(
-    '/hybridcast/{resource_path:path}',
-    summary = 'Hybridcast 公開ヘルプ資源 API',
-    response_description = '許可された SkyPerfecTV 公開ヘルプ資源。',
-)
-async def HybridcastPublicResourceAPI(resource_path: str, request: Request) -> Response:
-    """
-    SkyPerfecTV 公開ヘルプの HTML と同一オリジンから取得できる資源を返す。
-
-    Args:
-        resource_path (str): 公開ヘルプ内の資源パス
-        request (Request): ブラウザからの同一オリジン要求
-
-    Returns:
-        Response: runtime bootstrap と同一オリジン資源 URL を含む公開資源
-    """
-
-    # この入口は公開コンテンツの固定ホスト・固定ディレクトリだけを既存の外部通信ポリシーへ渡す。
-    upstream_url = f'https://tvip.hc.skyperfectv.co.jp/{resource_path}'
-    if request.url.query:
-        upstream_url += f'?{request.url.query}'
-    ValidateARIBHTML5ExternalProxyURL(upstream_url)
-
-    # HTML を確実に加工できるよう圧縮なしで取得し、他の通信制限とリダイレクト検査は既存プロキシに任せる。
-    proxy_scope = dict(request.scope)
-    proxy_scope['headers'] = [
-        (name, value)
-        for name, value in request.scope['headers']
-        if name.lower() != b'accept-encoding'
-    ] + [(b'accept-encoding', b'identity')]
-    proxy_request = Request(proxy_scope)
-    upstream_response = await ARIBHTML5BrowserRequestProxyAPI(proxy_request, upstream_url)
-    upstream_body = b''.join([cast(bytes, chunk) async for chunk in upstream_response.body_iterator])
-    response_headers = dict(upstream_response.headers)
-    response_headers.pop('content-length', None)
-    response_headers.pop('content-encoding', None)
-
-    # 公開ページ及び其の静的資源が使う絶対パスを、この固定プロキシ配下へ揃える。
-    content_type = upstream_response.headers.get('content-type', '')
-    if content_type.startswith(('text/', 'application/javascript', 'application/json')):
-        resource_text = upstream_body.decode('utf-8', errors = 'replace')
-        public_prefix = '/api/data-broadcasting/hybridcast/'
-        resource_text = resource_text.replace(
-            'https://tvip.hc.skyperfectv.co.jp/content-sky/', public_prefix + 'content-sky/',
-        ).replace('//tvip.hc.skyperfectv.co.jp/content-sky/', public_prefix + 'content-sky/')
-        resource_text = re.sub(r'(?<!hybridcast)/content-sky/', public_prefix + 'content-sky/', resource_text)
-
-        # VFS Worker 的 HTML 注入不会覆盖此代理入口，因此在宿主运行时可执行前安装 iframe adapter。
-        if content_type.startswith('text/html'):
-            bootstrap = '<script>top.__ARIB_HTML5_INSTALL__?.(window)</script>'
-            head = re.search(r'<head(?:\s[^>]*)?>', resource_text, flags = re.IGNORECASE)
-            if head is None:
-                resource_text = bootstrap + resource_text
-            else:
-                resource_text = resource_text[:head.end()] + bootstrap + resource_text[head.end():]
-        upstream_body = resource_text.encode('utf-8')
-
-    return Response(
-        content = upstream_body,
-        status_code = upstream_response.status_code,
         headers = response_headers,
     )
 

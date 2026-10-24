@@ -1,6 +1,7 @@
 import { AribReceiverHost, ServiceWorkerBroadcastVfs } from 'libaribhtml5';
 
 
+import { SKY_HELP_PREFIX } from './SkyPerfecTV';
 import { HybridcastLaunchRequest, resolveXMLAIT } from './XMLAIT';
 
 import type { ProgramInfo, RuntimeWindow } from 'libaribhtml5';
@@ -35,9 +36,8 @@ export default class HybridcastSession {
         this.iframe.title = 'Hybridcast';
         this.iframe.tabIndex = -1;
         container.append(this.viewport, this.iframe);
-        const broadcastBaseUrl = publicHelp ? '/api/data-broadcasting/hybridcast/' : '/data-broadcast/';
         this.host = new AribReceiverHost({
-            iframe: this.iframe, viewport: this.viewport, broadcastBaseUrl,
+            iframe: this.iframe, viewport: this.viewport, broadcastBaseUrl: '/data-broadcast/',
             allowExternalNetwork: false, getDeviceIdentifier: () => null,
             userAgent: 'Hybridcast/1.0',
             onLaunchDataBroadcastingBrowser: () => this.onExit(),
@@ -58,13 +58,6 @@ export default class HybridcastSession {
             if (!this.disposed && target === this.iframe.contentWindow) this.host.installRuntime(target);
         };
         (window as RuntimeHostWindow).__ARIB_HTML5_INSTALL__ = this.installer;
-        window.addEventListener('message', event => {
-            // アダプターの失敗通知も、現在の同一 origin アプリからだけ受理する。
-            if (event.origin !== window.location.origin || event.source !== this.iframe.contentWindow) return;
-            if (event.data?.type === 'KonomiHybridcastError' && event.data.code === 'HYBRIDCAST_ADAPTER_MISMATCH') {
-                this.onError(event.data.code);
-            }
-        }, {signal: this.abortController.signal});
     }
 
     async start(request: HybridcastLaunchRequest, publicHelp = false): Promise<void> {
@@ -82,16 +75,17 @@ export default class HybridcastSession {
             throw new Error('HYBRIDCAST_UNSUPPORTED_APPLICATION');
         }
         // 公開ヘルプでは BML の選局状態を要求する導入ページを経由せず、検証済みアプリへ入る。
-        if (publicHelp) entry.pathname = '/content-sky/app/index.html';
-        // 公開ヘルプは固定ホストの同一オリジン API から直接配信するため、空の VFS Worker を登録しない。
-        if (!publicHelp) await this.backend.initialize();
+        if (publicHelp) entry.pathname = entry.pathname.replace(/\/checktls\.html$/i, '/index.html');
+        // 公開ヘルプも通常の放送アプリと同じ VFS Worker を通し、資源取得時に
+        // Worker 側の動的アダプターと外部 URL 写像を適用できるようにする。
+        await this.backend.initialize();
         if (this.disposed) return;
         this.host.setBmlGreg(request.greg);
         this.host.setApplicationInformation({
             type: 'ISDB-HTML', organizationId: request.organizationId, applicationId: request.applicationId,
             controlCode: 'AUTOSTART',
         });
-        const root = publicHelp ? '/api/data-broadcasting/hybridcast/' :
+        const root = publicHelp ? SKY_HELP_PREFIX :
             `/data-broadcast/.external/${entry.protocol.slice(0, -1)}/${entry.hostname}/`;
         this.host.loadApplication(`${root}${entry.pathname.slice(1)}${entry.search}${entry.hash}`);
     }
