@@ -371,7 +371,6 @@ onBeforeUnmount(() => {
         margin: 0 0 0 auto;
         .gguide__frame { height: 57px; }
         .gguide__media--controls { margin: 0 28px; }
-        :deep(.v-window__controls .v-btn) { width: 24px; height: 24px; }
     }
     &--landscape,
     &--poster {
@@ -442,6 +441,7 @@ onBeforeUnmount(() => {
     }
     :deep(.v-window__controls) { align-items: center; padding: 4px; }
     :deep(.v-window__controls .v-btn) { width: 32px; height: 32px; }
+    &--header :deep(.v-window__controls .v-btn) { width: 24px; height: 24px; }
     &__state {
         position: relative;
         z-index: 2;
