@@ -3,7 +3,10 @@
         <router-link v-ripple class="konomitv-logo ml-3 ml-md-6" to="/tv/">
             <img class="konomitv-logo__image" src="/assets/images/logo.svg" height="21">
         </router-link>
-        <v-spacer></v-spacer>
+        <div v-if="$slots['timetable-banner']" class="header__banner-slot">
+            <slot name="timetable-banner"></slot>
+        </div>
+        <v-spacer v-else></v-spacer>
         <!-- 番組表コントロール用スロット -->
         <slot name="timetable-controls"></slot>
         <div v-if="showSearchInput" class="search-box">
@@ -138,6 +141,12 @@ const isTimeTablePage = computed(() => route.path.startsWith('/timetable'));
 <style lang="scss" scoped>
 
 .header {
+    &__banner-slot {
+        flex: 1;
+        min-width: 0;
+        height: 57px;
+        margin: 0 12px;
+    }
     position: fixed;
     display: flex;
     align-items: center;

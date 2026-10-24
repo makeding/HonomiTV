@@ -166,6 +166,31 @@ class Genre(TypedDict):
 
 # ***** 番組表 *****
 
+class GGuideCollection(BaseModel):
+    # Mirakurun の拡張 API を利用できるかどうか。Unavailable でも通常の番組表は利用可能。
+    status: Literal['Available', 'Unsupported', 'Unavailable']
+    # 表示可能な素材。受信元情報は返さず、確定した放送回だけを公開する。
+    assets: list[GGuideCollectionAsset]
+
+class GGuideCollectionAsset(BaseModel):
+    # Mirakurun が発行した SHA-256 画像 ID
+    id: str
+    # カルーセルが予約済みの表示領域を決めるための画像サイズ
+    width: int
+    height: int
+    programs: list[GGuideCollectionProgram]
+    advertisements: list[GGuideCollectionAdvertisement]
+
+class GGuideCollectionProgram(BaseModel):
+    network_id: int
+    service_id: int
+    event_id: int
+    start_at: int
+
+class GGuideCollectionAdvertisement(BaseModel):
+    # 放送由来の本文のみ。HTML として解釈したり、受信元の内部識別子を公開したりしない。
+    text: str
+
 class TimeTable(BaseModel):
     # チャンネルごとの番組リスト
     channels: list[TimeTableChannel]

@@ -22,9 +22,10 @@
                     <span class="reservation-detail-drawer__tab-text">録画設定</span>
                 </div>
             </div>
-            <div v-ripple class="reservation-detail-drawer__close" @click="handleClose">
+            <button ref="closeButton" type="button" aria-label="番組詳細を閉じる"
+                v-ripple class="reservation-detail-drawer__close" @click="handleClose">
                 <Icon icon="fluent:dismiss-16-filled" width="22px" height="22px" />
-            </div>
+            </button>
         </div>
 
         <!-- コンテンツ -->
@@ -58,6 +59,7 @@
                 <ReservationProgramInfo
                     :reservation="reservation"
                     :program="program"
+                    :gguide-image="gguideImage"
                     :channel="channel" />
             </div>
 
@@ -185,13 +187,13 @@
 </template>
 <script lang="ts" setup>
 
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 
 import ReservationProgramInfo from '@/components/Reservations/ReservationProgramInfo.vue';
 import ReservationRecordingSettings from '@/components/Reservations/ReservationRecordingSettings.vue';
 import Message from '@/message';
 import { type IChannel } from '@/services/Channels';
-import { type IProgram } from '@/services/Programs';
+import { type IGGuideCollectionAsset, type IProgram } from '@/services/Programs';
 import Reservations, { type IReservation, type IRecordSettings, type IRecordSettingsPresets } from '@/services/Reservations';
 import useServerSettingsStore from '@/stores/ServerSettingsStore';
 import { ProgramUtils } from '@/utils';
@@ -202,6 +204,8 @@ const props = defineProps<{
     reservation: IReservation | null;
     // 番組情報（予約がない場合に使用、番組表からの呼び出し用）
     program?: IProgram | null;
+    // 番組表またはカルーセルから選択した確定関連付け済み画像。
+    gguideImage?: IGGuideCollectionAsset | null;
     // チャンネル情報（予約がない場合に使用、番組表からの呼び出し用）
     channel?: IChannel | null;
     // 過去番組かどうか（true の場合、予約関連 UI は非表示）
@@ -223,6 +227,9 @@ const isVisible = computed({
     get: () => props.modelValue,
     set: (value) => emit('update:modelValue', value),
 });
+// 開く直前の操作位置を記憶し、閉じた後も番組表・カルーセルの操作を続けられるようにする。
+const closeButton = ref<HTMLButtonElement | null>(null);
+let opener: HTMLElement | null = null;
 
 // サーバー設定（バックエンド種別の判定用）
 const serverSettingsStore = useServerSettingsStore();
@@ -314,15 +321,34 @@ onMounted(async () => {
 // ドロワーが開かれた時の処理
 watch(isVisible, (newValue) => {
     if (newValue) {
+        opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        void nextTick(() => closeButton.value?.focus({preventScroll: true}));
+        document.addEventListener('keydown', onKeydown);
         // 開かれた時は番組情報タブを表示
         activeTab.value = 'info';
         hasChanges.value = false;
         // ページ全体のスクロールを無効にする
         document.documentElement.classList.add('v-overlay-scroll-blocked');
     } else {
+        document.removeEventListener('keydown', onKeydown);
+        if (opener?.isConnected) opener.focus({preventScroll: true});
+        opener = null;
         // ページ全体のスクロールを有効に戻す
         document.documentElement.classList.remove('v-overlay-scroll-blocked');
     }
+});
+
+function onKeydown(event: KeyboardEvent): void {
+    // 手前の Vuetify ダイアログやメニューを先に閉じる。未保存設定は通常の確認を通す。
+    if (event.key !== 'Escape' || event.defaultPrevented || !isVisible.value ||
+        document.querySelector('.v-overlay--active')) return;
+    event.preventDefault();
+    handleClose();
+}
+
+onBeforeUnmount(() => {
+    document.removeEventListener('keydown', onKeydown);
+    if (isVisible.value) document.documentElement.classList.remove('v-overlay-scroll-blocked');
 });
 
 // 閉じる処理

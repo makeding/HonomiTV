@@ -42,6 +42,19 @@
                     </v-btn-toggle>
                 </div>
 
+                <!-- 画像と広告をまとめて表示・非表示にする。設定は既存ストアで保存・同期する。 -->
+                <div class="settings__item settings__item--switch">
+                    <label class="settings__item-heading" for="timetable_show_gguide">
+                        <Icon icon="fluent:image-20-regular" width="20px" />
+                        <span class="ml-2">H ガイドを表示する</span>
+                    </label>
+                    <label class="settings__item-label" for="timetable_show_gguide">
+                        番組画像や広告を番組表に表示します。
+                    </label>
+                    <v-switch class="settings__item-switch" color="primary" id="timetable_show_gguide" hide-details
+                        v-model="settingsStore.settings.timetable_show_gguide" />
+                </div>
+
                 <!-- カーソルを重ねた時に番組詳細を自動表示する (PC のみ) -->
                 <div class="settings__item settings__item--switch">
                     <label class="settings__item-heading" for="timetable_hover_expand">

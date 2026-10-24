@@ -15,6 +15,7 @@ import ruamel.yaml.scalarstring
 from pydantic import (
     BaseModel,
     DirectoryPath,
+    Field,
     FilePath,
     PositiveFloat,
     PositiveInt,
@@ -58,6 +59,7 @@ class ClientSettings(BaseModel):
     timetable_hour_height: Literal['Wide', 'Normal', 'Narrow'] = 'Normal'
     timetable_hover_expand: bool = False
     timetable_dim_shopping_programs: bool = True
+    timetable_show_gguide: Annotated[bool, Field(default=True)]
     # 番組表のジャンル別のハイライト色
     # キーはジャンル名 (大分類)、値はハイライトカラー
     # クライアント側の ILocalClientSettingsDefault.timetable_genre_colors と一致させる必要がある

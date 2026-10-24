@@ -34,7 +34,10 @@ from app.utils import (
 from app.utils.edcb import EventInfo, ReserveDataRequired, SearchKeyInfo
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
-from app.utils.GGuide import GetGGuideImages
+from app.utils.GGuide import (
+    GetGGuideAssets,
+    GetGGuideImages,
+)
 from app.utils.JellyfinClient import (
     JellyfinClient,
     JellyfinError,
@@ -448,6 +451,60 @@ async def GGuideImageAPI(asset_id: Annotated[str, Path(pattern=r'^[a-f0-9]{64}$'
         'Cache-Control': 'private, max-age=3600',
         'X-Content-Type-Options': 'nosniff',
     })
+
+
+@router.get(
+    '/gguide',
+    summary = 'Gガイド素材コレクション API',
+    response_description = '表示可能な Gガイド素材と確定済み放送回の関連付け。',
+    response_model = schemas.GGuideCollection,
+)
+async def GGuideCollectionAPI() -> schemas.GGuideCollection:
+    """
+    カルーセル向けの Gガイド素材を取得する。
+
+    確定した放送回への関連付けを返し、未確定の識別子や受信元情報は公開しない。
+
+    Args:
+        None
+
+    Returns:
+        schemas.GGuideCollection: 表示素材と確定済み放送回。
+    """
+
+    result = await GetGGuideAssets()
+    if result.status != 'Available':
+        return schemas.GGuideCollection(status=result.status, assets=[])
+
+    # 最新の受信順に並べ、同時刻は ID で順序を固定する。
+    assets = [
+        asset for asset in result.assets
+        if asset.displayable
+    ]
+    assets.sort(key=lambda asset: (-asset.lastReceivedAt, asset.id))
+    return schemas.GGuideCollection(
+        status='Available',
+        assets=[
+            schemas.GGuideCollectionAsset(
+                id=asset.id, width=asset.width, height=asset.height,
+                programs=[
+                    schemas.GGuideCollectionProgram(
+                        network_id=program.networkId, service_id=program.serviceId,
+                        event_id=program.eventId, start_at=program.startAt,
+                    )
+                    for program in asset.programs
+                    if (program.networkId is not None and program.serviceId is not None and
+                        program.eventId is not None and program.startAt is not None)
+                ],
+                advertisements=[
+                    schemas.GGuideCollectionAdvertisement(text=advertisement.text)
+                    for advertisement in asset.advertisements
+                    if advertisement.text.strip()
+                ],
+            )
+            for asset in assets
+        ],
+    )
 
 
 @router.get(

@@ -1,6 +1,9 @@
 <template>
     <div class="route-container">
         <HeaderBar>
+            <template #timetable-banner>
+                <div ref="bannerTarget" class="timetable-banner-target"></div>
+            </template>
             <!-- PC 版では HeaderBar 内に番組表コントロールを配置 -->
             <template #timetable-controls v-if="!isCompactControls">
                 <div class="timetable-controls">
@@ -95,20 +98,28 @@
                         </v-btn>
                     </div>
                 </div>
-                <!-- 番組表グリッド -->
-                <TimeTableGrid
-                    ref="timetableGridRef"
-                    :channels="timetableStore.channels_data"
-                    :is36HourDisplay="timetableStore.is_36hour_display"
-                    :canGoPreviousDay="canGoPreviousDay"
-                    :canGoNextDay="canGoNextDay"
-                    @time-slot-change="onTimeSlotChange"
-                    @date-display-offset-change="onDateDisplayOffsetChange"
-                    @show-program-detail="onShowProgramDetail"
-                    @quick-reserve="onQuickReserve"
-                    @go-to-next-day="goToNextDay"
-                    @go-to-previous-day="goToPreviousDay"
-                />
+                <GGuideCarousel :banner-target="bannerTarget" :channels="timetableStore.channels_data"
+                    :enabled="settingsStore.settings.timetable_show_gguide"
+                    :paused="isDrawerOpen || isNetworkProgramDialogOpen || isSettingsDialogOpen"
+                    @loaded="gguideAssets = $event" @select-program="onSelectGGuideProgram"
+                    @overlay-visible="isGGuideOverlayVisible = $event">
+                    <!-- テレビの Gガイド同様、放送案内も番組表内に表示する。 -->
+                    <!-- 番組表グリッド -->
+                    <TimeTableGrid
+                        ref="timetableGridRef"
+                        :channels="timetableStore.channels_data"
+                        :hasGGuideOverlay="isGGuideOverlayVisible"
+                        :is36HourDisplay="timetableStore.is_36hour_display"
+                        :canGoPreviousDay="canGoPreviousDay"
+                        :canGoNextDay="canGoNextDay"
+                        @time-slot-change="onTimeSlotChange"
+                        @date-display-offset-change="onDateDisplayOffsetChange"
+                        @show-program-detail="onShowProgramDetail"
+                        @quick-reserve="onQuickReserve"
+                        @go-to-next-day="goToNextDay"
+                        @go-to-previous-day="goToPreviousDay"
+                    />
+                </GGuideCarousel>
             </div>
         </main>
         <!-- 番組表設定ダイアログ -->
@@ -131,6 +142,7 @@
             :program="drawerProgram"
             :channel="drawerChannel"
             :isPastProgram="isDrawerProgramPast"
+            :gguide-image="settingsStore.settings.timetable_show_gguide ? drawerGGuideImage : null"
             @added="onReservationAdded"
             @updated="onReservationUpdated"
             @deleted="onReservationDeleted"
@@ -143,6 +155,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import type { Dayjs } from 'dayjs';
 
+import GGuideCarousel from '@/components/GGuideCarousel.vue';
 import HeaderBar from '@/components/HeaderBar.vue';
 import Navigation from '@/components/Navigation.vue';
 import ReservationDetailDrawer from '@/components/Reservations/ReservationDetailDrawer.vue';
@@ -151,9 +164,10 @@ import SPHeaderBar from '@/components/SPHeaderBar.vue';
 import TimeTableGrid from '@/components/TimeTable/TimeTableGrid.vue';
 import Message from '@/message';
 import { IChannel, ChannelTypePretty } from '@/services/Channels';
-import { IProgram, ITimeTableProgram } from '@/services/Programs';
+import { IGGuideCollectionAsset, IProgram, ITimeTableProgram } from '@/services/Programs';
 import Reservations, { IReservation, IRecordSettings, IRecordSettingsDefault } from '@/services/Reservations';
 import useServerSettingsStore from '@/stores/ServerSettingsStore';
+import useSettingsStore from '@/stores/SettingsStore';
 import useTimeTableStore, { CHANNEL_TYPE_DISPLAY_ORDER } from '@/stores/TimeTableStore';
 import Utils, { dayjs, ProgramUtils } from '@/utils';
 
@@ -163,6 +177,11 @@ const timetableStore = useTimeTableStore();
 
 // コンポーネント参照
 const timetableGridRef = ref<InstanceType<typeof TimeTableGrid> | null>(null);
+const bannerTarget = ref<HTMLElement | null>(null);
+const gguideAssets = ref<IGGuideCollectionAsset[]>([]);
+const drawerGGuideImage = ref<IGGuideCollectionAsset | null>(null);
+const isGGuideOverlayVisible = ref(false);
+const settingsStore = useSettingsStore();
 
 // サーバー設定（バックエンド種別の判定用）
 const serverSettingsStore = useServerSettingsStore();
@@ -580,7 +599,8 @@ function onDateDisplayOffsetChange(offset: number): void {
  * @param channel 番組が属するチャンネル情報
  * @param program 番組情報
  */
-async function onShowProgramDetail(programId: string, channel: IChannel, program: ITimeTableProgram): Promise<void> {
+async function onShowProgramDetail(programId: string, channel: IChannel, program: ITimeTableProgram,
+    selectedImage?: IGGuideCollectionAsset): Promise<void> {
 
     // ネットテレビの番組は放送波の録画予約契約を持たないため、専用の予約ドロワーへ渡さない。
     if (channel.capabilities.recording === false || !('reservation' in program)) {
@@ -593,6 +613,10 @@ async function onShowProgramDetail(programId: string, channel: IChannel, program
     // 過去番組かどうかを判定
     const endTime = dayjs(program.end_time);
     isDrawerProgramPast.value = endTime.isBefore(dayjs());
+    // 詳細欄には通常比率の番組画像を表示し、横長の案内バナーは混ぜない。
+    const image = selectedImage ?? gguideAssets.value.find(asset =>
+        'gguide_image_id' in program && asset.id === program.gguide_image_id);
+    drawerGGuideImage.value = image && image.width / image.height < 3 ? image : null;
 
     // 予約情報がある場合は、完全な IReservation を API から取得
     if (program.reservation !== null) {
@@ -616,6 +640,12 @@ async function onShowProgramDetail(programId: string, channel: IChannel, program
     }
 
     isDrawerOpen.value = true;
+}
+
+function onSelectGGuideProgram(selection: {
+    asset: IGGuideCollectionAsset; program: ITimeTableProgram; channel: IChannel;
+}): void {
+    void onShowProgramDetail(selection.program.id, selection.channel, selection.program, selection.asset);
 }
 
 /**
@@ -830,6 +860,8 @@ watch(() => timetableStore.selected_date, () => {
 }
 
 // PC 版の番組表コントロール
+.timetable-banner-target { width: 100%; height: 100%; }
+
 .timetable-controls {
     display: flex;
     align-items: center;

@@ -4,6 +4,21 @@
             <h1 class="program-info__title"
                 v-html="ProgramUtils.decorateProgramInfo(displayProgram, 'title')">
             </h1>
+            <!-- 通常画像の比率を保ち、読み込み失敗でも後続の本文を移動させない。 -->
+            <v-img v-if="gguideImage" class="program-info__image" height="220"
+                :key="`${gguideImage.id}-${imageRetry}`"
+                :src="`${Utils.api_base_url}/programs/gguide/images/${gguideImage.id}`" alt="番組画像">
+                <template #placeholder>
+                    <div class="program-info__image-state"><v-progress-circular indeterminate size="28" /></div>
+                </template>
+                <template #error>
+                    <div class="program-info__image-state" role="status">
+                        <span>番組画像を取得できませんでした。再読み込みしてください。</span>
+                        <small>[GGUIDE_IMAGE_UNAVAILABLE]</small>
+                        <v-btn size="small" variant="tonal" @click="imageRetry++">再読み込み</v-btn>
+                    </div>
+                </template>
+            </v-img>
             <div class="program-info__broadcaster">
                 <img class="program-info__broadcaster-icon"
                     :src="`${Utils.api_base_url}/channels/${displayChannel.id}/logo`"
@@ -57,13 +72,17 @@
 import { defineComponent, PropType } from 'vue';
 
 import { type IChannel } from '@/services/Channels';
-import { type IProgram } from '@/services/Programs';
+import { type IGGuideCollectionAsset, type IProgram } from '@/services/Programs';
 import { type IReservation } from '@/services/Reservations';
 import Utils, { ProgramUtils } from '@/utils';
 
 export default defineComponent({
     name: 'ReservationProgramInfo',
     props: {
+        gguideImage: {
+            type: Object as PropType<IGGuideCollectionAsset | null>,
+            default: null,
+        },
         // 予約情報（予約がある場合に使用）
         reservation: {
             type: Object as PropType<IReservation | null>,
@@ -82,6 +101,7 @@ export default defineComponent({
     },
     data() {
         return {
+            imageRetry: 0,
             // ユーティリティをテンプレートで使えるように
             Utils: Object.freeze(Utils),
             ProgramUtils: Object.freeze(ProgramUtils),
@@ -111,6 +131,17 @@ export default defineComponent({
 
 .program-container {
     .program-info {
+        &__image { margin-top: 16px; border-radius: 6px; }
+        &__image-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            height: 100%;
+            padding: 12px;
+            text-align: center;
+        }
         .program-info__title {
             font-size: 19px;
             font-weight: bold;

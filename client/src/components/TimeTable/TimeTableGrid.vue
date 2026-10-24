@@ -5,7 +5,7 @@
         }">
         <!-- スクロール可能な領域 -->
         <!-- ドラッグスクロール: ポインターイベントをこの要素で直接処理 -->
-        <!-- チルトホイール: wheel イベントは onMounted で passive: false で登録 (Vue 3 のデフォルトは passive: true のため) -->
+        <!-- Shift+ホイール: 横スクロールへの変換用に onMounted で passive: false で登録 -->
         <div class="timetable-grid__scroll-area" ref="scrollAreaRef"
             :class="{ 'timetable-grid__scroll-area--dragging': isDragging }"
             @scroll="onScroll"
@@ -14,7 +14,7 @@
             <!-- CSS Grid を使ったレイアウト -->
             <div class="timetable-grid__layout"
                 :style="{
-                    width: `${timeScaleWidth + totalWidth}px`,
+                    width: `${timeScaleWidth + totalWidth + trailingBufferWidth}px`,
                     height: `${channelHeaderHeight + totalHeight}px`,
                 }">
                 <!-- ヘッダー行 -->
@@ -159,6 +159,8 @@ import { TimeTableUtils } from '@/utils/TimeTableUtils';
 
 // Props
 const props = defineProps<{
+    // 浮動 Gガイドを避けて最終チャンネルを読めるよう、末尾だけにスクロール余白を設ける。
+    hasGGuideOverlay?: boolean;
     channels: ITimeTableChannel[];
     is36HourDisplay: boolean;
     canGoPreviousDay: boolean;
@@ -305,6 +307,9 @@ const timeScaleWidth = computed(() => {
 const totalWidth = computed(() => {
     return props.channels.length * channelWidth.value;
 });
+
+// ビューポートを狭めず、右端までスクロールした時だけ浮動画像の下から最後の列を逃がす。
+const trailingBufferWidth = computed(() => props.hasGGuideOverlay ? Math.max(channelWidth.value, 224) : 0);
 
 /**
  * 番組表の総高さ (通常24時間分、36時間表示モード時は36時間分、ヘッダーは含まない)
@@ -744,8 +749,9 @@ function onScroll(): void {
 }
 
 /**
- * ホイールイベントハンドラ (チルトホイール・Shift+ホイールによる横スクロール対応)
- * touch-action: none を設定しているため、スクロールは全て JavaScript で制御する必要がある
+ * ホイールイベントハンドラ (Shift+ホイールによる横スクロール対応)
+ * 通常のホイール・トラックパッド操作は両軸ともブラウザのネイティブスクロールに任せる
+ * touch-action はタッチ操作を制御する CSS であり、ホイールの既定動作には影響しない
  */
 function onWheel(event: WheelEvent): void {
     if (scrollAreaRef.value === null) return;
@@ -756,20 +762,11 @@ function onWheel(event: WheelEvent): void {
         momentumAnimationId.value = null;
     }
 
-    // チルトホイール (deltaX) がある場合は横スクロール
-    if (event.deltaX !== 0) {
-        event.preventDefault();
-        scrollAreaRef.value.scrollLeft += event.deltaX;
-    }
-
-    // Shift + 縦ホイールで横スクロール
-    if (event.shiftKey && event.deltaY !== 0) {
+    // Shift + 縦ホイールだけ横スクロールに変換する。
+    // 横成分がある場合はブラウザに任せ、トラックパッドの斜め操作で縦成分を失わないようにする。
+    if (event.shiftKey && event.deltaY !== 0 && event.deltaX === 0) {
         event.preventDefault();
         scrollAreaRef.value.scrollLeft += event.deltaY;
-    } else if (event.deltaY !== 0 && event.deltaX === 0) {
-        // 通常の縦スクロール (Shift なし、deltaX なし)
-        event.preventDefault();
-        scrollAreaRef.value.scrollTop += event.deltaY;
     }
 }
 
@@ -1191,10 +1188,8 @@ onMounted(async () => {
     // 画面回転やウィンドウサイズ変更時に、デバイスタイプ判定などの再計算をトリガーする
     window.addEventListener('resize', onWindowResize);
 
-    // wheel イベントを passive: false で登録
-    // Vue 3 のデフォルトでは wheel イベントは passive: true で登録されるため、
-    // event.preventDefault() が効かない。手動で { passive: false } を指定して登録することで、
-    // チルトホイールや Shift+ホイールでの横スクロールを JavaScript で制御可能にする
+    // Shift+ホイールの縦成分を横スクロールへ変換する場合だけ既定動作をキャンセルするため、
+    // passive: false で登録する。通常のホイールでは preventDefault() を呼ばない。
     if (scrollAreaRef.value !== null) {
         scrollAreaRef.value.addEventListener('wheel', onWheel, { passive: false });
     }

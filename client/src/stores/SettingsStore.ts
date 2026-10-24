@@ -75,6 +75,7 @@ export interface ILocalClientSettings extends IClientSettings {
     timetable_hour_height: TimeTableSizeOption;
     timetable_hover_expand: boolean;
     timetable_dim_shopping_programs: boolean;
+    timetable_show_gguide: boolean;
     timetable_genre_colors: ITimeTableGenreColors;
     show_player_background_image: boolean;
     use_pure_black_player_background: boolean;
@@ -206,6 +207,8 @@ export const ILocalClientSettingsDefault: ILocalClientSettings = {
     timetable_hover_expand: false,
     // ショッピング・通販番組を控えめに表示する (Default: オン)
     timetable_dim_shopping_programs: true,
+    // H ガイドの画像・広告を番組表に表示する (Default: オン)
+    timetable_show_gguide: true,
     // 番組表のジャンル別のハイライト色 (Default: 以下の通り)
     timetable_genre_colors: {
         'ニュース・報道': 'White',
@@ -402,6 +405,7 @@ export const SYNCABLE_SETTINGS_KEYS: (keyof IClientSettings)[] = [
     'timetable_hour_height',
     'timetable_hover_expand',
     'timetable_dim_shopping_programs',
+    'timetable_show_gguide',
     'timetable_genre_colors',
     'show_player_background_image',
     'use_pure_black_player_background',

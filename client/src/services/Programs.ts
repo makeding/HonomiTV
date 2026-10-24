@@ -2,6 +2,7 @@ import type { Dayjs } from 'dayjs';
 
 import APIClient from '@/services/APIClient';
 import { IChannel } from '@/services/Channels';
+import { dayjs } from '@/utils';
 
 
 /** 番組情報を表すインターフェイス */
@@ -188,9 +189,78 @@ export interface ITimeTableProgramReservation {
 
 
 /**
+ * 表示可能な Gガイド素材と確定済み放送回の一覧
+ */
+export interface IGGuideCollection {
+    status: 'Available' | 'Unsupported' | 'Unavailable';
+    assets: IGGuideCollectionAsset[];
+}
+
+export interface IGGuideCollectionAsset {
+    id: string;
+    width: number;
+    height: number;
+    programs: IGGuideCollectionProgram[];
+    advertisements: IGGuideCollectionAdvertisement[];
+}
+
+export interface IGGuideCollectionProgram {
+    network_id: number;
+    service_id: number;
+    event_id: number;
+    start_at: number;
+}
+
+export interface IGGuideCollectionAdvertisement {
+    text: string;
+}
+
+/**
  * 番組情報に関する API 操作を提供するクラス
  */
 class Programs {
+
+    /**
+     * Gガイド素材を取得する。失敗は任意の展示区だけで扱う。
+     * @returns 素材一覧と利用状態
+     */
+    static async fetchGGuideCollection(): Promise<IGGuideCollection> {
+        const response = await APIClient.get<IGGuideCollection>('/programs/gguide');
+        if (response.type === 'error') {
+            return {status: 'Unavailable', assets: []};
+        }
+        return response.data;
+    }
+
+    /**
+     * 表示中の日付・チャンネル種別に依存せず、素材に関連付いた放送回を取得する。
+     * @param associations Mirakurun が確定した放送回の関連付け
+     * @returns 四項目が一致する番組とチャンネル。取得できなければ null
+     */
+    static async fetchGGuideProgram(associations: IGGuideCollectionProgram[]): Promise<{
+        program: ITimeTableProgram; channel: IChannel;
+    } | null> {
+        // 同時刻の複数局への関連付けは一回で照合する。画面の日付やピン留め条件は渡さない。
+        for (const startAt of new Set(associations.map(association => association.start_at))) {
+            const start = dayjs(startAt);
+            const timetable = await Programs.fetchTimeTable(start, start.add(1, 'second'));
+            if (!timetable) return null;
+            for (const entry of timetable.channels) {
+                for (const group of [entry, ...(entry.subchannels ?? [])]) {
+                    for (const program of group.programs) {
+                        // EID は再利用されるため、開始時刻を含めた放送回全体の一致を必須にする。
+                        if (program.source !== 'Broadcast' || !associations.some(association =>
+                            association.network_id === program.network_id &&
+                            association.service_id === program.service_id &&
+                            association.event_id === program.event_id &&
+                            association.start_at === dayjs(program.start_time).valueOf())) continue;
+                        return {program, channel: group.channel};
+                    }
+                }
+            }
+        }
+        return null;
+    }
 
     /**
      * 番組情報を検索する

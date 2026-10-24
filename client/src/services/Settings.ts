@@ -42,6 +42,7 @@ export interface IClientSettings {
     timetable_hour_height: TimeTableSizeOption;
     timetable_hover_expand: boolean;
     timetable_dim_shopping_programs: boolean;
+    timetable_show_gguide: boolean;
     timetable_genre_colors: ITimeTableGenreColors;
     show_player_background_image: boolean;
     use_pure_black_player_background: boolean;

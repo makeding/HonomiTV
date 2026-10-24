@@ -169,6 +169,7 @@ const cellRef = ref<HTMLElement | null>(null);
 const imageRetry = ref(0);
 // バックエンドのアドレスをブラウザーへ露出させず、HTTPS の API から取得する。
 const gguideImageURL = computed(() => {
+    if (!settingsStore.settings.timetable_show_gguide) return null;
     const id = 'gguide_image_id' in props.program ? props.program.gguide_image_id : null;
     return id ? `${Utils.api_base_url}/programs/gguide/images/${id}` : null;
 });
