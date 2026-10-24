@@ -411,7 +411,8 @@ class Program(TortoiseModel):
                     program.secondary_audio_sampling_rate = None
                     ## Mirakurun 3.9 以降向け
                     ## ref: https://github.com/Chinachu/Mirakurun/blob/master/api.d.ts#L88-L105
-                    if 'audios' in program_info:
+                    # データ放送など音声のない番組では、初期化した空の音声情報を保持する。
+                    if program_info.get('audios'):
 
                         ## 主音声
                         program.primary_audio_type = ariblib.constants.COMPONENT_TYPE[0x02].get(program_info['audios'][0]['componentType'], 'Unknown')
@@ -437,7 +438,7 @@ class Program(TortoiseModel):
                                     program.secondary_audio_language = program.secondary_audio_language + '+副音声'  # 副音声で固定
 
                     ## Mirakurun 3.8 以下向け（フォールバック）
-                    else:
+                    elif 'audio' in program_info:
 
                         ## 主音声
                         ## 副音声の情報は常に存在しないため省略

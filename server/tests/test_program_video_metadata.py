@@ -50,10 +50,14 @@ class ProgramVideoMetadataTest(unittest.IsolatedAsyncioTestCase):
                     {'componentType': 3, 'langs': ['jpn'], 'samplingRate': 48000},
                 ],
             ) for index, video in enumerate(videos)]
+            # 音声記述自体がない番組と空配列の番組も、後続の番組と同じバッチで保存する。
+            programs[0].pop('audios')
+            programs[2]['audios'] = []
             client = AsyncMock()
             client.get.return_value = Mock(status_code=200, json=Mock(return_value=programs))
             with patch('app.models.Program.HTTPX_CLIENT') as factory, \
                     patch('app.models.Program.GetMirakurunAPIEndpointURL', return_value='http://tuner/api/programs'), \
+                    patch('app.models.Program.logging.debug'), \
                     patch('app.models.Program.logging.error') as error:
                 factory.return_value.__aenter__.return_value = client
                 await Program.updateFromMirakurun()
@@ -63,8 +67,13 @@ class ProgramVideoMetadataTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stored[0].video_type, 'Unknown')
             self.assertEqual(stored[0].video_codec, 'H.265')
             self.assertEqual(stored[0].video_resolution, '2160p')
+            self.assertEqual(stored[0].primary_audio_type, '')
+            self.assertEqual(stored[0].primary_audio_language, '')
+            self.assertEqual(stored[0].primary_audio_sampling_rate, '')
             self.assertNotEqual(stored[1].video_type, 'Unknown')
+            self.assertEqual(stored[1].primary_audio_language, '日本語')
             self.assertEqual(stored[2].video_type, 'Unknown')
+            self.assertEqual(stored[2].primary_audio_type, '')
             self.assertEqual(stored[3].video_type, 'Unknown')
         finally:
             await Tortoise.close_connections()
