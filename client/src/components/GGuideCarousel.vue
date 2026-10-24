@@ -3,6 +3,7 @@
         <Teleport v-for="group in visibleGroups" :key="group.kind" :to="props.bannerTarget ?? 'body'"
             :disabled="group.kind !== 'Banner' || !canUseHeader">
             <section class="gguide" :class="[`gguide--${group.kind.toLowerCase()}`, {'gguide--header': group.kind === 'Banner' && canUseHeader}]"
+                :style="{'--gguide-banner-ratio': bannerRatio}"
                 :aria-label="`H ガイド ${group.kind}`"
                 @mouseenter="onMouseEnter" @mouseleave="onMouseLeave"
                 @focusin="isFocused = true" @focusout="onFocusOut">
@@ -160,6 +161,10 @@ const groups = computed(() => (['Banner', 'Landscape', 'Poster'] as const).map(k
         return presentation === kind;
     }),
 })));
+// ヘッダーの余白いっぱいに広げず、最も横長の素材と矢印の幅だけを確保する。
+// 選択中の画像には依存させず、スライド切り替えによるボタン位置の移動を防ぐ。
+const bannerRatio = computed(() => groups.value[0].assets.length ?
+    Math.max(...groups.value[0].assets.map(asset => asset.width / asset.height)) : 728 / 136);
 // 放送回の四項目をすべて照合する。EID 再利用や同名番組に誤って移動しない。
 const matchedPrograms = computed(() => {
     const broadcasts = new Map<string, {program: ITimeTableProgram; channel: IChannel}>();
@@ -361,9 +366,9 @@ onBeforeUnmount(() => {
         }
     }
     &--header {
-        width: 100%;
+        width: min(100%, calc(57px * var(--gguide-banner-ratio) + 56px));
         height: 57px;
-        margin: 0;
+        margin: 0 0 0 auto;
         .gguide__frame { height: 57px; }
         .gguide__media--controls { margin: 0 28px; }
         :deep(.v-window__controls .v-btn) { width: 24px; height: 24px; }
@@ -468,6 +473,16 @@ onBeforeUnmount(() => {
 }
 .gguide-detail {
     &__image { background: rgb(var(--v-theme-background)); }
-    &__text { margin-top: 20px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    &__text {
+        margin-top: 20px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        // 番組詳細と同じ色と下線で、本文中のリンクを識別できるようにする。
+        :deep(a:link), :deep(a:visited) {
+            color: rgb(var(--v-theme-primary-lighten-1));
+            text-decoration: underline;
+            text-underline-offset: 3px;
+        }
+    }
 }
 </style>
