@@ -36,7 +36,7 @@ export async function adaptSkyPerfecTVBML(
             'var sid=browser.getProgramID(2);if(sid==null)return -9;' +
             'var base=SJC_CONFIG["XMLURL"];if(base.charAt(base.length-1)!="/")base+="/";' +
             'var ait=base+SJC_CONFIG["SI_TYPE"]+"/"+String(1000+parseInt(sid,16)).substring(1)+".xml";' +
-            'kf=0;return isNaN(browser.startAITControlledApp("1039","1",ait))?-8:1;}';
+            'kf=0;return isNaN(browser.X_DPA_startResidentApp("AITControlledApp",0,ait,"1039","1"))?-8:1;}';
         const replacement = launcher.replace('return SJC_launchIPTV();', fallback + 'return SJC_launchIPTV();');
         adapted = true;
         return {...file, dataBase64: Buffer.from(source.replace(launcher, replacement), 'latin1').toString('base64')};

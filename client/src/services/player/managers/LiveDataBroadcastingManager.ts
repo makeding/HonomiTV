@@ -167,16 +167,18 @@ class LiveDataBroadcastingManager implements PlayerManager {
                     squareGothic: LiveDataBroadcastingManager.SQUARE_GOTHIC,
                 },
                 // BML は起動要求だけを発行し、XML AIT と HTML5 のライフサイクルは宿主が所有する。
-                startAITControlledApp: request => {
-                    // BML 側の ID は 16 進文字列、XML AIT 側は 10 進表記。
-                    if (!/^[0-9a-f]{1,8}$/i.test(request.organizationId) ||
-                        !/^[0-9a-f]{1,4}$/i.test(request.applicationId)) return NaN;
-                    void this_.startHybridcast({...request,
-                        organizationId: parseInt(request.organizationId, 16),
-                        applicationId: parseInt(request.applicationId, 16),
-                        greg: [...request.greg],
-                    }, this_.sky_public_help_bml && parseInt(request.organizationId, 16) === 4153 &&
-                        parseInt(request.applicationId, 16) === 1);
+                X_DPA_startResidentApp: (appName, _showAV, aitUrl, Ex_info) => {
+                    // 放送局アダプターは既存の C プロファイル API を使い、AIT 起動情報を宿主へ渡す。
+                    if (appName !== 'AITControlledApp' || !/^[0-9a-f]{1,8}$/i.test(Ex_info[0] ?? '') ||
+                        !/^[0-9a-f]{1,4}$/i.test(Ex_info[1] ?? '')) return NaN;
+                    const organization_id = parseInt(Ex_info[0]!, 16);
+                    const application_id = parseInt(Ex_info[1]!, 16);
+                    void this_.startHybridcast({
+                        organizationId: organization_id,
+                        applicationId: application_id,
+                        aitUrl,
+                        greg: this_.getBMLGregRegisters(),
+                    }, this_.sky_public_help_bml && organization_id === 4153 && application_id === 1);
                     return 0;
                 },
                 // ステータス更新時のイベント
@@ -578,6 +580,22 @@ class LiveDataBroadcastingManager implements PlayerManager {
         store.is_hybridcast_loading = false;
         store.hybridcast_error = null;
         await session?.destroy();
+    }
+
+    /** Hybridcast 宿主へ、現在の BML ブラウザで保持している Greg を渡す。 */
+    private getBMLGregRegisters(): string[] {
+        const stored_greg = window.sessionStorage.getItem('KonomiTV-BMLBrowser-Greg');
+        const empty_greg = Array.from({length: 64}, () => '');
+        if (stored_greg === null) return empty_greg;
+
+        try {
+            const parsed_greg: unknown = JSON.parse(stored_greg);
+            if (!Array.isArray(parsed_greg)) return empty_greg;
+            return Array.from({length: 64}, (_, index) =>
+                typeof parsed_greg[index] === 'string' ? parsed_greg[index] : '');
+        } catch {
+            return empty_greg;
+        }
     }
 
     /** 明示的な実験入口と BML の通常起動要求で、同じ宿主を利用する。 */
