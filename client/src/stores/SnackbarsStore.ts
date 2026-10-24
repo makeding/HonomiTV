@@ -30,6 +30,12 @@ export const useSnackbarsStore = defineStore('snackbars', {
          */
         async show(level: 'success' | 'error' | 'warning' | 'info' | 'default', text: string, timeout: number = 5.0) {
 
+            // 同じエラーが複数 API から同時に届いても、表示中の通知を重ねない。
+            if (level === 'error' && this.snackbars.some(snackbar =>
+                snackbar.level === level && snackbar.text === text && !snackbar.destroying)) {
+                return;
+            }
+
             // Snackbar をスタックに追加
             // 一度 push() してからオブジェクトの参照を取得しないと何故かリアクティブにならない
             const _this = this;
