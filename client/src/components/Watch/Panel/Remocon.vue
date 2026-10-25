@@ -136,15 +136,16 @@ export default defineComponent({
 
         &--hybridcast {
             height: auto;
-            min-height: 650px;
         }
         .remote-control__hybridcast {
             margin: 12px 0;
             button { width: 100%; min-height: 36px; border-radius: 6px; background: rgb(var(--v-theme-background-lighten-1)); }
         }
         .remote-control__hybridcast-status {
-            min-height: 100px;
-            padding-top: 8px;
+            // 通常時と読み込み中は一行分だけ確保し、数字キーまでの空白を抑える。
+            // エラー時は本文と再試行ボタンの高さに合わせて伸ばし、内容を切り捨てない。
+            min-height: 20px;
+            padding-top: 4px;
             font-size: 12px;
             overflow-wrap: anywhere;
         }

@@ -62,6 +62,177 @@ document.addEventListener("DOMContentLoaded", function () {
     Util.getBootUrl = function () {
         return window.__KONOMI_PUBLIC_HELP__ ? "sv_help-list" : originalBoot.apply(this, arguments);
     };
+    // 同じ呼出窓口が公開 JSON にもカード取得と POST を適用している。
+    // 設定から解決した公開資源だけは GET し、契約 API は従来の処理へ返す。
+    var originalApi = Api.common;
+    Api.common = function (name, path) {
+        var url = new URL(path, document.baseURI);
+        var publicRoot = new URL("../pub/", document.baseURI);
+        if (!window.__KONOMI_PUBLIC_HELP__ || url.origin !== publicRoot.origin ||
+            !url.pathname.startsWith(publicRoot.pathname)) return originalApi.apply(this, arguments);
+        var result = $.Deferred();
+        $.ajax({url: url.href, method: "GET", dataType: "json", timeout: Conf.ajaxTimeout})
+            .done(result.resolve).fail(function (xhr, status) {
+                // 既存の各 API が失敗理由を引き継げるよう、上流と同じエラー型で返す。
+                var error = new CommonError("APIエラー", "", {url: url.href, xhr: xhr, textStatus: status});
+                result.reject(error);
+                error.execIfYet(function () { Action.error("番組情報を取得できませんでした (HTTP " + xhr.status + ")"); });
+            });
+        return result;
+    };
+    // 通常の番組表初期化には契約照会・購入商品・配信推薦が混在する。
+    // 公開モードの番組表だけは公開チャンネルと番組 JSON で既存 EPG を起動する。
+    // ログインや契約情報を空の成功応答へ置き換えることはしない。
+    var originalEpgLoad = DspSv001.prototype.onLoad;
+    var originalGenre = Util.getChannelGenreTbl;
+    Util.getChannelGenreTbl = function () {
+        if (!window.__KONOMI_PUBLIC_HELP__) return originalGenre.apply(this, arguments);
+        // 公開チャンネル一覧にもジャンル名があるため、会員 API のマスタ取得を不要にする。
+        return Action.call("EPGチャンネルリスト取得").then(function () {
+            var genres = [{id: "すべて", text: "すべて"}];
+            (Model.get("EPGチャンネルリスト") || []).forEach(function (channel) {
+                if (channel.genre && !genres.some(function (genre) { return genre.id === channel.genre; }))
+                    genres.push({id: channel.genre, text: channel.genre});
+            });
+            return genres;
+        });
+    };
+    DspSv001.prototype.onLoad = function () {
+        if (!window.__KONOMI_PUBLIC_HELP__ || this.sceneName !== "sv_epg")
+            return originalEpgLoad.apply(this, arguments);
+        var scene = this;
+        // 詳細から戻る際は、上流が保存した日時・チャンネルを再利用する。
+        // 現在時刻の Model を直接変更せず、番組表の表示位置だけを復元する。
+        var restoreChannel = scene.getParam("bid-bak");
+        var restoreTime = scene.getParam("ftm-bak");
+        var restoreOffset = scene.getParam("ctm-bak");
+        scene.timeOffset = Util.timeCreateAddHour(Model.get("現在時刻"), 0);
+        if (restoreOffset != null) scene.timeOffset.setTime(restoreOffset);
+        scene.target = "all";
+        Model.set("target-channel", "all");
+        Model.set("epg-login-status", "logout");
+        return $.when(Action.call("EPGチャンネルリスト取得"), Action.call("チャンネルロゴ情報取得"),
+            Action.call("選局情報取得"), Util.getChannelGenreTbl(), Api.IPTV01F014())
+            .then(function (channels, logos, tune, genres, pps) {
+            // 番組枠が参照する PPV 商品一覧も公開 JSON から作る。契約可否は取得・設定しない。
+            var programs = [];
+            (pps.cappvPpsPgmInfoList || []).forEach(function (program) {
+                var channel = program.chInfoList[0];
+                var series = channel.caSeriesIdList || [];
+                if (series.some(function (item) {
+                    return Util.getProdCodeListFromPpsProdList(item.ppsProdList).ppsProdCodeList.length > 0;
+                })) programs.push(Util.createBroadcastChannelId(channel.chNum, channel.siType, null) + "_" + channel.eventIdBrdcstWave);
+            });
+            Model.set("DSPSV001_PPS一覧情報", programs);
+            scene.genreTbl = genres;
+            Model.set("target-genre", 0);
+            scene.genreId = scene.convertTargetGenreId(0);
+            Model.set("target-genre-text", scene.convertTargetGenreText(0));
+            scene.convertTargetChannelText("all");
+            scene.setChannelTable(Model.get("EPGチャンネルリスト"));
+            return scene.getChannelTableByGenre(scene.genreId);
+        }).then(function (table) {
+            var tune = Model.get("選局情報");
+            scene.epg.setCurrentBroadcastChannelId(tune.broadcastChannelId);
+            scene.epg.setCurrentTime(Model.get("現在時刻"));
+            scene.epg.start(tune.broadcastChannelId, scene.timeOffset, table, restoreChannel);
+            scene.$top.hide();
+            scene.setMiniEpg(false);
+            // 通常起動の最適化通知はカード初期化の後に来る。公開起動では初回データの描画後に
+            // 同じ既存処理を呼び、不可視のまま保持されている番組表を入力可能な状態へ移す。
+            return scene.epg.waitFirstLoad().then(function () {
+                if (restoreTime != null) {
+                    var focusTime = Util.timeCreateAddHour(scene.timeOffset, 0);
+                    focusTime.setTime(restoreTime);
+                    scene.epg.initFocus(focusTime, restoreChannel);
+                }
+                scene.setParam("bid-bak", null);
+                scene.setParam("ctm-bak", null);
+                scene.setParam("ftm-bak", null);
+                scene.optimisation();
+            });
+        });
+    };
+    // 公開番組表から選んだ番組は、同じ公開 JSON の詳細を表示する。
+    // 会員向け詳細 API の成功を偽装せず、契約操作を持たない閲覧経路として初期化する。
+    var originalDetailDom = DspSv012.prototype.createDom;
+    var originalDetailLoad = DspSv012.prototype.onLoad;
+    var originalDetailSelect = DspSv012.prototype.onFocusSelect;
+    var originalDetailKey = DspSv012.prototype.onKeydown;
+    DspSv012.prototype.createDom = function (root) {
+        originalDetailDom.apply(this, arguments);
+        if (!window.__KONOMI_PUBLIC_HELP__) return;
+        // 公開詳細の左側には、カード不要で完結する番組表への復帰操作を配置する。
+        $(root).find('[data-focus="channel"]').attr("data-focus", "public-back")
+            .removeAttr("data-model-res data-model-enableif").text("番組表に戻る");
+    };
+    DspSv012.prototype.onLoad = function () {
+        if (!window.__KONOMI_PUBLIC_HELP__) return originalDetailLoad.apply(this, arguments);
+        var scene = this;
+        var selected = Model.get("epg-focus-programInfo");
+        scene.ignoreInitFocus = true;
+        // 選択番組との一致を確認し、他の画面から来た古い選択情報を流用しない。
+        if (!selected || String(selected.contentId) !== String(scene.getParam("contentsId"))) {
+            Action.error("公開番組表から番組を選び直してください。");
+            return;
+        }
+        var channelId = selected.broadcastChannelId;
+        return Api.IPTV01F013(Util.timeFormatYYYYMMDD(selected.startTime),
+            Util.getChNum5FromBroadcastChannelId(channelId), Util.getSiTypeFromBroadcastChannelId(channelId))
+            .then(function (data) {
+                if (scene.isFinish()) return;
+                var channel = (data.chInfoList || []).find(function (item) {
+                    return String(item.chNum) === String(Util.getChNum5FromBroadcastChannelId(channelId));
+                });
+                var program = channel && (channel.programInfoDtoType || []).find(function (item) {
+                    return String(item.contentId) === String(selected.contentId) &&
+                        String(item.infoId) === String(selected.infoId);
+                });
+                if (!program) {
+                    Action.error("番組情報が更新されました。番組表に戻って選び直してください。");
+                    return;
+                }
+                Model.set("logo", Util.getChannelImage(channelId, true));
+                Model.set("thumbnail", {list: selected.images || [], alt_url: Util.getChannelImage(channelId, true)});
+                Model.set("chnum", Util.getSiTypeStringFromBroadcastChannelId(channelId) + " " +
+                    Util.getChNum3FromBroadcastChannelId(channelId));
+                Model.set("name", channel.chName || "");
+                Model.set("title", program.title);
+                Model.set("onair", Util.getTimStringStartToEnd(program.brdcstStartYearMonthDayTimeMinuteSecond,
+                    program.brdcstEndYearMonthDayTimeMinuteSecond));
+                var genres = (program.brdcstGenreDtoType || []).map(function (genre) {
+                    return [genre.bigGenreName, genre.durGenreName].filter(Boolean).join(" ＞ ");
+                });
+                // 上流の見出しは一行分だけ確保されているため、主ジャンルを表示する。
+                // 複数ジャンルも省略せず、スクロール可能な説明欄にすべて残す。
+                Model.set("genre", genres[0] || "");
+                var details = (program.expandProgramDetailsInfoDtoType || []).slice().sort(function (a, b) {
+                    return a.order - b.order;
+                }).map(function (item) { return item.itemName + "\n" + item.itemDescript; });
+                if (genres.length > 1) details.push("ジャンル\n" + genres.join("\n"));
+                scene.detailText = [program.overviewLongLetter || program.overviewMidLetter ||
+                    program.overviewShortLetter || "番組概要はありません。"].concat(details).join("\n\n");
+                Model.set("text", scene.detailText);
+                Model.set("sv012-focus-enable", true);
+                // 元の詳細画面のスクロールとフォーカス処理をそのまま使う。
+                scene.focusEngine.addRule("textbox", VK_LEFT, "public-back");
+                scene.focusEngine.addRule("public-back", VK_RIGHT, "textbox");
+                return Action.call("update-dombind").then(function () {
+                    if (scene.isFinish()) return;
+                    scene.ignoreInitFocus = false;
+                    scene.focusEngine.init();
+                    scene.setFocus("public-back");
+                });
+            });
+    };
+    DspSv012.prototype.onFocusSelect = function (focus) {
+        if (!window.__KONOMI_PUBLIC_HELP__) return originalDetailSelect.apply(this, arguments);
+        if (focus === "public-back") Action.call("back-scene");
+    };
+    DspSv012.prototype.onKeydown = function (key) {
+        if (!window.__KONOMI_PUBLIC_HELP__) return originalDetailKey.apply(this, arguments);
+        if (key === VK_BACK) { Action.call("back-scene"); return true; }
+    };
     window.__KONOMI_PUBLIC_HELP__ = true;
 }, {capture: true, once: true});
 </script>`;

@@ -1,5 +1,4 @@
 
-import { readFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 
 import vue from '@vitejs/plugin-vue';
@@ -8,15 +7,12 @@ import { comlink } from 'vite-plugin-comlink';
 import { VitePWA } from 'vite-plugin-pwa';
 import vuetify, { transformAssetUrls } from 'vite-plugin-vuetify';
 
-import { patchARIBVFSWorkerSource } from './vite.arib-vfs-worker.mts';
+import { loadARIBRuntimeBootstrapSource, loadARIBVFSWorkerSource } from './vite.arib-vfs-worker.mts';
 
-const aribVfsWorkerPath = fileURLToPath(new URL('./node_modules/libaribhtml5/dist/sdk/arib-vfs-sw.js', import.meta.url));
 const readableStreamBrowserPath = fileURLToPath(new URL(
     './node_modules/@tsukumijima/aribts/node_modules/readable-stream/lib/ours/browser.js',
     import.meta.url,
 ));
-
-const loadARIBVFSWorkerSource = () => patchARIBVFSWorkerSource(readFileSync(aribVfsWorkerPath, 'utf-8'));
 
 const aribVfsWorkerPlugin = {
     name: 'konomitv-arib-vfs-worker',
@@ -26,12 +22,22 @@ const aribVfsWorkerPlugin = {
             response.setHeader('Content-Type', 'text/javascript; charset=utf-8');
             response.end(loadARIBVFSWorkerSource());
         });
+        server.middlewares.use('/data-broadcast/arib-runtime-bootstrap.js', (_request, response) => {
+            response.statusCode = 200;
+            response.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+            response.end(loadARIBRuntimeBootstrapSource());
+        });
     },
     generateBundle(this: {emitFile: (asset: {type: 'asset'; fileName: string; source: string | Uint8Array}) => void}) {
         this.emitFile({
             type: 'asset',
             fileName: 'data-broadcast/arib-vfs-sw.js',
             source: loadARIBVFSWorkerSource(),
+        });
+        this.emitFile({
+            type: 'asset',
+            fileName: 'data-broadcast/arib-runtime-bootstrap.js',
+            source: loadARIBRuntimeBootstrapSource(),
         });
     },
 };

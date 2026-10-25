@@ -406,7 +406,6 @@ class TLVDataBroadcastingManager implements PlayerManager {
             this.host?.installRuntime(target);
             this.patchBroadcastMediaCanvas(target);
             this.installReceiverFontFallback(target);
-            this.installNetworkProxy(target);
         };
         host_window.__ARIB_HTML5_INSTALL__ = this.runtime_installer;
 
@@ -1077,51 +1076,6 @@ class TLVDataBroadcastingManager implements PlayerManager {
             regioncode: regioncode_raw?.length === 2 ?
                 (regioncode_raw.charCodeAt(0) << 8) | regioncode_raw.charCodeAt(1) : null,
         };
-    }
-
-    private installNetworkProxy(target: RuntimeWindow): void {
-        if (useSettingsStore().settings.enable_internet_access_from_data_broadcasting === false) return;
-
-        // 許可時も放送アプリからインターネットへ直結させず、
-        // KonomiTV の ARIB HTML5 専用ホワイトリストプロキシだけを通す。
-        // /api は本番では同一 origin、Vite 開発時は vite.config.mts の proxy が 7000 番へ転送する。
-        const proxyUrl = (value: string): string | null => {
-            let url: URL;
-            try {
-                url = new URL(value, target.location.href);
-            } catch {
-                return null;
-            }
-            if (!['http:', 'https:'].includes(url.protocol) || url.origin === target.location.origin) return null;
-            const proxy_url = new URL('/api/data-broadcasting/arib-html5/request', target.location.origin);
-            proxy_url.searchParams.set('url', url.href);
-            return proxy_url.href;
-        };
-
-        const original_fetch = target.fetch.bind(target);
-        target.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-            const is_request = input instanceof target.Request;
-            const request_url = is_request ? (input as Request).url : String(input);
-            const proxied_url = proxyUrl(request_url);
-            if (proxied_url === null) return original_fetch(input, init);
-            const proxied_input = is_request ? new target.Request(proxied_url, input as Request) : proxied_url;
-            return original_fetch(proxied_input, init);
-        };
-
-        const original_open = target.XMLHttpRequest.prototype.open;
-        target.XMLHttpRequest.prototype.open = function(this: XMLHttpRequest, method: string, url: string | URL, ...args: unknown[]): void {
-            const proxied_url = proxyUrl(String(url));
-            Reflect.apply(original_open, this, [method, proxied_url ?? url, ...args]);
-        } as typeof target.XMLHttpRequest.prototype.open;
-
-        if (typeof target.navigator.sendBeacon === 'function') {
-            const original_send_beacon = target.navigator.sendBeacon.bind(target.navigator);
-            Object.defineProperty(target.navigator, 'sendBeacon', {
-                configurable: true,
-                value: (url: string | URL, data?: BodyInit | null): boolean =>
-                    original_send_beacon(proxyUrl(String(url)) ?? url, data),
-            });
-        }
     }
 
     private toggleRemoconLoading(loading: boolean): void {

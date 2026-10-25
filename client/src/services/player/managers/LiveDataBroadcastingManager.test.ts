@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { HybridcastLaunchRequest } from '@/services/player/hybridcast/XMLAIT';
 import type DPlayer from 'dplayer';
+import type { BMLBrowser } from 'web-bml';
 
 const state = vi.hoisted(() => ({
     player: {
@@ -14,6 +16,7 @@ const state = vi.hoisted(() => ({
     browsers: [] as Array<EventTarget & {emitMessage: ReturnType<typeof vi.fn>; content: {processKeyDown: ReturnType<typeof vi.fn>}}>,
     errorCallback: null as null | ((reason: string) => void),
     decoderDestroy: vi.fn(),
+    bmlOptions: null as ConstructorParameters<typeof BMLBrowser>[0] | null,
 }));
 vi.mock('comlink', () => ({proxy: (fn: unknown) => fn}));
 vi.mock('mpeg2toh264/yadif', () => ({Deinterlacer: class {}}));
@@ -25,7 +28,11 @@ vi.mock('web-bml', () => ({
         emitMessage = vi.fn();
         getVideoElement = () => null;
         destroy = vi.fn();
-        constructor() { super(); state.browsers.push(this); }
+        browserAPI = {browser: {getBrowserSupport: vi.fn((_provider: string, name: string) =>
+            name === 'AITControlledApp.Start' ? 1 : 0)}};
+        constructor(options: ConstructorParameters<typeof BMLBrowser>[0]) {
+            super(); state.bmlOptions = options; state.browsers.push(this);
+        }
     },
 }));
 vi.mock('@/router', () => ({default: {}}));
@@ -94,6 +101,24 @@ describe('standalone data broadcasting lifecycle', () => {
         expect(state.player.live_stream_status).toBe('ONAir');
         await vi.advanceTimersByTimeAsync(30000);
         expect(state.player.data_broadcasting_error).toBeNull();
+    });
+
+    it('connects standard AIT launch requests and accepts the APIGroup capability query', async () => {
+        await manager.init();
+        const launch = vi.spyOn(manager as unknown as {
+            startHybridcast(request: HybridcastLaunchRequest): Promise<void>;
+        }, 'startHybridcast').mockResolvedValue();
+        // 放送局が渡した AIT と Greg を保持し、十六進 ID だけを宿主の数値へ変換する。
+        const request = {organizationId: '000a', applicationId: '0010',
+            aitUrl: 'https://example.org/received.xml', greg: ['received-state']};
+        expect(state.bmlOptions!.startAITControlledApp!(request)).toBe(0);
+        expect(launch).toHaveBeenCalledWith({organizationId: 10, applicationId: 16,
+            aitUrl: request.aitUrl, greg: request.greg});
+        expect(state.bmlOptions!.startAITControlledApp!({...request, applicationId: 'invalid'})).toBeNaN();
+        expect(launch).toHaveBeenCalledTimes(1);
+        const browser = state.browsers[0] as unknown as BMLBrowser;
+        expect(browser.browserAPI.browser.getBrowserSupport('ARIB', 'APIGroup', 'AITControlledApp.Start')).toBe(1);
+        expect(browser.browserAPI.browser.getBrowserSupport('ARIB', 'APIGroup', 'unimplemented')).toBe(0);
     });
 
     it('times out once, releases reception, and ignores late load events', async () => {

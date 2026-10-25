@@ -15,7 +15,7 @@ import PlayerManager from '@/services/player/PlayerManager';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
 import useSettingsStore from '@/stores/SettingsStore';
-import Utils, { PlayerUtils } from '@/utils';
+import Utils, { dayjs, PlayerUtils } from '@/utils';
 import { ILivePSIArchivedDataDecoder } from '@/workers/LivePSIArchivedDataDecoder';
 import LivePSIArchivedDataDecoderProxy from '@/workers/LivePSIArchivedDataDecoderProxy';
 
@@ -167,6 +167,19 @@ class LiveDataBroadcastingManager implements PlayerManager {
                 fonts: {
                     roundGothic: LiveDataBroadcastingManager.ROUND_GOTHIC,
                     squareGothic: LiveDataBroadcastingManager.SQUARE_GOTHIC,
+                },
+                // 放送 BML の標準 AIT 起動 API を既存の HTML5 / VFS セッションへ接続する。
+                // ID は ARIB API の十六進表記として検証し、URL は受信した要求をそのまま使う。
+                startAITControlledApp: request => {
+                    if (!/^[0-9a-f]{1,8}$/i.test(request.organizationId) ||
+                        !/^[0-9a-f]{1,4}$/i.test(request.applicationId)) return NaN;
+                    void this_.startHybridcast({
+                        organizationId: parseInt(request.organizationId, 16),
+                        applicationId: parseInt(request.applicationId, 16),
+                        aitUrl: request.aitUrl,
+                        greg: [...request.greg],
+                    });
+                    return 0;
                 },
                 // BML は起動要求だけを発行し、XML AIT と HTML5 のライフサイクルは宿主が所有する。
                 X_DPA_startResidentApp: (appName, _showAV, aitUrl, Ex_info) => {
@@ -394,6 +407,17 @@ class LiveDataBroadcastingManager implements PlayerManager {
                     this_.player.notice(`${title}<br>${message} (${code})`, 3000, undefined, '#FF6F6A');
                 }
             });
+            // エンジンの AIT 能力判定は直接名に対応しているため、APIGroup 形式も同じ判定へ渡す。
+            // 実装済みの XML / HTTP 起動だけを公開し、他の機能名の結果は変えない。
+            const browser_api = this.#bml_browser.browserAPI.browser;
+            const get_browser_support = browser_api.getBrowserSupport;
+            browser_api.getBrowserSupport = (provider, name, ...info) => {
+                if (provider === 'ARIB' && name === 'APIGroup' && info[0] === 'AITControlledApp.Start') {
+                    return get_browser_support(provider, 'AITControlledApp.Start');
+                }
+                return get_browser_support(provider, name, ...info);
+            };
+
             this.bml_browser_width = 960;
             this.bml_browser_height = 540;
 
@@ -435,7 +459,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
                     player_store.is_video_buffering = false;
                     player_store.is_background_display = false;
                     player_store.live_stream_status = 'ONAir';
-                } else {
+                } else if (this.hybridcast === null) {
                     this.moveVideoElementToBMLBrowser();
                 }
             });
@@ -443,6 +467,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
             // BML ブラウザの表示状態が変化したときのイベント
             this.#bml_browser.addEventListener('invisible', (event) => {
                 if (generation !== this.session_generation || this.standalone_failed) return;
+                // HTML5 アプリが映像を使用している間、背面 BML の更新で映像 DOM を奪わない。
+                if (this.hybridcast !== null) return;
                 if (event.detail === true) {
                     // 非表示状態
                     // データ放送内に移動していた映像の要素を DPlayer に戻す
@@ -575,6 +601,7 @@ class LiveDataBroadcastingManager implements PlayerManager {
     private async stopHybridcast(): Promise<void> {
         ++this.hybridcast_generation;
         const session = this.hybridcast;
+        const was_playing = session !== null && !this.player.video.paused;
         this.hybridcast = null;
         if (this.container_element) this.container_element.style.visibility = '';
         const store = usePlayerStore();
@@ -582,6 +609,10 @@ class LiveDataBroadcastingManager implements PlayerManager {
         store.is_hybridcast_loading = false;
         store.hybridcast_error = null;
         await session?.destroy();
+        // SDK が映像を返した後に、既存 BML の映像枠へ復帰する。
+        if (session !== null && store.is_data_broadcasting_display) this.moveVideoElementToBMLBrowser();
+        // 通常の DOM 移動でブラウザが停止した映像だけを、元の再生状態へ戻す。
+        if (session !== null && was_playing) this.player.play();
     }
 
     /** Hybridcast 宿主へ、現在の BML ブラウザで保持している Greg を渡す。 */
@@ -620,6 +651,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
         if (publicHelp && !store.hybridcast_public_help_available) return;
         store.is_hybridcast_display = true;
         store.is_hybridcast_loading = true;
+        const was_playing = !this.player.video.paused;
+        this.moveVideoElementToDPlayer();
         if (this.container_element) this.container_element.style.visibility = 'hidden';
         const fail = (code: string) => {
             if (generation !== this.session_generation || this.hybridcast !== session) return;
@@ -627,14 +660,31 @@ class LiveDataBroadcastingManager implements PlayerManager {
             const reason = 'アプリの取得または実行に失敗しました。通信状態や放送アプリの対応状況を確認してください。';
             store.hybridcast_error = reason + ' 再試行するか、BML に戻れます。[' + code + ']';
         };
-        const session = new HybridcastSession(this.player.template.videoWrap, {
+        // Hybridcast は BML の論理座標を 16:9 に補正した実表示領域へ合わせる。
+        // videoWrap 全体を基準にすると、BML の余白に iframe の外側がずれて露出してしまう。
+        const present = channel.program_present;
+        const following = channel.program_following;
+        const session = new HybridcastSession(this.player.template.videoWrap, this.container_element!, this.media_element, {
             original_network_id: channel.network_id ?? undefined,
             transport_stream_id: channel.transport_stream_id ?? undefined,
             service_id: channel.service_id ?? undefined,
+            // 放送アプリの局・番組判定には ID だけでなく、受信した現在番組情報を完全に渡す。
+            event_id: present && 'event_id' in present ? present.event_id : undefined,
+            name: present?.title,
+            start_time: present ? dayjs(present.start_time).toDate() : undefined,
+            duration: present ? present.duration * 1000 : undefined,
+            desc: present?.description,
+            f_event_id: following && 'event_id' in following ? following.event_id : undefined,
+            f_name: following?.title,
+            f_start_time: following ? dayjs(following.start_time).toDate() : undefined,
+            f_duration: following ? following.duration * 1000 : undefined,
+            f_desc: following?.description,
         }, () => { void this.stopHybridcast(); }, fail, () => {
             if (this.hybridcast === session) store.is_hybridcast_loading = false;
         }, publicHelp);
         this.hybridcast = session;
+        // Shadow DOM からの移動でも、ユーザーが再生中だった状態を維持する。
+        if (was_playing) this.player.play();
         try {
             await session.start(request, publicHelp);
         } catch (error) {

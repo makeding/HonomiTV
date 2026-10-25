@@ -4761,10 +4761,10 @@ levn@^0.4.1:
     prelude-ls "^1.2.1"
     type-check "~0.4.0"
 
-libaribhtml5@^0.1.9:
-  version "0.1.9"
-  resolved "https://registry.yarnpkg.com/libaribhtml5/-/libaribhtml5-0.1.9.tgz#15e78d91691cf8f72e98af7f87ff2aba6b290ece"
-  integrity sha512-WWcqOG8ntdXd5uuSRUgMEe2Fk0UYZGeiQJuZxQBAYWXGVTc3lb8Px9/Eogkex076rPz+ZDrisdlDY7YtLfgyKg==
+libaribhtml5@^0.2.0:
+  version "0.2.0"
+  resolved "https://registry.yarnpkg.com/libaribhtml5/-/libaribhtml5-0.2.0.tgz#c47b5bd36b2c8b1500cab9e4644ea4235ff3ee84"
+  integrity sha512-gMj/g+m6yGKGaTkObEUDSvd/yARS2/FD5XZzlr7uOOd2MfITbagFw1SCkT+zfDOx5vOL9cUmjR6Bb4xvtgMUPg==
 
 locate-path@^6.0.0:
   version "6.0.0"
@@ -6872,9 +6872,9 @@ vuetify@~3.7.1:
   resolved "https://registry.yarnpkg.com/vuetify/-/vuetify-3.7.19.tgz#386ab39900400e9aa811fa0569e10db650f54b84"
   integrity sha512-RrUpdBOGWGcT2oNLqXBiqYRudKTFqxTfr8lISl51Cuo80cfgRmbyDnlQQRWxE4QSNxcqXk6ZzBoJRUEXpW9C/w==
 
-"web-bml@github:makeding/web-bml#1b44fdc859215e4e5e602335d0bcdff67983cdd6":
+"web-bml@github:makeding/web-bml#7d518e03f2bebd14061dfa990577dc5f9c77417a":
   version "1.0.0"
-  resolved "https://codeload.github.com/makeding/web-bml/tar.gz/1b44fdc859215e4e5e602335d0bcdff67983cdd6"
+  resolved "https://codeload.github.com/makeding/web-bml/tar.gz/7d518e03f2bebd14061dfa990577dc5f9c77417a"
   dependencies:
     "@tsukumijima/aribts" "github:tsukumijima/node-aribts#v1.5.3"
     arib-subtitle-timedmetadater "^4.0.10"

@@ -33,7 +33,7 @@
         "floating-vue": "^5.2.2",
         "hls.js": "^1.6.9",
         "idb": "^8.0.3",
-        "libaribhtml5": "^0.1.9",
+        "libaribhtml5": "^0.2.0",
         "mitt": "^3.0.1",
         "mpeg2toh264": "github:tsukumijima/mpeg2toh264#69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1",
         "mpegts.js": "github:tsukumijima/mpegts.js#bf4e49d0ff004cf7546237393a62c66e4b926dca",
@@ -53,7 +53,7 @@
         "vue-virtual-scroller": "^2.0.0-beta.8",
         "vuedraggable": "^4.1.0",
         "vuetify": "~3.7.1",
-        "web-bml": "github:makeding/web-bml#1b44fdc859215e4e5e602335d0bcdff67983cdd6"
+        "web-bml": "github:makeding/web-bml#7d518e03f2bebd14061dfa990577dc5f9c77417a"
     },
     "devDependencies": {
         "@babel/types": "^7.25.4",
@@ -70,6 +70,7 @@
         "@vue/eslint-config-typescript": "^12.0.0",
         "@vue/test-utils": "^2.4.6",
         "concurrently": "^8.2.2",
+        "esbuild": "^0.25.0",
         "eslint": "^8.57.0",
         "eslint-plugin-import": "^2.29.1",
         "eslint-plugin-unused-imports": "^3.2.0",
