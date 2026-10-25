@@ -633,29 +633,43 @@ class LiveDataBroadcastingManager implements PlayerManager {
 
     /** 明示的な実験入口と BML の通常起動要求で、同じ宿主を利用する。 */
     private async startHybridcast(request: HybridcastLaunchRequest, publicHelp = false): Promise<void> {
+        const store = usePlayerStore();
+        // 起動操作の直後から入力を占有し、退出処理待ちの間も重複起動させない。
+        if (store.is_hybridcast_loading) return;
         const generation = this.session_generation;
         const cancellation = this.hybridcast_generation + 1;
-        await this.stopHybridcast();
+        const stopping = this.stopHybridcast();
+        store.is_hybridcast_loading = true;
+        await stopping;
         if (generation !== this.session_generation || cancellation !== this.hybridcast_generation) return;
         this.hybridcastRequest = {request, publicHelp};
-        const store = usePlayerStore();
         store.hybridcast_available = true;
         store.hybridcast_public_help_available = request.organizationId === 4153 && request.applicationId === 1;
         // 公開ヘルプは固定ホストをサーバー側の同一オリジン API から取得するため、
         // BML の一般的な外部通信設定が無効でも実験入口を開ける。
         if (!publicHelp && !useSettingsStore().settings.enable_internet_access_from_data_broadcasting) {
+            store.is_hybridcast_loading = false;
             store.hybridcast_error = '通信が無効です。設定の「データ放送」からインターネット接続を有効にして再試行してください。[HYBRIDCAST_NETWORK_DISABLED]';
             return;
         }
         const channel = useChannelsStore().channel.current;
-        if (publicHelp && !store.hybridcast_public_help_available) return;
+        if (publicHelp && !store.hybridcast_public_help_available) {
+            store.is_hybridcast_loading = false;
+            return;
+        }
         store.is_hybridcast_display = true;
         store.is_hybridcast_loading = true;
+        // BML 自身が起動直後に画面を消す場合も、通信を待つ前に通常のテレビ映像へ戻す。
+        // 非表示の HTML 面へ先に映像を渡すと、黒画面 → テレビ → HTML の順に点滅してしまう。
         const was_playing = !this.player.video.paused;
         this.moveVideoElementToDPlayer();
         if (this.container_element) this.container_element.style.visibility = 'hidden';
+        if (was_playing) this.player.play();
         const fail = (code: string) => {
             if (generation !== this.session_generation || this.hybridcast !== session) return;
+            const was_playing = !this.player.video.paused;
+            session.suspend();
+            if (was_playing) this.player.play();
             store.is_hybridcast_loading = false;
             const reason = 'アプリの取得または実行に失敗しました。通信状態や放送アプリの対応状況を確認してください。';
             store.hybridcast_error = reason + ' 再試行するか、BML に戻れます。[' + code + ']';
@@ -680,11 +694,23 @@ class LiveDataBroadcastingManager implements PlayerManager {
             f_duration: following ? following.duration * 1000 : undefined,
             f_desc: following?.description,
         }, () => { void this.stopHybridcast(); }, fail, () => {
-            if (this.hybridcast === session) store.is_hybridcast_loading = false;
+            if (generation !== this.session_generation || this.hybridcast !== session) return;
+            const was_playing = !this.player.video.paused;
+            // 読込・フォント・首フレームの準備後に、映像の移動と表示面の切替をまとめて行う。
+            session.present();
+            // DOM 移動で停止した映像だけを、元の再生状態へ戻す。
+            if (was_playing) this.player.play();
+            store.is_hybridcast_loading = false;
+        }, () => {
+            if (generation !== this.session_generation || this.hybridcast !== session) return;
+            // SDK は文書遷移時に映像面を unmount するため、同じ通知内で通常映像へ戻す。
+            const was_playing = !this.player.video.paused;
+            session.suspend();
+            if (was_playing) this.player.play();
+            store.hybridcast_error = null;
+            store.is_hybridcast_loading = true;
         }, publicHelp);
         this.hybridcast = session;
-        // Shadow DOM からの移動でも、ユーザーが再生中だった状態を維持する。
-        if (was_playing) this.player.play();
         try {
             await session.start(request, publicHelp);
         } catch (error) {
@@ -708,6 +734,8 @@ class LiveDataBroadcastingManager implements PlayerManager {
         this.remocon_element.addEventListener('click', async (event) => {
             const button = (event.target as Element).closest<HTMLButtonElement>('button');
             if (button === null || !this.remocon_element.contains(button)) return;
+            // DOM の disabled だけに依存せず、読込中はデータキーを含む切替要求を受け付けない。
+            if (button.disabled || usePlayerStore().is_hybridcast_loading) return;
             const hybridcastAction = button.dataset.hybridcastAction;
             if (hybridcastAction === 'Toggle') {
                 if (this.hybridcast !== null) await this.stopHybridcast();

@@ -17,9 +17,18 @@ export default class HybridcastSession {
     private readonly viewport = document.createElement('div');
     private readonly stage = document.createElement('div');
     private readonly mediaSurface = document.createElement('div');
-    private readonly mediaParent: HTMLElement | null;
-    private readonly mediaNextSibling: ChildNode | null;
-    private readonly mediaStyle: string | null;
+    private mediaParent: HTMLElement | null = null;
+    private mediaNextSibling: ChildNode | null = null;
+    private mediaStyle: string | null = null;
+    private installedDocument: Document | null = null;
+    private preparingDocument: Document | null = null;
+    private presentationGeneration = 0;
+    private presentationFrame: number | null = null;
+    private presentationTimeout: ReturnType<typeof setTimeout> | null = null;
+    private presentationReady = false;
+    private presented = false;
+    private presentationFailed = false;
+    private readonly frameLoadHandler = () => { void this.preparePresentation(); };
     private readonly resizeObserver: ResizeObserver;
     private readonly resizeHandler = () => this.schedulePresentationBoundsSync();
     private readonly backend = new ServiceWorkerBroadcastVfs({
@@ -35,13 +44,17 @@ export default class HybridcastSession {
         private readonly mediaElement: HTMLElement,
         program: ProgramInfo, private readonly onExit: () => void,
         private readonly onError: (code: string) => void, private readonly onReady: () => void,
+        private readonly onLoading: () => void,
         private readonly publicHelp = false) {
         // BML は 720×480 の論理サイズを 16:9 に補正して表示するため、videoWrap 全体ではなく
         // 実際に見えている BML 面の矩形へ HTML5 面を重ねる。これにより余白や BML の下端が露出しない。
         Object.assign(this.stage.style, {
             // 映像・BML より前、DPlayer の操作面 (3) と番組ヘッダー (5) より後ろに置く。
             position: 'absolute', overflow: 'hidden', zIndex: '2', pointerEvents: 'none', backgroundColor: '#000',
+            // レイアウトと SDK の映像矩形計算は動かし、読込途中の白い iframe だけを描画しない。
+            opacity: '0',
         });
+        this.stage.inert = true;
         Object.assign(this.viewport.style, {position: 'absolute', inset: '0', pointerEvents: 'none'});
         Object.assign(this.iframe.style, {
             position: 'absolute', inset: '0', border: '0', width: '100%', height: '100%',
@@ -53,16 +66,12 @@ export default class HybridcastSession {
         this.iframe.tabIndex = -1;
         // MSE 接続済みの映像は同じ文書内に保持し、SDK の既存 external media plane へ渡す。
         // BML の非表示な Shadow DOM 内に残すと、HTML5 の映像窓だけ黒くなる。
-        this.mediaParent = mediaElement.parentElement;
-        this.mediaNextSibling = mediaElement.nextSibling;
-        this.mediaStyle = mediaElement.getAttribute('style');
+        // 映像の所有元とスタイルは実際の表示切替時に保存する。
+        // AIT・HTML の取得中は宿主の通常映像を保持し、非表示の stage へ移動しない。
         Object.assign(this.mediaSurface.style, {position: 'absolute', inset: '0', pointerEvents: 'none'});
-        Object.assign(mediaElement.style, {
-            position: 'absolute', inset: '0', width: '100%', height: '100%', transform: 'none',
-        });
         this.stage.append(this.viewport, this.mediaSurface, this.iframe);
         this.container.append(this.stage);
-        this.mediaSurface.append(mediaElement);
+        this.iframe.addEventListener('load', this.frameLoadHandler);
         this.resizeObserver = new ResizeObserver(() => this.schedulePresentationBoundsSync());
         this.resizeObserver.observe(this.container);
         this.resizeObserver.observe(this.presentationTarget);
@@ -80,14 +89,40 @@ export default class HybridcastSession {
             onLifecycle: event => {
                 if (this.disposed) return;
                 if (event.type === 'installed') {
-                    this.host.setApplicationInputActive(true);
-                    this.onReady();
-                } else if (event.type === 'exited') this.onExit();
+                    // installed は head 内の先行フックでも届くため、表示完了とは扱わない。
+                    this.installedDocument = this.iframe.contentDocument;
+                    void this.preparePresentation();
+                } else if (event.type === 'loading' || event.type === 'navigating') {
+                    this.installedDocument = null;
+                    this.preparingDocument = null;
+                    this.presentationReady = false;
+                    ++this.presentationGeneration;
+                    this.cancelPresentationFrame();
+                    this.host.setApplicationInputActive(false);
+                    this.onLoading();
+                    // SDK の導入成功後も、文書の読込が完了しない場合は復帰操作を残す。
+                    if (this.presentationTimeout === null) {
+                        this.presentationTimeout = setTimeout(() => {
+                            this.presentationTimeout = null;
+                            this.presentationFailed = true;
+                            this.onError('HYBRIDCAST_LOAD_TIMEOUT');
+                        }, 30000);
+                    }
+                } else if (event.type === 'exited') {
+                    // SDK は読込エラー後にも exit を通知する。失敗理由と復帰操作は宿主に残す。
+                    if (!this.presentationFailed) this.onExit();
+                }
                 else if (event.type === 'error') {
+                    this.presentationFailed = true;
+                    this.clearPresentationTimeout();
                     console.error('[HybridcastSession] Runtime error:', event.message);
                     this.onError('HYBRIDCAST_RUNTIME_ERROR');
                 }
-                else if (event.type === 'navigation-blocked') this.onError('HYBRIDCAST_NAVIGATION_BLOCKED');
+                else if (event.type === 'navigation-blocked' || event.type === 'frame-blocked') {
+                    this.presentationFailed = true;
+                    this.clearPresentationTimeout();
+                    this.onError(event.type === 'frame-blocked' ? 'HYBRIDCAST_FRAME_BLOCKED' : 'HYBRIDCAST_NAVIGATION_BLOCKED');
+                }
             },
         });
         this.host.setProgramInfo(program);
@@ -129,10 +164,85 @@ export default class HybridcastSession {
     }
 
     dispatchKey(code: number): void {
+        // 初期化中のアプリへ操作を送らず、表示済みのページだけに入力権を渡す。
+        if (!this.presented || !this.presentationReady || this.presentationFailed) return;
         // 宿主リモコンを操作した時点で HTML5 アプリへ入力権を渡す。
         // ページ遷移直後の show() 通知で入力権が解除されていても、最初のキーを失わない。
         this.host.setApplicationInputActive(true);
         this.host.dispatchKey(code);
+    }
+
+    /** 読込済み文書のフォントと最初のレイアウトを待ち、宿主へ表示切替を通知する。 */
+    private async preparePresentation(): Promise<void> {
+        const applicationDocument = this.iframe.contentDocument;
+        if (this.disposed || this.presentationFailed || applicationDocument === null ||
+            applicationDocument !== this.installedDocument || applicationDocument.readyState !== 'complete' ||
+            applicationDocument === this.preparingDocument) return;
+        this.preparingDocument = applicationDocument;
+        const generation = this.presentationGeneration;
+        await applicationDocument.fonts?.ready;
+        // フォント待機中にリダイレクト・退出した文書は、遅れて表示しない。
+        if (this.disposed || this.presentationFailed || generation !== this.presentationGeneration ||
+            this.iframe.contentDocument !== applicationDocument) return;
+        // load ハンドラー内の DOM 更新と SDK の画面・映像矩形通知を先に反映する。
+        this.presentationFrame = requestAnimationFrame(() => {
+            this.presentationFrame = requestAnimationFrame(() => {
+                this.presentationFrame = null;
+                if (this.disposed || this.presentationFailed || generation !== this.presentationGeneration ||
+                    this.iframe.contentDocument !== applicationDocument) return;
+                this.syncPresentationBounds();
+                this.presentationReady = true;
+                this.clearPresentationTimeout();
+                this.host.setApplicationInputActive(true);
+                this.onReady();
+            });
+        });
+    }
+
+    /** 宿主が BML の映像を返した後、同じ描画フレーム内で HTML 面と映像を一緒に表示する。 */
+    present(): void {
+        if (this.disposed || this.presented || !this.presentationReady || this.presentationFailed) return;
+        this.mediaParent = this.mediaElement.parentElement;
+        this.mediaNextSibling = this.mediaElement.nextSibling;
+        this.mediaStyle = this.mediaElement.getAttribute('style');
+        Object.assign(this.mediaElement.style, {
+            position: 'absolute', inset: '0', width: '100%', height: '100%', transform: 'none',
+        });
+        this.mediaSurface.append(this.mediaElement);
+        this.presented = true;
+        this.stage.style.opacity = '1';
+        this.stage.inert = false;
+        this.host.setApplicationInputActive(true);
+    }
+
+    /** 文書遷移・退出中は SDK の非表示映像面から通常プレイヤーへ戻し、テレビ映像を継続する。 */
+    suspend(): void {
+        this.stage.style.opacity = '0';
+        this.stage.inert = true;
+        // 初回読込では宿主の映像をまだ借りていないため、BML / DPlayer の配置に触れない。
+        if (!this.presented) return;
+        if (this.mediaParent !== null) {
+            const next = this.mediaNextSibling?.parentNode === this.mediaParent ? this.mediaNextSibling : null;
+            this.mediaParent.insertBefore(this.mediaElement, next);
+        }
+        if (this.mediaStyle === null) this.mediaElement.removeAttribute('style');
+        else this.mediaElement.setAttribute('style', this.mediaStyle);
+        this.presented = false;
+        this.mediaParent = null;
+        this.mediaNextSibling = null;
+        this.mediaStyle = null;
+    }
+
+    private cancelPresentationFrame(): void {
+        if (this.presentationFrame === null) return;
+        cancelAnimationFrame(this.presentationFrame);
+        this.presentationFrame = null;
+    }
+
+    private clearPresentationTimeout(): void {
+        if (this.presentationTimeout === null) return;
+        clearTimeout(this.presentationTimeout);
+        this.presentationTimeout = null;
     }
 
     /** BML の CSS 変形後の画面矩形を、未変形の HTML5 stage に反映する。 */
@@ -164,16 +274,14 @@ export default class HybridcastSession {
         if (this.disposed) return;
         this.disposed = true;
         this.abortController.abort();
+        this.cancelPresentationFrame();
+        this.clearPresentationTimeout();
+        this.iframe.removeEventListener('load', this.frameLoadHandler);
         this.resizeObserver.disconnect();
         window.removeEventListener('resize', this.resizeHandler);
         this.host.destroy();
         // stage を外す前に所有元へ戻し、通常再生 / BML の既存復元処理へ引き渡す。
-        if (this.mediaParent !== null) {
-            const next = this.mediaNextSibling?.parentNode === this.mediaParent ? this.mediaNextSibling : null;
-            this.mediaParent.insertBefore(this.mediaElement, next);
-        }
-        if (this.mediaStyle === null) this.mediaElement.removeAttribute('style');
-        else this.mediaElement.setAttribute('style', this.mediaStyle);
+        this.suspend();
         this.stage.remove();
         const hostWindow = window as RuntimeHostWindow;
         if (hostWindow.__ARIB_HTML5_INSTALL__ === this.installer) {

@@ -46,15 +46,20 @@
                 </div>
             </div>
             <div class="remote-control__hybridcast" v-if="hybridcastAvailable || playerStore.is_hybridcast_display">
-                <button v-ripple data-hybridcast-action="Toggle">
-                    {{ playerStore.is_hybridcast_display ? 'BML に戻る' : 'Hybridcast' }}
+                <button v-ripple data-hybridcast-action="Toggle" :disabled="playerStore.is_hybridcast_loading"
+                    :aria-busy="playerStore.is_hybridcast_loading"
+                    :aria-label="playerStore.is_hybridcast_loading ? 'Hybridcast を読み込み中' : undefined">
+                    <v-progress-circular v-if="playerStore.is_hybridcast_loading" indeterminate size="22" width="2" />
+                    <template v-else>{{ playerStore.is_hybridcast_display ? 'BML に戻る' : 'Hybridcast' }}</template>
                 </button>
-                <button v-if="playerStore.hybridcast_public_help_available" data-hybridcast-action="PublicHelp">
+                <button v-if="playerStore.hybridcast_public_help_available" data-hybridcast-action="PublicHelp"
+                    :disabled="playerStore.is_hybridcast_loading">
                     公開ヘルプ（実験）
                 </button>
                 <div class="remote-control__hybridcast-status" aria-live="polite">
-                    {{ playerStore.is_hybridcast_loading ? '読み込み中…' : playerStore.hybridcast_error }}
-                    <button v-if="playerStore.hybridcast_error" data-hybridcast-action="Retry">再試行</button>
+                    {{ playerStore.hybridcast_error }}
+                    <button v-if="playerStore.hybridcast_error" data-hybridcast-action="Retry"
+                        :disabled="playerStore.is_hybridcast_loading">再試行</button>
                 </div>
             </div>
             <div class="remote-control__number-key">
