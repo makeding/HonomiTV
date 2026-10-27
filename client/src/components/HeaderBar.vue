@@ -89,7 +89,6 @@ const isVideoSection = (path: string) => {
 };
 
 const searchPlaceholder = computed(() => {
-    if (route.path.startsWith('/captures')) return 'キャプチャを検索...';
     if (route.path.startsWith('/series')) {
         return 'シリーズを検索...';
     }
@@ -99,7 +98,6 @@ const searchPlaceholder = computed(() => {
 });
 
 const getSearchPath = () => {
-    if (route.path.startsWith('/captures')) return '/captures/search';
     if (route.path.startsWith('/series')) {
         return '/series/';
     }

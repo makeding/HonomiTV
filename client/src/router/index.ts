@@ -99,21 +99,6 @@ const router = createRouter({
             component: () => import('@/views/Mylist.vue'),
         },
         {
-            path: '/captures/',
-            name: 'Captures',
-            component: () => import('@/views/Captures.vue'),
-        },
-        {
-            path: '/captures/search',
-            name: 'Captures Search',
-            component: () => import('@/views/Captures.vue'),
-        },
-        {
-            path: '/captures/folders/:folder_id(\\d+)',
-            name: 'Capture Folder',
-            component: () => import('@/views/Captures.vue'),
-        },
-        {
             path: '/offline-videos/',
             name: 'Offline Videos',
             component: () => import('@/views/OfflineVideos.vue'),

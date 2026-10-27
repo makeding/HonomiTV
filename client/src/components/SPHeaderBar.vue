@@ -87,7 +87,6 @@ const showSearchButton = computed(() => {
 
 // 検索プレースホルダー
 const searchPlaceholder = computed(() => {
-    if (route.path.startsWith('/captures')) return 'キャプチャを検索...';
     if (route.path.startsWith('/series')) {
         return 'シリーズを検索...';
     }
@@ -106,7 +105,6 @@ const isVideoSection = (path: string) => {
 
 // 検索パスを取得
 const getSearchPath = () => {
-    if (route.path.startsWith('/captures')) return '/captures/search';
     if (route.path.startsWith('/series')) {
         return '/series/';
     }

@@ -27,11 +27,6 @@
             <Icon class="watch-navigation__link-icon" icon="fluent:timer-16-regular" width="26px" style="padding: 0.5px;"/>
         </router-link>
         <router-link v-ripple class="watch-navigation__link" active-class="watch-navigation__link--active"
-            :class="{'watch-navigation__link--active': $route.path.startsWith('/captures')}"
-            v-ftooltip.right="'キャプチャ'" to="/captures/">
-            <Icon class="watch-navigation__link-icon" icon="fluent:image-multiple-24-regular" width="26px" />
-        </router-link>
-        <router-link v-ripple class="watch-navigation__link" active-class="watch-navigation__link--active"
             :class="{'watch-navigation__link--active': $route.path.startsWith('/offline-videos')}"
             v-ftooltip.right="'オフライン保存'" to="/offline-videos/">
             <span class="watch-navigation__link-icon-wrapper">

@@ -72,7 +72,7 @@ describe('remote playback navigation', () => {
         expect(mocks.send).not.toHaveBeenCalled();
     });
 
-    it('keeps the capture navigation guard pending until the transition calls next', async () => {
+    it('keeps the navigation guard pending until the transition calls next', async () => {
         mocks.settings.selected_remote_device_id = null;
         let startUpdate!: () => void;
         const original = document.startViewTransition;
@@ -82,7 +82,7 @@ describe('remote playback navigation', () => {
         try {
             const next = vi.fn();
             let resolved = false;
-            const pending = mocks.guard({name: 'Captures', path: '/captures/', params: {}}, {path: '/tv/'}, next)
+            const pending = mocks.guard({name: 'Mylist', path: '/mylist/', params: {}}, {path: '/tv/'}, next)
                 .then(() => { resolved = true; });
             await Promise.resolve();
             expect(resolved).toBe(false);

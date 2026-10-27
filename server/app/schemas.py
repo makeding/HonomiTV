@@ -403,62 +403,6 @@ class OfflineVideoStreamMetadata(BaseModel):
     # 保存容量の見積もりとプレイリスト生成に使う録画時間
     duration_seconds: float
 
-# ***** キャプチャ *****
-
-class Captures(BaseModel):
-    total: int
-    captures: list[Capture]
-
-class Capture(BaseModel):
-    # 設定済みの保存先ルートとファイル名を一意に表す、不透明なキャプチャ ID
-    id: str
-    filename: str
-    # グリッドの表示領域を画像読込前に予約するため、視覚的に重要な寸法を先に返す。
-    image_width: int
-    image_height: int
-    file_size: int
-    file_modified_at: datetime
-    mime_type: Literal['image/jpeg', 'image/png']
-    capture_metadata: CaptureMetadata | None = None
-
-class CaptureMetadata(BaseModel):
-    # 歴史的な画像には EXIF 全体、または個別フィールドが無いことがあるため全て安全に欠損を許容する。
-    captured_at: str | None = None
-    captured_playback_position: float | None = None
-    network_id: int | None = None
-    service_id: int | None = None
-    event_id: int | None = None
-    title: str | None = None
-    description: str | None = None
-    start_time: str | None = None
-    end_time: str | None = None
-    duration: float | None = None
-    caption_text: str | None = None
-    is_caption_composited: bool | None = None
-    is_comment_composited: bool | None = None
-
-class CaptureFolders(BaseModel):
-    total: int
-    folders: list[CaptureFolder]
-
-class CaptureFolder(BaseModel):
-    id: int
-    name: str
-    sort_order: int
-    capture_count: int
-    created_at: datetime
-    updated_at: datetime
-
-class CaptureFolderCreateRequest(BaseModel):
-    name: str
-
-class CaptureFolderUpdateRequest(BaseModel):
-    name: str | None = None
-    sort_order: int | None = None
-
-class CaptureBookmarkRequest(BaseModel):
-    capture_ids: list[str]
-
 # ***** シリーズ *****
 
 class SeriesSummary(PydanticModel):

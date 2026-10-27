@@ -58,15 +58,6 @@
                         <Icon class="navigation__link-icon" icon="fluent:timer-16-regular" width="26px" style="padding: 0.5px;" />
                         <span v-if="!iconOnly" class="navigation__link-text">録画予約</span>
                     </router-link>
-                    <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/captures/"
-                        :class="{
-                            'navigation__link--active': $route.path.startsWith('/captures'),
-                            'navigation__link--icon-only': iconOnly,
-                        }"
-                        v-ftooltip.right="iconOnly ? 'キャプチャ' : ''">
-                        <Icon class="navigation__link-icon" icon="fluent:image-multiple-24-regular" width="26px" />
-                        <span v-if="!iconOnly" class="navigation__link-text">キャプチャ</span>
-                    </router-link>
                     <router-link v-ripple class="navigation__link" active-class="navigation__link--active" to="/offline-videos/"
                         :class="{
                             'navigation__link--active': $route.path.startsWith('/offline-videos'),

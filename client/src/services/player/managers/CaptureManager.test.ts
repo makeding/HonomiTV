@@ -23,7 +23,7 @@ function createPlayer() {
     } as unknown as DPlayer;
 }
 
-describe('キャプチャフォントの失敗を再生から分離する', () => {
+describe('上流キャプチャの初期化とプロバイダー接続', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.loadFonts.mockResolvedValue(undefined);
@@ -31,28 +31,22 @@ describe('キャプチャフォントの失敗を再生から分離する', () =
         vi.spyOn(console, 'error').mockImplementation(() => {});
     });
 
-    it.each(['Live', 'Video'] as const)('%s でフォントの失敗がプレイヤー初期化を中断しない', async (mode) => {
-        mocks.loadFonts.mockRejectedValue(new TypeError('Font request blocked'));
+    it.each(['Live', 'Video'] as const)('%s でキャプチャボタンと上流フォントを初期化する', async (mode) => {
         const player = createPlayer();
         const manager = new CaptureManager(player, mode);
-        await expect(manager.init()).resolves.toBeUndefined();
+        await manager.init();
         expect(player.container.querySelector('.dplayer-capture-icon')).not.toBeNull();
         expect(player.container.querySelector('.dplayer-comment-capture-icon')).not.toBeNull();
-        expect(player.notice).not.toHaveBeenCalled();
-        expect(console.warn).toHaveBeenCalled();
+        expect(mocks.loadFonts).toHaveBeenCalledTimes(1);
     });
 
-    it('コメント付きキャプチャで再試行し、失敗理由と次の操作をプレイヤー内に表示する', async () => {
-        mocks.loadFonts.mockRejectedValue(new TypeError('Font request blocked'));
+    it('コメント機能がないプロバイダーでは合成を開始せず理由を表示する', async () => {
         const player = createPlayer();
+        player.danmaku = null;
         const manager = new CaptureManager(player, 'Video');
         await manager.init();
         player.container.querySelector<HTMLElement>('.dplayer-comment-capture-icon')!.click();
-        await vi.waitFor(() => expect(player.notice).toHaveBeenCalled());
-        expect(mocks.loadFonts).toHaveBeenCalledTimes(2);
-        expect(player.notice).toHaveBeenCalledWith(expect.stringContaining('CAPTURE_FONT_LOAD_FAILED'),
-            undefined, undefined, '#FF6F6A');
-        expect(player.notice).toHaveBeenCalledWith(expect.stringContaining('もう一度キャプチャしてください'),
+        expect(player.notice).toHaveBeenCalledWith('ネットテレビではコメント付きキャプチャを利用できません。',
             undefined, undefined, '#FF6F6A');
         expect(player.container.querySelector('.dplayer-capturing')).toBeNull();
     });
