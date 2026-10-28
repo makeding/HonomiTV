@@ -472,12 +472,22 @@ class PlayerController {
         // seek_seconds はこの後 DPlayer を初期化した後の初回シーク時に参照される
         let seek_seconds = options.seek_seconds;
         let is_initial_video_playback_without_history = false;
+        // URL で指定された再生位置から再生を始めるか (視聴履歴からの再開と区別し、続きからの通知を視聴履歴のときだけ出すため)
+        let is_url_playback_position = false;
         if (seek_seconds === null) {
             if (this.playback_mode === 'Video') {
                 const history = settings_store.settings.watched_history.find(
                     history => history.video_id === player_store.recorded_program.id
                 );
-                if (history) {
+                // URL で再生位置 (録画ファイルの先頭からの秒数) が指定されたときは、視聴履歴より優先してその位置から再生を開始する
+                // キャプチャの「この場面から再生」などから使う
+                const url_params = new URLSearchParams(window.location.search);
+                const playback_position = Number(url_params.get('playback_position'));
+                if (url_params.has('playback_position') && Number.isFinite(playback_position)) {
+                    seek_seconds = Math.max(0, playback_position);
+                    is_url_playback_position = true;
+                    console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (URL Playback Position)`);
+                } else if (history) {
                     seek_seconds = history.last_playback_position;
                     console.log(`\u001b[31m[PlayerController] Seeking to ${seek_seconds} seconds. (Watched History)`);
                 } else {
@@ -1076,8 +1086,12 @@ class PlayerController {
                     mediaSource: 'auto',
                     // MPEG-2 を直接デコードできるブラウザ環境…もあるらしいがデインタレースができるかは不明なため、パススルーモードは使わない
                     passthrough: MPEG2TOH264_PASSTHROUGH,
-                    // 通常画質と同様に音量を上げ、5.1ch は混合時の音割れを抑える。
+                    // 放送波の音声はもともと音量が小さく、通常の画質ではエンコード時に volume=2.0 で音量を2倍にしている
+                    // オリジナル画質でも同じ音量で聞こえるよう、AAC の各チャンネルの global_gain を書き換えて再エンコードなしで音量を上げる
+                    // 1段階あたり 2^(1/4) 倍 (約 1.5dB) なので、4段階でちょうど2倍になる
                     audioGainSteps: 4,
+                    // 5.1ch はステレオで聞くとセンター・サラウンドが前方の左右に足し込まれ、同じ2倍でも音割れしやすい
+                    // 通常の画質の FFmpeg の AAC エンコーダーは音割れしそうな箇所の音量を自動で抑えるが、global_gain の書き換えにはその処理がない
                     surroundAudioGainSteps: 3,
                     // ライブ放送では選択中のサービスを明示する (tsreadex がすでに選択してくれているが念のため)
                     // 録画再生では、DB に記録済みのサービス ID がある場合だけ指定する
@@ -1088,13 +1102,18 @@ class PlayerController {
                     // かつデコーダーが自動でデインタレースしてくれない環境では、Picture-in-Picture するとインタレ未解除の映像が
                     // ミニプレイヤーで表示されると思われるが、技術的に改善が難しいのと、ミニプレイヤーならジャギ気にならんやろと言うことで当面仕様とする
                     deinterlace: is_yadif_enabled,
-                    deinterlacer: is_yadif_enabled === true ? (video: HTMLVideoElement) => new Deinterlacer(video, {
-                        // 常に MPEG-2 60i 映像を 60fps でぬるぬる再生する
-                        doubleRate: true,
-                        // 24fps モードがオンの場合のみ、実写区間では 60fps でぬるぬる描画しつつ、
-                        // 映画・アニメなど 24fps で制作された映像を自動検出し、余分なフレームを間引いて本来の動きに近づける
-                        film: this.playback_mode === 'Live' ? this.quality_profile.tv_24fps_mode : this.quality_profile.video_24fps_mode,
-                    }) : undefined,
+                    deinterlacer: is_yadif_enabled === true ? (video: HTMLVideoElement) => {
+                        // PinP 内の画質切り替えでも、最初のフレーム通知は閉じられない元画面の Document で登録する
+                        const document_pip_manager = this.player_managers.find((manager) => manager instanceof DocumentPiPManager);
+                        document_pip_manager?.prepareVideoElement(video);
+                        return new Deinterlacer(video, {
+                            // 常に MPEG-2 60i 映像を 60fps でぬるぬる再生する
+                            doubleRate: true,
+                            // 24fps モードがオンの場合のみ、実写区間では 60fps でぬるぬる描画しつつ、
+                            // 映画・アニメなど 24fps で制作された映像を自動検出し、余分なフレームを間引いて本来の動きに近づける
+                            film: this.playback_mode === 'Live' ? this.quality_profile.tv_24fps_mode : this.quality_profile.video_24fps_mode,
+                        });
+                    } : undefined,
                 },
                 // mpegts.js
                 mpegts: {
@@ -1446,6 +1465,7 @@ class PlayerController {
                     playbackPositionSeconds: initial_playback_position_seconds,
                     recordedDurationSeconds: player_store.recorded_program.recorded_video.duration,
                     recordingStartMarginSeconds: player_store.recorded_program.recording_start_margin,
+                    suppressResumeNotice: is_url_playback_position,
                 });
                 console.log(`\u001b[31m[PlayerController] Seeking to ${initial_playback_position_seconds} seconds.`);
             };
@@ -1834,6 +1854,14 @@ class PlayerController {
             // ライブ視聴: 再生が開始できていない場合に再生状態の復旧を試みる
             if (this.playback_mode === 'Live') {
                 this.recoverPlayback();
+            }
+        });
+
+        // DPlayer は画質切り替え完了時に再生速度を元へ戻すため、ライブ視聴のバッファ調整中は再度 0 にする
+        // 必要なバッファが貯まった時点で on_canplay() が再生速度を 1 に戻し、背景写真を非表示にする
+        this.player.on('quality_end', () => {
+            if (this.playback_mode === 'Live' && this.player?.type === 'mpegts' && player_store.is_loading === true) {
+                this.player.video.playbackRate = 0;
             }
         });
 
@@ -2562,7 +2590,9 @@ class PlayerController {
         // オフライン再生では通信節約モードや画質プロファイル切り替えは無関係なので、該当スイッチを設定パネルへ追加しない
         if (is_offline_playback === false && this.live_session_required === false) {
             // モバイル回線プロファイルに切り替えるボタンを動的に追加する
-            this.player.template.audio.insertAdjacentHTML('afterend', `
+            // DPlayer の設定パネルは画質・音声・再生速度の順なので、再生速度の直後へ挿入する
+            // ライブでは再生速度項目が非表示のため、見た目上は音声の直下に出る
+            this.player.template.speed.insertAdjacentHTML('afterend', `
                 <div class="dplayer-setting-item dplayer-setting-mobile-profile">
                     <span class="dplayer-label">モバイル回線向け画質</span>
                     <div class="dplayer-toggle">
@@ -3283,7 +3313,8 @@ class PlayerController {
         }
         this.destroying = true;
 
-        // 非同期の終了処理中に DOM が外れるため、サイズ 0 の Canvas への字幕再描画を先に止める。
+        // 非同期の終了処理を待つ間に視聴画面の DOM が外れるため、先に字幕と文字スーパーの描画を止める
+        // aribb24.js がサイズ 0 の Canvas に字幕を再描画すると例外になる
         this.player?.plugins.aribb24Caption?.hide();
         this.player?.plugins.aribb24Superimpose?.hide();
 

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self, cast
 
-import httpx
+import httpx2 as httpx
 import psutil
 import ruamel.yaml
 import ruamel.yaml.scalarstring
@@ -33,6 +33,7 @@ from app.constants import (
     BASE_DIR,
     CM_DETECT_MODES,
     LIBRARY_PATH,
+    TEST_SUFFIX,
 )
 from app.utils.TSInformation import TerrestrialRegion
 
@@ -386,9 +387,11 @@ class _ServerSettingsVideo(BaseModel):
     # チャンネル選択設定
     channel_selection_mode: Literal['auto', 'prefer_main', 'first_found', 'filename_based'] = 'auto'
     enable_filename_based_channel_selection: bool = True
+    recorded_folders_polling_interval: Annotated[float, Field(ge=0.1, strict=True, allow_inf_nan=False)] = 5.0
 
 class _ServerSettingsCapture(BaseModel):
     upload_folders: list[DirectoryPath] = []
+    upload_folders_polling_interval: Annotated[float, Field(ge=0, strict=True, allow_inf_nan=False)] = 0.0
 
 
 class WatchUrlConfig(BaseModel):
@@ -436,7 +439,8 @@ class ServerSettings(BaseModel):
 
 _CONFIG: ServerSettings | None = None
 _JELLYFIN_CONFIG: JellyfinSettings | None = None
-_CONFIG_YAML_PATH = BASE_DIR.parent / 'config.yaml'
+## テストの実行中は、テストが書き出す config.test.yaml を読み込む
+_CONFIG_YAML_PATH = BASE_DIR.parent / f'config{TEST_SUFFIX}.yaml'
 _DOCKER_PATH_PREFIX = '/host-rootfs'
 
 

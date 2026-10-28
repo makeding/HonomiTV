@@ -1,5 +1,5 @@
 
-import Hls, { BufferController, FragmentTracker } from 'hls.js';
+import Hls, { BufferController, Events, FragmentTracker, type MediaDetachingData } from 'hls.js';
 
 
 /**
@@ -38,15 +38,16 @@ class CustomBufferController extends BufferController {
         super(hls, fragmentTracker);
         this.onCustomBufferFlushingHandler = this.onCustomBufferFlushing.bind(this);
         this.dontFlush = false;
-        // 副音声の初回取得も現在の映像位置から開始し、先頭の TS を再エンコードしない。
+        // 副音声プレイリストの初回読み込みでは、hls.js が音声の取得開始位置を映像の再生開始時点へ戻す
+        // プレイリストの解析後、セグメント取得が始まる前に現在位置へ合わせ、保持中の TS から副音声を取得する
         hls.on(Hls.Events.AUDIO_TRACK_UPDATED, () => {
             const media = hls.media;
+            // 再生開始前は設定済みの startPosition を使い、再生中の切り替えでは現在位置を使う
             if (media !== null && media.readyState > 0) {
                 hls.startLoad(media.currentTime);
             }
         });
     }
-
 
     /**
      * バッファリセット時のイベントハンドラー（上書き）
@@ -80,9 +81,9 @@ class CustomBufferController extends BufferController {
         media.addEventListener('seeking', this.onCustomBufferFlushingHandler);
         media.addEventListener('timeupdate', this.onCustomBufferFlushingHandler);
         // SSE の接続を開始
-        // Master Playlist の指定を除き、既存のセッションと追更指定を維持する。
         const bufferURL = new URL(hls.url!);
         bufferURL.pathname = bufferURL.pathname.replace(/\/playlist$/, '/buffer');
+        // Buffer API にはセッション ID だけを渡す
         bufferURL.searchParams.delete('type');
         this.sse = new EventSource(bufferURL);
         this.sse.addEventListener('buffer_range_update', (event) => {
@@ -95,7 +96,7 @@ class CustomBufferController extends BufferController {
     /**
      * メディアデタッチ時のイベントハンドラー（上書き）
      */
-    protected onMediaDetaching(): void {
+    protected onMediaDetaching(event: Events.MEDIA_DETACHING, data: MediaDetachingData): void {
         // HTMLMediaElement を取得
         // @ts-ignore
         const media: HTMLMediaElement = this.media;
@@ -109,7 +110,7 @@ class CustomBufferController extends BufferController {
         }
         // 親クラスの onMediaDetaching を呼び出す
         // @ts-ignore
-        super.onMediaDetaching();
+        super.onMediaDetaching(event, data);
     }
 
 

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
 import ariblib.constants
-import httpx
+import httpx2 as httpx
 from fastapi import (
     APIRouter,
     Body,

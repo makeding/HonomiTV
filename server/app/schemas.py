@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, Field, RootModel, computed_field
 from tortoise.contrib.pydantic import PydanticModel
-from typing_extensions import TypedDict
 
 from app.utils.TSInformation import TerrestrialRegion
 
@@ -241,7 +240,7 @@ class TimeTableProgramReservation(BaseModel):
 class RecordedVideo(PydanticModel):
     # デフォルト値は録画番組からメタデータを取得する処理向け
     id: int = -1  # メタデータ取得時は ID が定まらないため -1 を設定
-    status: Literal['Recording', 'Recorded', 'AnalysisFailed']
+    status: Literal['Recording', 'Recorded', 'AnalysisFailed', 'Missing']
     file_path: str
     file_hash: str
     file_size: int
@@ -270,10 +269,10 @@ class RecordedVideo(PydanticModel):
     @property
     def has_key_frames(self) -> bool:
         return self.status == 'Recorded'
-    primary_audio_codec: Literal['AAC-LC']
+    primary_audio_codec: Literal['AAC-LC', 'HE-AAC']
     primary_audio_channel: Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch']
     primary_audio_sampling_rate: int
-    secondary_audio_codec: Literal['AAC-LC'] | None = None
+    secondary_audio_codec: Literal['AAC-LC', 'HE-AAC'] | None = None
     secondary_audio_channel: Literal['Monaural', 'Stereo', '3ch', '4ch', '5ch', '5.1ch', '6.1ch', '7.1ch', '10.2ch', '22.2ch'] | None = None
     secondary_audio_sampling_rate: int | None = None
     cm_sections: list[CMSection] | None = None
@@ -342,6 +341,7 @@ class ThumbnailImageInfo(TypedDict):
     format: Literal['WebP']
     width: int
     height: int
+    revision: int
 
 class ThumbnailTileInfo(TypedDict):
     format: Literal['WebP']
@@ -479,6 +479,12 @@ class SeriesBroadcastPeriod(PydanticModel):
     start_date: date
     end_date: date
     recorded_programs: list[RecordedProgram]
+
+class CaptureTagRequest(BaseModel):
+    name: Annotated[str, Field(min_length=1, max_length=255, pattern=r'\S')]
+
+class CaptureIDsRequest(BaseModel):
+    capture_ids: list[int]
 
 # ***** ユーザー *****
 
@@ -628,6 +634,11 @@ class BlueskyAccount(PydanticModel):
 
 # モデルに関連しない API リクエストの構造を表す Pydantic モデル
 ## リクエストボティの JSON 構造と一致する
+
+# ***** 録画ファイル *****
+
+class VideoThumbnailUpdateRequest(BaseModel):
+    capture_id: Annotated[int, Field(gt=0)]
 
 # ***** 録画予約 *****
 
@@ -979,6 +990,86 @@ class RecordSettingsGlobalDefaults(BaseModel):
     # 録画後動作のグローバルデフォルト
     post_recording_mode: Literal['Nothing', 'Standby', 'StandbyAndReboot', 'Suspend', 'SuspendAndReboot', 'Shutdown']
 
+# ***** キャプチャ *****
+
+class Captures(BaseModel):
+    captures: list[Capture]
+    programs: list[CaptureProgram]
+    next_cursor: str | None
+
+class Capture(BaseModel):
+    id: int
+    file_hash: str
+    file_size: int
+    captured_at: datetime
+    broadcast_at: datetime | None
+    image_width: int
+    image_height: int
+    metadata_status: Literal['Parsed', 'NoMetadata', 'Invalid']
+    playback_position: float | None
+    caption_text: str | None
+    is_caption_composited: bool
+    is_comment_composited: bool
+    capture_program_id: int | None
+    is_favorite: bool | None
+    tag_ids: list[int] | None
+
+class CaptureProgram(BaseModel):
+    id: int
+    network_id: int
+    service_id: int
+    event_id: int
+    start_time: datetime
+    # 放送時間未定の番組で撮ったキャプチャだけで作った放送回は、終了時刻と番組長が不明なので null になる
+    end_time: datetime | None
+    duration: float | None
+    title: str
+    description: str
+    channel: CaptureChannel | None
+    recorded_program_ids: list[int]
+
+class CaptureChannel(BaseModel):
+    id: str
+    display_channel_id: str
+    name: str
+    type: str
+
+class CaptureSections(BaseModel):
+    sections: list[CaptureSection]
+    total: int
+
+class CaptureSection(BaseModel):
+    date: str
+    count: int
+
+class CapturePrograms(BaseModel):
+    programs: list[CaptureProgramAlbum]
+    next_cursor: str | None
+
+class CaptureProgramAlbum(CaptureProgram):
+    capture_count: int
+    cover_capture: Capture
+
+class CaptureTag(BaseModel):
+    id: int
+    name: str
+    capture_count: int
+    created_at: datetime
+    updated_at: datetime
+
+class CaptureDeleteResult(BaseModel):
+    deleted_capture_ids: list[int]
+    failed_capture_ids: list[int]
+
+class CaptureDetail(Capture):
+    program: CaptureProgram | None
+    files: list[CaptureFile]
+
+class CaptureFile(BaseModel):
+    file_name: str
+    file_path: str
+    status: Literal['Available', 'Missing', 'Invalid']
+
 # ***** データ放送 *****
 
 class DataBroadcastingInternetStatus(BaseModel):
@@ -1111,6 +1202,13 @@ class TwitterGraphQLAPIEndpointInfo(BaseModel):
 class UserAccessToken(BaseModel):
     access_token: str
     token_type: str
+
+# ***** メンテナンス *****
+
+class MaintenanceTaskStatus(BaseModel):
+    is_running: bool = False
+    processed_count: int = 0
+    total_count: int = 0
 
 # ***** バージョン情報 *****
 

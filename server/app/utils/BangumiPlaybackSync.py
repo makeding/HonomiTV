@@ -1,4 +1,4 @@
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException, status
 
 from app import logging, schemas

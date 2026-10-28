@@ -1,6 +1,14 @@
 # Selective upstream integration
 
-## Scope
+## Full upstream merge (2026-10-28)
+
+- Merge upstream/master at `8cf7f0fd` into h-dev, retaining fork playback, Hybridcast, BS4K, CM analysis, notifications and device-local time display.
+- Adopt upstream Python 3.13 and its application dependencies across server, installer, CI and Nix. Retain the fork DPlayer and web-bml pins.
+- Include upstream capture management and network-folder polling. Resolve migration numbering against the fork history without modifying the user database.
+- Preserve tracked `client/dist` byte-for-byte from pre-merge `de7f931a`. Do not run a local frontend build or include local compiled assets in this merge. Release artifacts remain owned by the release workflow.
+- Validate dependency locks, lint/type checks and focused integration tests. No service restart or deployment is authorized by this merge.
+
+## Scope (2026-10-14 selective integration)
 
 - Port playback stability fixes from KonomiTV through `ddbc50c4`: default 60fps selection, MediaSession metadata readiness, subtitle teardown, Document Picture-in-Picture recovery, EPG detail preservation, disconnect-aware file responses, and HLS failure details.
 - Add online and offline HLS secondary audio, update mpeg2toh264 without replacing this fork's DPlayer, and support same-stem WebVTT sidecars when a recording has no embedded subtitles.
@@ -12,7 +20,7 @@
 
 - Standalone data services (`service_type=0xC0`) outside terrestrial one-seg are selectable in the broadcast channel list, including BS SID 791. Their type comes from the last successful Mirakurun/EDCB channel discovery, refreshed before startup accepts traffic and on normal channel updates; unavailable metadata defaults to ordinary broadcast behavior without changing stored records or requiring a database migration.
 - Data-only viewing receives the original decoded MPEG-TS directly from Mirakurun/EDCB into the existing web-bml decoder. It never starts an encoder, waits for a video frame, or subscribes to video-task events. BML remains enabled for this channel even when optional data broadcasting on video channels is disabled. The existing remote and player restart control remain usable; loading ends on BML load, and receive/render timeouts show a reason and adjacent retry action without automatic video restarts. Leaving or switching channels cancels reception and releases the owned tuner.
-- Entering a standalone data channel automatically opens the viewing panel and remote on the Program tab. This does not overwrite saved panel preferences. Leaving restores the previous tab/remote state, and the user can still close the remote or panel while viewing the data service.
+- Entering a standalone data channel opens the data-broadcasting panel and remote while preserving the selected viewing tab, as in h-dev before this merge. This does not overwrite saved panel preferences. Leaving restores the previous remote state, and the user can still close the remote or panel while viewing the data service.
 - Acceptance for standalone data includes channel discovery (both backends, excluding terrestrial one-seg), complete channel API metadata, raw TS reception/disconnect cleanup and failure, BML load/error/timeout/retry, desktop/narrow layout and remote operation. Local automated checks do not establish actual SID 791 broadcast compatibility.
 - Selecting 1080p (60fps) uses that quality for live and recorded playback; it must not fall back to the first quality because of a display-name mismatch. Explicit resume choices remain authoritative.
 - Automatically select the mobile quality profile only when `navigator.connection.type` explicitly reports `cellular`. An `unknown` or unavailable connection type uses the Wi-Fi profile in both live and recorded playback, without inferring cellular service from `effectiveType` or enabling the mobile defaults (480p / HEVC data saver). An explicit in-player profile selection remains authoritative until leaving the watch screen.
@@ -100,3 +108,11 @@ Remove `.github/workflows/scripts/poetry` when pre-v0.14.1 installers are no lon
   Ruff/Pyright passed with 10 existing deprecation warnings. Actual HonomiTV
   D-button rendering, navigation and service-switch acceptance remain unverified:
   no local user-managed HonomiTV API was running during this check.
+
+## Full merge verification (2026-10-28)
+
+- Source validation from the previous integration: client lint/typecheck and 30 focused tests passed. The replacement merge reuses those source resolutions, performs no frontend build, and preserves the pre-merge dist tree.
+- Server Ruff/Pyright passed (10 deprecation warnings); 30 focused playback, recording, CM and data-broadcasting tests passed, plus 2 capture-router ASGI checks. Final recording lifecycle/progress/responsiveness rerun: 11 passed.
+- Installer lint/typecheck and lock validation passed. Nix server derivation evaluates; frontend dependency hash refreshed. Workflow syntax passes actionlint; full ShellCheck reports existing/upstream script warnings.
+- Upstream migrations are numbered 18–20 after the fork migrations. Populated in-memory SQLite upgrade preserves an existing user; merged Aerich offline model state reports no changes. No user database was modified.
+- No local user-managed API was running. Live HTTP, browser UI, real broadcast playback, Windows/Docker builds and deployment were not verified.

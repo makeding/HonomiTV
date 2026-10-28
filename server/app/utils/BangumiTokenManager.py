@@ -1,10 +1,10 @@
 import asyncio
 from time import time
+from typing import TypedDict
 from weakref import WeakValueDictionary
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
-from typing_extensions import TypedDict
 
 from app import logging
 from app.constants import API_REQUEST_HEADERS, HTTPX_CLIENT

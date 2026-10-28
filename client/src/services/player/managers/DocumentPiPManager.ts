@@ -1,5 +1,6 @@
 
 import DPlayer from 'dplayer';
+import { Deinterlacer } from 'mpeg2toh264/yadif';
 import { watch } from 'vue';
 import { bmlBrowserFontNames } from 'web-bml';
 
@@ -40,7 +41,21 @@ class DocumentPiPManager implements PlayerManager {
     // ネイティブの HTMLVideoElement.requestPictureInPicture() メソッド
     private request_picture_in_picture: (() => Promise<PictureInPictureWindow>) | null = null;
 
-    // 終了中の pagehide では映像を再開しない。init() で次のライフサイクルだけリセットする。
+    // 元画面に残した video 要素と、PinP 内でその寸法を維持する要素
+    private retained_video: {
+        video: HTMLVideoElement;
+        container: HTMLElement;
+        placeholder: HTMLDivElement;
+        host: HTMLDivElement;
+        original_style: string | null;
+        resize_observer: ResizeObserver;
+        update_aspect_ratio: () => void;
+    } | null = null;
+
+    // 画質切り替え時、デインタレーサーの生成前に元画面へ移した video 要素
+    private pending_video: { video: HTMLVideoElement; anchor: Comment; host: HTMLDivElement } | null = null;
+
+    // PinP の開始待ち中または終了時の再開前に PlayerManager が破棄されたことを判定するフラグ
     private is_destroying = false;
 
 
@@ -107,6 +122,10 @@ class DocumentPiPManager implements PlayerManager {
                 width: 540,
                 height: 304,
             });
+            if (this.is_destroying) {
+                pip_window.close();
+                return {} as PictureInPictureWindow;
+            }
 
             // Dark Reader 拡張機能を使っている場合、何故か Document Picture-in-Picture ウインドウでは
             // サイトごとの無効化設定に関わらずダークモード CSS が追加されてしまうため、Dark Reader 自体を無効化する
@@ -159,6 +178,12 @@ class DocumentPiPManager implements PlayerManager {
             const watch_content = pip_window.document.createElement('div');
             watch_content.classList.add('watch-content');
             watch_content.style.height = '100vh';  // ここで 100vh を指定しないと、Chrome 131 以降データ放送表示時に高さが 0px になり PiP ウインドウが真っ黒になる
+
+            // Canvas 表示時は、フレーム通知の予約先が閉じる PinP の Document に切り替わらないよう、video 要素を元画面に残す
+            const deinterlacer = this.player.plugins.mpeg2toh264?.deinterlacer;
+            if (deinterlacer instanceof Deinterlacer && deinterlacer.container !== this.player.video) {
+                this.retainVideoElement(this.player.video, deinterlacer.container);
+            }
             watch_content.append(this.watch_header_element);
             watch_content.append(this.watch_player_element);
             pip_window.document.body.append(watch_content);
@@ -216,6 +241,7 @@ class DocumentPiPManager implements PlayerManager {
                 this.watch_content_element.append(this.watch_player_element);
                 // Document 間の移動後に Chrome のフレーム通知が止まることがあるため、再生を再始動する。
                 // 一時停止中と破棄中はユーザーの状態を保ち、古い video 要素も再開しない。
+                this.restoreVideoElement();
                 if (should_resume_playback && this.is_destroying === false) {
                     video.pause();
                     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -239,6 +265,24 @@ class DocumentPiPManager implements PlayerManager {
         // 独自のフックで上書きする
         this.player.video.requestPictureInPicture = new_request_picture_in_picture;
 
+        // 新しいデインタレーサーの生成後、元画面で作られた Canvas のコンテナだけを PinP 内の元の位置へ移す
+        this.player.on('quality_start', () => {
+            this.restoreRetainedVideoElement();
+            const pending_video = this.pending_video;
+            if (pending_video === null) {
+                return;
+            }
+            this.pending_video = null;
+            const deinterlacer = this.player.plugins.mpeg2toh264?.deinterlacer;
+            if (deinterlacer instanceof Deinterlacer && deinterlacer.container !== pending_video.video) {
+                this.retainVideoElement(pending_video.video, deinterlacer.container, pending_video.host);
+                pending_video.anchor.replaceWith(deinterlacer.container);
+            } else {
+                pending_video.anchor.replaceWith(pending_video.video);
+                pending_video.host.remove();
+            }
+        });
+
         // 画質切り替え後に新しい映像要素が生成されるため、画質切り替え後に再度フックする
         this.player.on('quality_end', () => {
             if (!this.player || !this.player.video) {
@@ -251,6 +295,107 @@ class DocumentPiPManager implements PlayerManager {
         });
 
         console.log('[DocumentPiPManager] Initialized.');
+    }
+
+
+    /**
+     * 画質切り替えで作られた video 要素を、フレーム通知の登録前に元画面へ移す
+     * @param video 新しい video 要素
+     */
+    public prepareVideoElement(video: HTMLVideoElement): void {
+        if (('documentPictureInPicture' in window) === false || documentPictureInPicture.window === null) {
+            return;
+        }
+        this.restoreVideoElement();
+
+        // Canvas の生成後に同じ位置へ戻せるよう、PinP 内に目印を置く
+        const anchor = document.createComment('');
+        video.before(anchor);
+        const host = document.createElement('div');
+        host.style.cssText = 'position:fixed;left:-10000px;top:0;width:640px;height:360px;pointer-events:none;overflow:hidden';
+        document.body.append(host);
+        host.append(video);
+        this.pending_video = { video, anchor, host };
+    }
+
+
+    /**
+     * video 要素を元画面に残し、表示用コンテナの寸法を代替要素で維持する
+     * @param video 元画面に残す video 要素
+     * @param container Canvas と video 要素を囲むコンテナ
+     * @param host 画質切り替え時に作成済みの格納先
+     */
+    private retainVideoElement(video: HTMLVideoElement, container: HTMLElement, host = document.createElement('div')): void {
+        const original_style = video.getAttribute('style');
+        const placeholder = document.createElement('div');
+        // データ放送の CSS が子要素にも適用されるため、位置・表示・高さも明示する
+        placeholder.style.cssText = 'position:relative;display:block;width:99999px;max-width:100%;height:auto';
+        const update_aspect_ratio = () => {
+            placeholder.style.aspectRatio = `${video.videoWidth || 1920} / ${video.videoHeight || 1080}`;
+        };
+        update_aspect_ratio();
+        container.insertBefore(placeholder, video);
+
+        // display:none でデコードやレイアウトを止めず、元画面の表示領域外に配置する
+        host.style.cssText = 'position:fixed;left:-10000px;top:0;pointer-events:none;overflow:hidden';
+        document.body.append(host);
+        host.append(video);
+        video.style.cssText = 'position:relative;display:block;width:100%;height:100%;left:0;top:0;object-fit:contain';
+
+        // クロップの transform が適用される前の寸法を使い、映像の拡大が二重に掛からないようにする
+        const update_size = () => {
+            host.style.width = `${placeholder.offsetWidth}px`;
+            host.style.height = `${placeholder.offsetHeight}px`;
+        };
+        // video 側の ResizeObserver と同じ通知中に寸法を変えると通知が循環するため、次の描画へ送る
+        const resize_observer = new ResizeObserver(() => window.requestAnimationFrame(() => {
+            if (this.retained_video?.video === video) {
+                update_size();
+            }
+        }));
+        resize_observer.observe(placeholder);
+        video.addEventListener('resize', update_aspect_ratio);
+        this.retained_video = { video, container, placeholder, host, original_style, resize_observer, update_aspect_ratio };
+        update_size();
+    }
+
+
+    /**
+     * 元画面に残していた video 要素を表示用コンテナへ戻す
+     */
+    private restoreRetainedVideoElement(): void {
+        const retained_video = this.retained_video;
+        if (retained_video === null) {
+            return;
+        }
+        this.retained_video = null;
+        const { video, container, placeholder, host, original_style, resize_observer, update_aspect_ratio } = retained_video;
+        resize_observer.disconnect();
+        video.removeEventListener('resize', update_aspect_ratio);
+        // 画質切り替えでデインタレーサーが破棄済みなら、video 要素はすでに DPlayer の元の位置へ戻されている
+        if (container.isConnected && placeholder.isConnected) {
+            container.insertBefore(video, placeholder);
+        }
+        placeholder.remove();
+        if (original_style === null) {
+            video.removeAttribute('style');
+        } else {
+            video.setAttribute('style', original_style);
+        }
+        host.remove();
+    }
+
+
+    /**
+     * PinP の終了時に、生成待ちの video 要素も含めて元の配置へ戻す
+     */
+    private restoreVideoElement(): void {
+        this.restoreRetainedVideoElement();
+        if (this.pending_video !== null) {
+            this.pending_video.anchor.replaceWith(this.pending_video.video);
+            this.pending_video.host.remove();
+            this.pending_video = null;
+        }
     }
 
 
@@ -271,6 +416,7 @@ class DocumentPiPManager implements PlayerManager {
         if (documentPictureInPicture.window !== null) {
             documentPictureInPicture.window.close();
         }
+        this.restoreVideoElement();
 
         // Document Picture-in-Picture ウインドウが表示された時のイベントを削除
         documentPictureInPicture.onenter = null;

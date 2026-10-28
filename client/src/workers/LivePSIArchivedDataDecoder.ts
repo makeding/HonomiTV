@@ -141,6 +141,11 @@ class LivePSIArchivedDataDecoder implements ILivePSIArchivedDataDecoder {
                 // API から随時データを取得
                 const result = await reader.read();
 
+                // destroy() の直前に完了した読み込みも、終了したチャンネルのデータとして処理を打ち切る
+                if (abort_controller.signal.aborted === true) {
+                    return;
+                }
+
                 // サーバー側からのレスポンスが終了した (ライブストリームが Offline になったなど)
                 // 基本サーバー側からのレスポンス出力が打ち切られる前にこちらから abort() するので発生しない
                 if (result.done) {

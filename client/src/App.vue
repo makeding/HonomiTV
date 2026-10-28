@@ -1,6 +1,6 @@
 <template>
     <v-app id="app">
-        <!-- WebKit の固定ヘッダー判定を利用し、iOS の画面上端への強制ぼかしを抑える。 -->
+        <!-- iOS 27 以降で画面上端に付加されるぼかしを抑止するための、描画されない固定要素 -->
         <div class="ios-top-blur-fix" aria-hidden="true"></div>
         <router-view v-slot="{ Component }">
             <component :is="Component" />
@@ -138,8 +138,10 @@ html {
     }
 }
 
-// iOS Safari / PWA の強制ぼかし対策。描画内容もヒット領域も持たず、既存の配置を変えない。
+// iOS 27 以降の Safari / PWA で、プレイヤーやコメントの上部に強制的なぼかしがかかる問題への回避策
+// 画面上端に背景色を持つ固定要素を置くことで、WebKit に固定ヘッダーが存在すると認識させる
 // ref: https://github.com/tsukumijima/KonomiTV/issues/294
+// ref: https://qiita.com/na-trium-144/items/0add98a80ca2391e3f17
 .ios-top-blur-fix {
     display: none;
     @supports (-webkit-touch-callout: none) {
@@ -148,11 +150,14 @@ html {
         top: 0;
         left: 0;
         right: 0;
+        // WebKit の固定ヘッダー判定には 10px を超える高さが必要
         height: 11px;
         z-index: 2147483647;
+        // 前面に配置しても、背後のプレイヤーやボタンへのタップを妨げない
         pointer-events: none;
+        // この背景色は iOS のステータスバー領域にも反映されるため、アプリの背景色に合わせる
         background-color: rgb(var(--v-theme-background));
-        // 透明化では WebKit の判定対象にならないため、空の文字領域へ背景をクリップする。
+        // 空のテキスト領域に背景をクリップすることで、実際の画面には何も描画しない
         -webkit-background-clip: text;
         background-clip: text;
     }

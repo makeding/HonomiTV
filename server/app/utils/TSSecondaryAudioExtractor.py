@@ -7,20 +7,20 @@ from biim.mpeg2ts.section import Section
 
 
 class TSSecondaryAudioExtractor:
-    """MPEG-TS セグメントから第2 AAC 音声と再生時刻基準だけを抽出する。"""
+    """MPEG-TS セグメントから第2 AAC 音声と時刻基準だけを抽出する。"""
 
     AAC_STREAM_TYPES = {0x0F, 0x11}
 
     @classmethod
     def extract(cls, segment_data: bytes) -> bytes:
         """
-        MPEG-TS セグメントを副音声だけを含む単一プログラム TS に変換する。
+        MPEG-TS セグメントから第2 AAC 音声を抽出する。
 
         Args:
-            segment_data (bytes): 映像と複数音声を含む188バイトパケットの MPEG-TS
+            segment_data (bytes): 映像と複数音声を含む MPEG-TS セグメント
 
         Returns:
-            bytes: PAT、再構築した PMT、第2 AAC、PCR 搬送パケットだけを含む MPEG-TS
+            bytes: PAT、再構築した PMT、第2 AAC、PCR 搬送パケットだけを含む MPEG-TS セグメント
 
         Raises:
             ValueError: PAT、PMT、または第2 AAC ストリームを取得できない場合
@@ -29,6 +29,7 @@ class TSSecondaryAudioExtractor:
         if len(segment_data) % ts.PACKET_SIZE != 0:
             raise ValueError('MPEG-TS segment size is not aligned to 188-byte packets.')
 
+        # biim のパケットパーサーが受け取れる188バイト単位へ分割し、壊れた同期バイトを先に検出する
         packets = [
             memoryview(segment_data)[offset:offset + ts.PACKET_SIZE]
             for offset in range(0, len(segment_data), ts.PACKET_SIZE)
@@ -36,9 +37,11 @@ class TSSecondaryAudioExtractor:
         if any(packet[0] != ts.SYNC_BYTE[0] for packet in packets):
             raise ValueError('Invalid MPEG-TS sync byte was found in the segment.')
 
+        # PAT と PMT は biim の SectionParser へ渡し、複数パケットに分割されたセクションも同じ経路で解析する
         pmt_pid = cls.__getPMTPID(packets)
         pmt_section = cls.__getPMTSection(packets, pmt_pid)
         secondary_audio_pid, filtered_pmt_section = cls.__buildFilteredPMT(pmt_section)
+        pcr_pid = pmt_section.PCR_PID
         pmt_packet = next((
             packet for packet in packets
             if ts.pid(packet) == pmt_pid and ts.payload_unit_start_indicator(packet)
@@ -54,7 +57,8 @@ class TSSecondaryAudioExtractor:
             ts.continuity_counter(pmt_packet),
         )
 
-        # PAT/PMT の到着位置と副音声 PES の順序を保持し、PCR は映像を含めずに時刻だけ残す。
+        # PAT と再構築した PMT は元の出現位置を保ち、音声 PES の到着順と PCR の時間順を変えずに返す
+        # PCR のない入力はそのまま扱い、音声の再生時刻は元の PES に保持する
         output_packets: list[bytes] = []
         for packet in packets:
             pid = ts.pid(packet)
@@ -65,13 +69,24 @@ class TSSecondaryAudioExtractor:
                     output_packets.extend(filtered_pmt_packets)
             elif pid == secondary_audio_pid:
                 output_packets.append(bytes(packet))
-            elif pid == pmt_section.PCR_PID and ts.has_pcr(packet):
+            elif pid == pcr_pid and ts.has_pcr(packet):
                 output_packets.append(cls.__buildPCROnlyPacket(packet))
         return b''.join(output_packets)
 
     @staticmethod
     def __getPMTPID(packets: list[memoryview]) -> int:
-        """PAT から最初の番組の PMT PID を返す。"""
+        """
+        PAT から最初の番組の PMT PID を取得する。
+
+        Args:
+            packets (list[memoryview]): MPEG-TS パケットのリスト
+
+        Returns:
+            int: PMT PID
+
+        Raises:
+            ValueError: 有効な PAT または番組の PMT PID を取得できない場合
+        """
 
         pat_parser = SectionParser(PATSection)
         for packet in packets:
@@ -79,15 +94,28 @@ class TSSecondaryAudioExtractor:
                 continue
             pat_parser.push(packet)
             for pat in pat_parser:
-                if pat.table_id() == 0x00 and pat.CRC32() == 0:
-                    for program_number, pmt_pid in pat:
-                        if program_number != 0:
-                            return pmt_pid
+                if pat.table_id() != 0x00 or pat.CRC32() != 0:
+                    continue
+                for program_number, pmt_pid in pat:
+                    if program_number != 0:
+                        return pmt_pid
         raise ValueError('PAT does not contain a program map PID.')
 
     @staticmethod
     def __getPMTSection(packets: list[memoryview], pmt_pid: int) -> PMTSection:
-        """PMT PID から CRC が正しい PMT を返す。"""
+        """
+        PMT PID のパケットから有効な PMT セクションを取得する。
+
+        Args:
+            packets (list[memoryview]): MPEG-TS パケットのリスト
+            pmt_pid (int): PAT から取得した PMT PID
+
+        Returns:
+            PMTSection: CRC が正しい PMT セクション
+
+        Raises:
+            ValueError: 有効な PMT を取得できない場合
+        """
 
         pmt_parser = SectionParser(PMTSection)
         for packet in packets:
@@ -101,12 +129,24 @@ class TSSecondaryAudioExtractor:
 
     @classmethod
     def __buildFilteredPMT(cls, pmt: PMTSection) -> tuple[int, bytes]:
-        """第2 AAC ES だけを残した PMT と PID を生成する。"""
+        """
+        biim が解析した PMT から第2 AAC だけを持つ PMT を構築する。
+
+        Args:
+            pmt (PMTSection): 元の PMT セクション
+
+        Returns:
+            tuple[int, bytes]: 第2 AAC PID、再構築した PMT セクション
+
+        Raises:
+            ValueError: PMT に第2 AAC ストリームがない場合
+        """
 
         aac_streams = [stream for stream in pmt if stream[0] in cls.AAC_STREAM_TYPES]
         if len(aac_streams) < 2:
             raise ValueError('The second AAC stream was not found in the PMT.')
 
+        # 解析済みの記述子長で元セクションをたどり、副音声の ES エントリーをそのまま保持する
         program_info_length = ((pmt[10] & 0x0F) << 8) | pmt[11]
         entry_offset = 12 + program_info_length
         secondary_audio_pid = aac_streams[1][1]
@@ -118,7 +158,8 @@ class TSSecondaryAudioExtractor:
                 break
             entry_offset += entry_length
 
-        section_length = len(section_without_crc) + 1
+        # ES を除去した分だけセクション長と CRC を更新する
+        section_length = len(section_without_crc) + 4 - 3
         section_without_crc[1] = (section_without_crc[1] & 0xF0) | ((section_length >> 8) & 0x0F)
         section_without_crc[2] = section_length & 0xFF
         crc = Section(section_without_crc).CRC32()
@@ -126,8 +167,18 @@ class TSSecondaryAudioExtractor:
 
     @staticmethod
     def __buildPCROnlyPacket(packet: bytes | bytearray | memoryview) -> bytes:
-        """PCR を保ったアダプテーションフィールド専用パケットを返す。"""
+        """
+        入力パケットの PCR だけを保持したアダプテーションフィールド専用パケットを返す。
 
+        Args:
+            packet (bytes | bytearray | memoryview): PCR を含む MPEG-TS パケット
+
+        Returns:
+            bytes: PCR 以外をスタッフィングした MPEG-TS パケット
+        """
+
+        # PCR の6バイトをそのまま保持し、映像ペイロードをスタッフィングへ置き換える
+        # adaptation field は PCR と不連続フラグだけを持つ構造にそろえる
         output = bytearray(ts.STUFFING_BYTE * ts.PACKET_SIZE)
         output[:12] = packet[:12]
         output[1] &= 0xBF

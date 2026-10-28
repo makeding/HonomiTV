@@ -130,14 +130,12 @@ def main(
         elif platform_type == 'Linux':
             # Linux: tar.xz 形式のアーカイブを解凍
             ## 7-Zip だと (おそらく) ファイルパーミッションを保持したまま圧縮することができない？ため、あえて tar.xz を使っている
-            # アーカイブ内のパスが展開先の外を指すエントリ (../ や絶対パス) を拒否するため、tar フィルタを指定する
+            ## アーカイブ内のパスが展開先の外を指すエントリ (../ や絶対パス) を拒否するため、tar フィルタを指定する
             with tarfile.open(thirdparty_compressed_file_path, mode='r:xz') as tar_xz:
                 tar_xz.extractall(INSTALLED_DIR, filter='tar')
         Path(thirdparty_compressed_file_path).unlink()
         if Path(INSTALLED_DIR / 'thirdparty/.gitkeep').exists() is False:
             Path(INSTALLED_DIR / 'thirdparty/.gitkeep').touch()
-
-    print(Padding('サードパーティーライブラリを更新しました。', (1, 2, 1, 2)))
 
     def GetEncoderVersion(encoder_name: str) -> None:
         # エンコーダーのバージョン情報を取得する
@@ -165,21 +163,69 @@ def main(
     # 空行を出力
     print()
 
-    # 最後に server/thirdparty/ を削除した後、インストールディレクトリ直下から server/ に移動する
-    ## この処理のみ、subprocess で外部コマンドで実行する必要がある (実行中の Python の実行ファイル自身を上書きするため)
-    ## このプロセスが終了した1秒後に非同期で実行される
+    # 新しいサードパーティーライブラリに含まれる Python と、server/.venv/ の仮想環境の Python のマイナーバージョンを比較する
+    ## server/.venv/ は server/thirdparty/Python/ を元に作られているため、Python のマイナーバージョンが変わると、
+    ## .venv/ 内の C 拡張 (pywin32 など) が新しい Python から読み込めなくなり、KonomiTV サーバーが起動しなくなる
+    ## この時点では新しい Python はインストールディレクトリ直下に展開されただけなので、差し替える前に検出して作り直しの手順を案内する
     if platform_type == 'Windows':
-        command = (
-            'powershell -Command "Get-Process | Where-Object { $_.Path -eq \'' +
-                str(INSTALLED_DIR / 'server\\thirdparty\\Python\\python.exe') + '\' } | Stop-Process -Force" &&'
-            f'rmdir /S /Q {INSTALLED_DIR / "server/thirdparty"!s} > nul &&'
-            f'move /Y {INSTALLED_DIR / "thirdparty"!s} {INSTALLED_DIR / "server"!s} > nul'
-        )
+        new_python_path = INSTALLED_DIR / 'thirdparty/Python/python.exe'
+    else:
+        new_python_path = INSTALLED_DIR / 'thirdparty/Python/bin/python'
+    new_python_result = subprocess.run(
+        [new_python_path, '-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'],
+        stdout = subprocess.PIPE,
+        stderr = subprocess.DEVNULL,
+    )
+    new_python_version = new_python_result.stdout.decode('utf-8').strip() if new_python_result.returncode == 0 else None
+
+    # server/.venv/pyvenv.cfg から、仮想環境を作成したときの Python のバージョンを取得する
+    ## uv と virtualenv (以前利用していた Poetry が利用) は version_info に、標準ライブラリの venv は version にバージョンを記録する
+    venv_config_path = INSTALLED_DIR / 'server/.venv/pyvenv.cfg'
+    venv_python_version: str | None = None
+    if venv_config_path.exists():
+        for line in venv_config_path.read_text(encoding='utf-8').splitlines():
+            key, _, value = line.partition('=')
+            if key.strip() in ('version_info', 'version'):
+                venv_python_version = '.'.join(value.strip().split('.')[:2])
+                break
+
+    # マイナーバージョンが異なる場合は、仮想環境を作り直すよう案内する
+    ## 自動で作り直さないのは、このスクリプト自体がまさにその仮想環境の Python で動いているため
+    if new_python_version is not None and venv_python_version is not None and new_python_version != venv_python_version:
+        if platform_type == 'Windows':
+            installed_python_path = r'.\thirdparty\Python\python.exe'
+        else:
+            installed_python_path = './thirdparty/Python/bin/python'
+        print(Padding(
+            f'[yellow]サードパーティーライブラリの Python のバージョンが {venv_python_version} から {new_python_version} に変わりました。[/yellow]\n'
+            f'server/.venv/ の仮想環境は Python {venv_python_version} で作成されているため、このままでは KonomiTV サーバーが起動しません。\n'
+            'このスクリプトの終了後、server/ で次のコマンドを実行し、仮想環境を作り直してください。\n'
+            '(指定した Python と仮想環境の Python が異なる場合、uv が仮想環境を自動的に作り直します)',
+            (0, 2, 1, 2),
+        ))
+        # コマンドはそのままコピーして実行できるよう、Rich による折り返しを受けない標準出力へ直接書き出す
+        ## サードパーティーライブラリ内の Python には uv も含まれているため、グローバルに uv がインストールされていなくても実行できる
+        sys.stdout.write(f'  {installed_python_path} -m uv sync --python {installed_python_path}\n\n')
+
+    # 実行中の Python を含む古い一式を退避し、新しい一式を同期的に配置する
+    ## Windows でも実行中のファイルを含むディレクトリのリネームは可能なため、削除による差し替えを避ける
+    ## コマンドが戻った時点で新しい一式を使えるよう、配置が完了してから更新の成功を表示する
+    thirdparty_backup_dir = Path(tempfile.mkdtemp(prefix='konomitv-thirdparty-', dir=INSTALLED_DIR))
+    installed_thirdparty_dir = INSTALLED_DIR / 'server/thirdparty'
+    installed_thirdparty_dir.rename(thirdparty_backup_dir / 'thirdparty')
+    try:
+        (INSTALLED_DIR / 'thirdparty').rename(installed_thirdparty_dir)
+    # 新しい一式の配置に失敗した場合は、退避した古い一式を元の場所へ戻す
+    except OSError:
+        (thirdparty_backup_dir / 'thirdparty').rename(installed_thirdparty_dir)
+        thirdparty_backup_dir.rmdir()
+        raise
+
+    # 退避した古い一式は、この Python と呼び出し元が終了してから別プロセスで削除する
+    if platform_type == 'Windows':
+        command = f'rmdir /S /Q "{thirdparty_backup_dir!s}"'
     elif platform_type == 'Linux':
-        command = (
-            f'rm -rf {INSTALLED_DIR / "server/thirdparty"!s} &&'
-            f'mv {INSTALLED_DIR / "thirdparty"!s} {INSTALLED_DIR / "server"!s}'
-        )
+        command = f'rm -rf "{thirdparty_backup_dir!s}"'
 
     def RunCommandLater(command: str, wait_time: int):
         if sys.platform == 'win32':
@@ -193,7 +239,8 @@ def main(
                 f"sleep {wait_time} && {command}",
                 shell = True,
             )
-    RunCommandLater(command, 2)  # 2秒後に実行する
+    RunCommandLater(command, 2)  # 2秒後に退避した古い一式を削除する
+    print(Padding('サードパーティーライブラリを更新しました。', (1, 2, 1, 2)))
     sys.exit(0)
 
 

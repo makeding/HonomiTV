@@ -39,7 +39,7 @@
         workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./server; };
         overlay = workspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
         pythonSet = (pkgs.callPackage pyproject-nix.build.packages {
-          python = pkgs.python311;
+          python = pkgs.python313;
           # OpenCV の macOS wheel は macOS 13 以降を対象にするため、wheel 互換性判定に現在の SDK を渡す
           stdenv = if pkgs.stdenv.isDarwin then pkgs.stdenv.override {
             targetPlatform = pkgs.stdenv.targetPlatform // {
@@ -63,7 +63,7 @@
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs.nodejs
-            pkgs.python311
+            pkgs.python313
             pkgs.uv
           ];
         };

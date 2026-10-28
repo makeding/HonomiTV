@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, cast
 
-import httpx
+import httpx2 as httpx
 from cryptography.fernet import InvalidToken
 from fastapi import HTTPException, status
 from tortoise import fields
@@ -27,6 +27,7 @@ from app.utils import Interlaced
 if TYPE_CHECKING:
     from app.models.AccountLink import AccountLink
     from app.models.BlueskyAccount import BlueskyAccount
+    from app.models.Capture import CaptureFavorite, CaptureTag
     from app.models.TwitterAccount import TwitterAccount
 
 
@@ -54,6 +55,8 @@ class User(TortoiseModel):
     bangumi_user_avatar_url = cast(TortoiseField[str | None], fields.TextField(null=True))
     # 個人アクセストークンは将来の視聴状態同期 API から参照する認証情報で、暗号化した値だけを保持する
     bangumi_access_token = cast(TortoiseField[str | None], fields.TextField(null=True))
+    capture_favorites: fields.ReverseRelation[CaptureFavorite]
+    capture_tags: fields.ReverseRelation[CaptureTag]
     twitter_accounts: fields.ReverseRelation[TwitterAccount]
     bluesky_accounts: fields.ReverseRelation[BlueskyAccount]
     account_links: fields.ReverseRelation[AccountLink]

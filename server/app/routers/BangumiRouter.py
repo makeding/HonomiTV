@@ -1,6 +1,6 @@
 from typing import Annotated, Any, cast
 
-import httpx
+import httpx2 as httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, status
 
 from app import logging, schemas

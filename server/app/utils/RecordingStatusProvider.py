@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import PurePath, PurePosixPath
 from typing import Any, Literal
 
-import httpx
+import httpx2 as httpx
 
 from app import logging
 from app.config import ServerSettings

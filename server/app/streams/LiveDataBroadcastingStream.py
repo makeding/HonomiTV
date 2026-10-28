@@ -78,7 +78,7 @@ class LiveDataBroadcastingStream:
                 raise HTTPException(503, 'Could not connect to data broadcasting tuner [DATA_TUNER_CONNECT]') from ex
             raise
 
-    async def chunks(self) -> AsyncGenerator[bytes, None]:
+    async def chunks(self) -> AsyncGenerator[bytes]:
         """
         放送波を元の TS のまま逐次配信し、切断時に受信元を解放する。
 

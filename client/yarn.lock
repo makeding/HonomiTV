@@ -1752,10 +1752,10 @@
   dependencies:
     undici-types ">=7.24.0 <7.24.7"
 
-"@types/node@^20.16.0":
-  version "20.19.43"
-  resolved "https://registry.yarnpkg.com/@types/node/-/node-20.19.43.tgz#fcecf580ba42a0db55cf404c372c97973c376c97"
-  integrity sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==
+"@types/node@^22.20.5":
+  version "22.20.5"
+  resolved "https://registry.yarnpkg.com/@types/node/-/node-22.20.5.tgz#afa7bde6da81b8b83ea4e2f020487e9b148c11fd"
+  integrity sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==
   dependencies:
     undici-types "~6.21.0"
 
@@ -3309,7 +3309,7 @@ es-to-primitive@^1.3.0:
     is-date-object "^1.1.0"
     is-symbol "^1.1.1"
 
-es6-promise@^4.2.5:
+es6-promise@^4.2.5, es6-promise@^4.2.8:
   version "4.2.8"
   resolved "https://registry.yarnpkg.com/es6-promise/-/es6-promise-4.2.8.tgz#4eb21594c972bc40553d276e510539143db53e0a"
   integrity sha512-HJDGx5daxeIvxdBxvG2cb9g4tEvwIk3i8+nhX0yGrYmZUzbkdg8QbDevheDB8gd0//uPj4c1EQua8Q+MViT0/w==
@@ -4931,16 +4931,22 @@ mitt@^3.0.1:
   resolved "https://registry.yarnpkg.com/mitt/-/mitt-3.0.1.tgz#ea36cf0cc30403601ae074c8f77b7092cdab36d1"
   integrity sha512-vKivATfr97l2/QBCYAkXYDbrIWPM2IIKEl7YPhjCvKlG3kE2gm+uBo6nEXK3M5/Ffh/FLpKExzOQ3JJoJGFKBw==
 
-"mpeg2toh264@github:tsukumijima/mpeg2toh264#69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1":
+"mpeg2toh264@github:tsukumijima/mpeg2toh264#9cde78d90944cab1f678d54ea28cee0becb4ef55":
   version "0.0.1"
-  resolved "https://codeload.github.com/tsukumijima/mpeg2toh264/tar.gz/69f2a47aa5bbeb8ffce57ecf5408eaa85a59d7d1"
-  integrity sha512-gUlJ/A1FGQN9xx+eTyAsuXCdljaF3wC4FmTF2cI2WHpVuiDAEs4K++MMAHqfzVwl7w+oTSef/h1VZ67Jsc1CTA==
+  resolved "https://codeload.github.com/tsukumijima/mpeg2toh264/tar.gz/9cde78d90944cab1f678d54ea28cee0becb4ef55"
 
-mpegts.js@^1.7.3, "mpegts.js@github:tsukumijima/mpegts.js#bf4e49d0ff004cf7546237393a62c66e4b926dca":
+mpegts.js@^1.7.3:
   version "1.8.0"
   resolved "https://codeload.github.com/tsukumijima/mpegts.js/tar.gz/bf4e49d0ff004cf7546237393a62c66e4b926dca"
   dependencies:
     es6-promise "^4.2.5"
+
+"mpegts.js@github:tsukumijima/mpegts.js#9f6c3dbb661754f0d3e7b42949fbcf698883d480":
+  version "1.8.2"
+  resolved "https://codeload.github.com/tsukumijima/mpegts.js/tar.gz/9f6c3dbb661754f0d3e7b42949fbcf698883d480"
+  dependencies:
+    es6-promise "^4.2.8"
+    events "^3.3.0"
 
 ms@^2.1.1, ms@^2.1.3:
   version "2.1.3"
@@ -6754,10 +6760,10 @@ vite@^5.0.0:
   optionalDependencies:
     fsevents "~2.3.3"
 
-vite@^6.4.3:
-  version "6.4.3"
-  resolved "https://registry.yarnpkg.com/vite/-/vite-6.4.3.tgz#85a164db7ce706f2a776812efa2b340f1721858e"
-  integrity sha512-NTKlcQjlAK7MlQoyb6LgaqHc8sso/pVyUJYWMws3jg21uTJw/LddqIFPcPqP6PzpgbIcZyKI85sFE4HBrQDA8A==
+vite@^6.4.4:
+  version "6.4.5"
+  resolved "https://registry.yarnpkg.com/vite/-/vite-6.4.5.tgz#8da9987120422f92e432b6d25535b82cee867dad"
+  integrity sha512-4enwjFfi4IwtEh0w+jPzpLVOFQiPHmmzPxcHXQOyEur47o6u0jE573DmGpjA+7irXoMLYRZD5ZaFUEneS3abPg==
   dependencies:
     esbuild "^0.25.0"
     fdir "^6.4.4"

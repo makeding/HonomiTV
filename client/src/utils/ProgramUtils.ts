@@ -1,4 +1,5 @@
 
+import { ICaptureProgram } from '@/services/Captures';
 import { ILiveProgram } from '@/services/Programs';
 import { IRecordedProgram } from '@/services/Videos';
 import Utils, { dayjs } from '@/utils';
@@ -362,7 +363,7 @@ export class ProgramUtils {
      * @param key 番組情報のオブジェクトから取り出すプロパティのキー
      * @returns 装飾した文字列
      */
-    static decorateProgramInfo(program: ILiveProgram | IRecordedProgram | null, key: string): string {
+    static decorateProgramInfo(program: ILiveProgram | IRecordedProgram | ICaptureProgram | null, key: string): string {
 
         // program が空でないかつ、program[key] が存在する
         if (program !== null && program[key] !== null) {

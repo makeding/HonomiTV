@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 
 import ariblib.constants
-import httpx
+import httpx2 as httpx
 from tortoise import Tortoise, connections, exceptions, fields, transactions
 from tortoise.fields import Field as TortoiseField
 from tortoise.models import Model as TortoiseModel
@@ -100,7 +100,8 @@ class Program(TortoiseModel):
                     await SubmitToProcessPoolExecutor(executor, cls.updateFromEDCBForMultiProcess)
 
             # タスクキャンセル時は子プロセスの終了を待たず、イベントループを即座に呼び出し元へ返す
-            ## Python 3.11 の ProcessPoolExecutor は実行中の処理を即時終了できないため、子プロセス自体は完了まで残る可能性がある
+            ## Python 3.13 の ProcessPoolExecutor には実行中のワーカーを終了させる公開 API がないため、
+            ## ShutdownProcessPoolExecutor() でワーカープロセスへ直接終了要求を出し、応答しなければ強制終了する
             except asyncio.CancelledError:
                 should_wait_executor = False
                 await ShutdownProcessPoolExecutor(executor, is_cancelled=True)
@@ -202,11 +203,6 @@ class Program(TortoiseModel):
         # マルチプロセス時は既存のコネクションが使えないため、Tortoise ORM を初期化し直す
         # ref: https://tortoise-orm.readthedocs.io/en/latest/setup.html
         if is_running_multiprocess is True:
-
-            # Tortoise ORM を再初期化する前に、既存のコネクションを破棄
-            ## これをやっておかないとなぜか正常に初期化できず、DB 操作でフリーズする…
-            ## Windows だとこれをやらなくても問題ないが、Linux だと必要 (Tortoise ORM あるいは aiosqlite のマルチプロセス時のバグ？)
-            connections.discard('default')
 
             # Tortoise ORM を再初期化
             await Tortoise.init(config=DATABASE_CONFIG)
@@ -504,11 +500,6 @@ class Program(TortoiseModel):
         # マルチプロセス時は既存のコネクションが使えないため、Tortoise ORM を初期化し直す
         # ref: https://tortoise-orm.readthedocs.io/en/latest/setup.html
         if is_running_multiprocess is True:
-
-            # Tortoise ORM を再初期化する前に、既存のコネクションを破棄
-            ## これをやっておかないとなぜか正常に初期化できず、DB 操作でフリーズする…
-            ## Windows だとこれをやらなくても問題ないが、Linux だと必要 (Tortoise ORM あるいは aiosqlite のマルチプロセス時のバグ？)
-            connections.discard('default')
 
             # Tortoise ORM を再初期化
             await Tortoise.init(config=DATABASE_CONFIG)

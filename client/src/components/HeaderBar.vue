@@ -92,6 +92,9 @@ const searchPlaceholder = computed(() => {
     if (route.path.startsWith('/series')) {
         return 'シリーズを検索...';
     }
+    if (route.path.startsWith('/captures')) {
+        return 'キャプチャを検索...';
+    }
     return isVideoSection(route.path)
         ? '録画番組を検索...'
         : '放送予定の番組を検索...';
@@ -100,6 +103,9 @@ const searchPlaceholder = computed(() => {
 const getSearchPath = () => {
     if (route.path.startsWith('/series')) {
         return '/series/';
+    }
+    if (route.path.startsWith('/captures')) {
+        return '/captures/search';
     }
     return isVideoSection(route.path)
         ? '/videos/search'

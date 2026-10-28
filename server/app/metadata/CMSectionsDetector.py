@@ -202,7 +202,7 @@ class CMSectionsDetector:
                     # CM 区間情報を更新
                     # 検出できなかった場合も必ず [] を設定する
                     db_recorded_video.cm_sections = cm_sections
-                    await db_recorded_video.save()
+                    await db_recorded_video.save(update_fields=['cm_sections', 'updated_at'])
                     if len(cm_sections) > 0:
                         logging.info(f'{self.file_path}: Saved {len(cm_sections)} CM sections. ({time.time() - start_time:.2f} sec)')
                     else:

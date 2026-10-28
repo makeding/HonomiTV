@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any, ClassVar, Literal
 
-import httpx
+import httpx2 as httpx
 
 from app.constants import HTTPX_CLIENT
 from app.utils import GetMirakurunAPIEndpointURL

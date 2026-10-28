@@ -5,7 +5,7 @@ import json
 from abc import ABC, abstractmethod
 
 import anyio
-import httpx
+import httpx2 as httpx
 
 from app import logging, schemas
 from app.config import ServerSettingsNotificationService

@@ -1300,6 +1300,12 @@ class VideoStream:
             # この時点ですでにエンコードを完了して終了している場合もある
             await self.__cancelVideoEncodingTask()
 
+            # セグメントの完成を待つリクエストも、セッション終了に伴う取得中断として解放する
+            for segment in self._segments:
+                # 完了済みの結果は保持し、待機中の Future だけを空データで完了する
+                if not segment.encoded_segment_ts_future.done():
+                    segment.encoded_segment_ts_future.set_result(b'')
+
             # すべての HLS セグメントと、アクティブな間保持されていたインスタンスを削除する
             ## 今後同じセッション ID が指定された場合は新たに別のインスタンスが生成される
             self._segments = []

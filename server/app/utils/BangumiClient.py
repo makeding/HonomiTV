@@ -11,7 +11,7 @@ from time import monotonic
 from typing import Any, cast
 from weakref import WeakValueDictionary
 
-import httpx
+import httpx2 as httpx
 from tortoise.exceptions import IntegrityError
 
 from app import logging, schemas

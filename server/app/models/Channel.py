@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
-import httpx
+import httpx2 as httpx
 from tortoise import fields, transactions
 from tortoise.exceptions import IntegrityError, OperationalError
 from tortoise.fields import Field as TortoiseField
@@ -681,7 +681,7 @@ class Channel(TortoiseModel):
             jikkyo_client = JikkyoClient(channel.network_id, channel.service_id)
             status = await jikkyo_client.getStatus()
 
-            # ステータスが None（実況チャンネル自体が存在しないか、コミュニティの場合で実況枠が存在しない）でなく、
+            # ステータスが None（実況チャンネル自体が存在しないか、なんらかの問題で実況枠が存在しない）でなく、
             # force が -1 (何らかのエラー) でなければステータスを更新
             if status is not None and status['force'] != -1:
                 channel.jikkyo_force = status['force']

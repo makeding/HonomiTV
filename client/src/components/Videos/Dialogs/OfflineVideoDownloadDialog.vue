@@ -1,5 +1,5 @@
 <template>
-    <v-dialog max-width="620" v-model="isShown">
+    <v-dialog max-width="650" v-model="isShown">
         <v-card class="offline-download-dialog__card">
             <v-card-title class="d-flex justify-center pt-6 font-weight-bold">
                 オフライン再生用に保存
@@ -31,34 +31,37 @@
                 <div class="offline-download-dialog__switch mt-6"
                     :class="{'offline-download-dialog__switch--disabled': isHEVCSupported === false || isCopyMode}">
                     <div>
-                        <div class="font-weight-bold mb-1" style="font-size: 15px;">通信節約モード (H.265 / HEVC)</div>
-                        <div class="text-text-darken-1">画質はほぼそのまま、保存容量を 50% ~ 70% 抑えて保存できます。</div>
+                        <label class="font-weight-bold mb-1" style="font-size: 15px;" for="offline_download_data_saver_mode">通信節約モード (H.265 / HEVC)</label>
+                        <label class="text-text-darken-1" for="offline_download_data_saver_mode">画質はほぼそのまま、保存容量を 50% ~ 70% 抑えて保存できます。</label>
                     </div>
-                    <v-switch v-model="isDataSaverMode" color="primary" hide-details
+                    <v-switch id="offline_download_data_saver_mode" v-model="isDataSaverMode" color="primary" hide-details
                         :disabled="isHEVCSupported === false || isCopyMode" />
                 </div>
                 <div class="offline-download-dialog__switch mt-3"
                     :class="{'offline-download-dialog__switch--disabled': isCopyMode}">
                     <div>
-                        <div class="font-weight-bold mb-1" style="font-size: 15px;">24fps モード</div>
-                        <div class="text-text-darken-1">映画やアニメなど 24fps で制作された映像を検出し、本来の動きに近づけます。</div>
+                        <label class="font-weight-bold mb-1" style="font-size: 15px;" for="offline_download_24fps_mode">24fps モード</label>
+                        <label class="text-text-darken-1" for="offline_download_24fps_mode">映画やアニメなど 24fps で制作された映像を検出し、本来の動きに近づけます。</label>
                     </div>
-                    <v-switch v-model="is24fpsMode" color="primary" hide-details :disabled="isCopyMode" />
+                    <v-switch id="offline_download_24fps_mode" v-model="is24fpsMode" color="primary" hide-details :disabled="isCopyMode" />
                 </div>
                 <div class="offline-download-dialog__switch mt-3"
                     :class="{'offline-download-dialog__switch--disabled': isBackgroundFetchSupported !== true}">
                     <div>
-                        <div class="font-weight-bold mb-1" style="font-size: 15px;">バックグラウンドでダウンロードする</div>
-                        <div class="text-text-darken-1">
-                            オフのときは、完了まで KonomiTV のタブを開いたまま待つ必要があります。スマートフォンでは画面を閉じずに開き続けてください。<br>
-                            オンにするとタブを閉じてもダウンロードを続行できますが、ブラウザの制限で同時に保存できるのは<b>1本まで</b>です。2本目以降は順番待ちになります。Android ではダウンロードが始まらず待機したままになることがあり、挙動が不安定です。<br>
-                            急いで保存したいときや、複数本を同時に保存したいときは、<b>オフのまま使うことをおすすめします。</b>
-                        </div>
+                        <label class="font-weight-bold mb-1" style="font-size: 15px;" for="offline_download_background">バックグラウンドでダウンロードする</label>
+                        <label class="text-text-darken-1" for="offline_download_background">
+                            <b>オンにすると、ブラウザのタブやアプリを閉じてもダウンロードを続行できます。</b><br>
+                            <div class="mt-1"></div>
+                            その代わり、<b>仕様上並列ダウンロードができません。</b><br>
+                            2本目以降は前のダウンロードが終わるまで順番待ちになります。また、Android では一向にダウンロードが開始されないなど、挙動が不安定になりがちです。<br>
+                            <div class="mt-1"></div>
+                            急いで保存したいときや、複数番組を一度に保存したいケースでは、<b>オフのまま使うことをおすすめします。</b>
+                        </label>
                         <p class="mt-1 mb-0 text-error-lighten-1" v-if="isBackgroundFetchSupported === false">
                             このブラウザではバックグラウンドダウンロードに対応していません。
                         </p>
                     </div>
-                    <v-switch v-model="isBackgroundDownload" color="primary" hide-details
+                    <v-switch id="offline_download_background" v-model="isBackgroundDownload" color="primary" hide-details
                         :disabled="isBackgroundFetchSupported !== true" />
                 </div>
                 <v-alert v-if="isMeteredConnection" class="mt-4" color="warning" variant="tonal">
@@ -353,6 +356,12 @@ watch(() => props.show, async (show) => {
             min-width: 0;
         }
 
+        // 設定画面と同様に、見出しと説明文のクリックでもスイッチを切り替えられるようにする
+        label {
+            display: block;
+            cursor: pointer;
+        }
+
         :deep(.v-switch) {
             position: absolute;
             top: 4px;
@@ -368,6 +377,10 @@ watch(() => props.show, async (show) => {
 
         &--disabled {
             opacity: 0.5;
+
+            label {
+                cursor: default;
+            }
         }
     }
 }

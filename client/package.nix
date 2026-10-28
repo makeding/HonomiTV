@@ -20,7 +20,7 @@ pkgs.stdenv.mkDerivation rec {
 
   offlineCache = pkgs.fetchYarnDeps {
     yarnLock = "${src}/yarn.lock";
-    hash = "sha256-7HQBSU6eMy3UFUkw3kLK/LfLyYrRMLdOzBnLeDbs7yk=";
+    hash = "sha256-P/xFg/fTfkMw03wnl1EOwN+FkXQ7mhxvN7gH+1gRmpo=";
   };
   buildPhase = ''
     export HOME=$(mktemp -d)

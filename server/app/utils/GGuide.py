@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from app.constants import HTTPX_CLIENT

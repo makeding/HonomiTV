@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urljoin, urlsplit
 
-import httpx
+import httpx2 as httpx
 
 from app import logging, schemas
 from app.config import GetJellyfinConfig
@@ -382,7 +382,7 @@ class JellyfinClient:
         return response.content, response.headers.get('content-type', 'application/octet-stream')
 
     @classmethod
-    async def stream_resource(cls, session: JellyfinPlaybackSession, resource_id: str) -> tuple[AsyncGenerator[bytes, None], str]:
+    async def stream_resource(cls, session: JellyfinPlaybackSession, resource_id: str) -> tuple[AsyncGenerator[bytes], str]:
         """持続する MPEG-TS をメモリへ全量読み込みせずそのまま中継する。"""
         upstream_url = cls.get_resource_url(session, resource_id)
         client = HTTPX_CLIENT()
@@ -397,7 +397,7 @@ class JellyfinClient:
             await client.aclose()
             raise JellyfinError(f'Jellyfin の再生リソースが HTTP {response.status_code} を返しました。')
 
-        async def generate() -> AsyncGenerator[bytes, None]:
+        async def generate() -> AsyncGenerator[bytes]:
             try:
                 async for chunk in response.aiter_bytes():
                     if session.closing is True:

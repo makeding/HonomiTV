@@ -2,9 +2,8 @@ from datetime import datetime
 from time import time
 from typing import Any
 
-from tortoise.timezone import get_default_timezone
-
 from app import schemas
+from app.constants import JST
 from app.models.RecordedProgram import RecordedProgram
 
 
@@ -26,7 +25,7 @@ async def ResolveLiveWatchedHistory(progress: schemas.LiveHistoryPlaybackProgres
     if progress.playback_time > now:
         return []
     try:
-        picture_time = datetime.fromtimestamp(progress.playback_time, get_default_timezone())
+        picture_time = datetime.fromtimestamp(progress.playback_time, JST)
     except (ValueError, OverflowError, OSError):
         return []
     recordings = await RecordedProgram.filter(

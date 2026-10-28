@@ -241,10 +241,17 @@ def Updater(version: str) -> None:
 
         # 新しいバージョンのコードをチェックアウト
         ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをチェックアウト
-        revision = 'master' if version == 'latest' else f'v{version}'
+        ## git fetch はローカルの master ブランチを更新しないため、latest の場合は -B でローカルの master ブランチを
+        ## リモートの最新 (origin/master) に合わせて作り直してからチェックアウトする
+        ## 単に master をチェックアウトすると、初回インストール時点などの古いローカルの master ブランチのままになってしまう
+        checkout_args: list[str | Path]
+        if version == 'latest':
+            checkout_args = ['git', 'checkout', '--force', '-B', 'master', 'origin/master']
+        else:
+            checkout_args = ['git', 'checkout', '--force', f'v{version}']
         result = RunSubprocess(
             'KonomiTV のソースコードを更新しています…',
-            ['git', 'checkout', '--force', revision],
+            checkout_args,
             cwd = update_path,  # カレントディレクトリを KonomiTV のインストールフォルダに設定
             error_message = 'KonomiTV のソースコードの更新中に予期しないエラーが発生しました。',
             error_log_name = 'Git のエラーログ',
@@ -445,6 +452,30 @@ def Updater(version: str) -> None:
 
     # Linux-Docker: Docker イメージを再ビルド
     elif platform_type == 'Linux-Docker':
+
+        # AMD GPU 向けの /dev/kfd が存在する場合、ROCm の OpenCL を Docker コンテナ内で使えるように docker-compose.yaml へマウント設定を追加
+        ## VCEEncC が AMD AMF でエンコードする際の OpenCL フィルターは ROCm でしか動作せず、ROCm の動作には /dev/kfd が必要
+        ## 以前のバージョンのインストーラーが生成した docker-compose.yaml には /dev/kfd の記述自体がないため、/dev/dri/ のマウント設定の直後に追加する
+        ## /dev/dri/ のマウント設定をユーザーがコメントアウトしている場合は、ユーザーの設定を尊重して何もしない
+        if Path('/dev/kfd').exists() is True:
+            with open(update_path / 'docker-compose.yaml', encoding='utf-8') as file:
+                text = file.read()
+            dri_device_line = '      - \'/dev/dri/:/dev/dri/\''
+            kfd_device_line = '      - \'/dev/kfd:/dev/kfd\''
+            commented_kfd_device_line = '      # - \'/dev/kfd:/dev/kfd\''
+            new_text = text
+            # /dev/dri/ のマウント設定が有効な場合のみ処理する
+            if dri_device_line in text:
+                # 現在の docker-compose.example.yaml から生成した docker-compose.yaml で、/dev/kfd の記述がコメントアウトされている場合
+                if commented_kfd_device_line in text:
+                    new_text = text.replace(commented_kfd_device_line, kfd_device_line)
+                # 以前のバージョンから生成した docker-compose.yaml で、/dev/kfd の記述自体がない場合
+                elif kfd_device_line not in text:
+                    new_text = text.replace(dri_device_line, f'{dri_device_line}\n{kfd_device_line}')
+            # 内容が変わった場合のみ docker-compose.yaml を書き換える
+            if new_text != text:
+                with open(update_path / 'docker-compose.yaml', mode='w', encoding='utf-8') as file:
+                    file.write(new_text)
 
         # docker compose build --no-cache --pull で Docker イメージをビルド
         ## 万が一以前ビルドしたキャッシュが残っていたときに備え、キャッシュを使わずにビルドさせる

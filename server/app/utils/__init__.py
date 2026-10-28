@@ -7,14 +7,11 @@ import sys
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 import psutil
 
 from app.constants import JST
-
-
-T = TypeVar('T')
 
 
 def NormalizeToJSTDatetime(value: datetime) -> datetime:
@@ -47,7 +44,7 @@ def ParseDatetimeStringToJST(value: str) -> datetime:
         datetime: JST aware な datetime
     """
 
-    # Python 3.11 の datetime.fromisoformat() は区切り文字として半角スペースも扱える
+    # Python 3.11 以降の datetime.fromisoformat() は区切り文字として半角スペースも扱える
     return NormalizeToJSTDatetime(datetime.fromisoformat(value))
 
 
@@ -248,7 +245,7 @@ def LimitWorkerProcessResourcePriority() -> None:
         pass
 
 
-async def SubmitToProcessPoolExecutor(
+async def SubmitToProcessPoolExecutor[T](
     executor: concurrent.futures.ProcessPoolExecutor,
     fn: Callable[..., T],
     *args: Any,
@@ -331,7 +328,8 @@ async def ShutdownProcessPoolExecutor(
 
         # Python 3.14 の terminate_workers() / kill_workers() と同じ考え方で、
         ## ProcessPoolExecutor が内部で保持しているワーカープロセスへ直接終了要求を出す
-        ## Python 3.11 には公開 API がないため非公開属性を参照するが、依存箇所はこの関数だけに閉じ込める
+        ## Python 3.13 には公開 API がないため非公開属性を参照するが、依存箇所はこの関数だけに閉じ込める
+        ## Python 3.14 以降へ上げたら、この非公開属性の参照は terminate_workers() / kill_workers() に置き換えられる
         executor_processes = executor._processes  # pyright: ignore[reportPrivateUsage]
         worker_processes = list(executor_processes.values()) if executor_processes is not None else []
 

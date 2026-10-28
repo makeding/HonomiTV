@@ -16,9 +16,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal, Protocol, TypeAlias, cast
-
-from typing_extensions import TypedDict
+from typing import Literal, Protocol, TypedDict, cast
 
 from app import logging
 from app.constants import LIBRARY_PATH
@@ -31,7 +29,7 @@ CMAnalyzerStatus = Literal[
     'interrupted',
 ]
 CMDecodeMode = Literal['Hardware', 'CPU']
-CMContainerFormat: TypeAlias = Literal['MPEG-TS', 'MPEG-4', 'MMT/TLV']
+type CMContainerFormat = Literal['MPEG-TS', 'MPEG-4', 'MMT/TLV']
 CMAnalysisStage = Literal[
     'PreparingMedia',
     'IndexingMedia',

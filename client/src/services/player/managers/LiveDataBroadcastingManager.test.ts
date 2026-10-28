@@ -77,7 +77,7 @@ describe('standalone data broadcasting lifecycle', () => {
     it('opens the remote despite optional data broadcasting being disabled and restores it on exit', async () => {
         await manager.init();
         expect(state.browsers).toHaveLength(1);
-        expect(state.player.tv_panel_active_tab).toBe('Program');
+        expect(state.player.tv_panel_active_tab).toBe('Twitter');
         expect(state.player.is_remocon_display).toBe(true);
         expect(state.player.is_data_broadcasting_panel_display).toBe(true);
         expect(state.browsers[0].emitMessage).toHaveBeenCalledWith(expect.objectContaining({

@@ -213,7 +213,7 @@ async def GenerateMirakurunRawMMTSStream(
     request: Request,
     session: aiohttp.ClientSession,
     response: aiohttp.ClientResponse,
-) -> AsyncGenerator[bytes, None]:
+) -> AsyncGenerator[bytes]:
     """
     Mirakurun から受け取った Raw MMTS を、そのまま StreamingResponse へ流す。
 
