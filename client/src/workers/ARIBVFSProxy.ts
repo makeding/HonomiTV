@@ -106,7 +106,10 @@ async function serveExternal(request: Request, resource: ExternalResource): Prom
         source = prepareBroadcastStylesheet(source, {basePath: resource.rootPath, scopePath: resource.rootPath});
     }
     headers.set('Cache-Control', 'no-store');
-    headers.set('Content-Security-Policy', contentPolicy(['hc.nhk.jp', 'hc.nhk.or.jp'].includes(resource.upstreamUrl.hostname), resource.upstreamUrl));
+    // BS テレ東の x_bjhc は eval() で Greg / Ureg のアクセサーを初期化する。
+    // 受信機向けの既存ライブラリを使うホストへ、文書単位の互換設定を適用する。
+    const legacyEvaluation = ['hc.nhk.jp', 'hc.nhk.or.jp', 'hc.bsjhc.jp'].includes(resource.upstreamUrl.hostname);
+    headers.set('Content-Security-Policy', contentPolicy(legacyEvaluation, resource.upstreamUrl));
     headers.set('X-Content-Type-Options', 'nosniff');
     return responseWithBody(response, request.method === 'HEAD' ? null : source, headers);
 }

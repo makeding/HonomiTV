@@ -405,6 +405,8 @@ class TLVDataBroadcastingManager implements PlayerManager {
                     }
                 } else if (event.type === 'error') {
                     console.error('[TLVDataBroadcastingManager] Receiver runtime failed.', event.message);
+                    this.exitApplication();
+                    this.player.notice(`データ放送の実行に失敗しました：${event.message}。データボタンで再試行してください。[TLV_DATA_RUNTIME_ERROR]`, 6000, undefined, '#FF6F6A');
                 }
             },
         };

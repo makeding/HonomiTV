@@ -116,3 +116,14 @@ Remove `.github/workflows/scripts/poetry` when pre-v0.14.1 installers are no lon
 - Installer lint/typecheck and lock validation passed. Nix server derivation evaluates; frontend dependency hash refreshed. Workflow syntax passes actionlint; full ShellCheck reports existing/upstream script warnings.
 - Upstream migrations are numbered 18–20 after the fork migrations. Populated in-memory SQLite upgrade preserves an existing user; merged Aerich offline model state reports no changes. No user database was modified.
 - No local user-managed API was running. Live HTTP, browser UI, real broadcast playback, Windows/Docker builds and deployment were not verified.
+
+### BS TV Tokyo 4K CSP initialization failure (2026-10-29)
+
+- The local broadband experiment reproduced an uncaught EvalError at
+  `x_bjhc.min.js:58:62588`: the broadcaster initializes Greg/Ureg accessors with
+  eval(), but the VFS document CSP only enabled legacy evaluation for NHK.
+- Apply the same document-scoped compatibility setting to `hc.bsjhc.jp`.
+  Other hosts, carousel documents, proxy destination validation and frame
+  restrictions retain their existing policies. HTTP 200 alone did not validate
+  broadcaster JavaScript initialization. Portal rendering after this fix remains
+  pending browser confirmation.
