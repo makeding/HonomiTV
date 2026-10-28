@@ -1,5 +1,6 @@
 /** VFS で代理取得できる放送アプリのホスト。サーバー側の許可範囲は拡張しない。 */
 export const ARIB_PROXY_HOSTS = new Set([
+    'hc.bsjhc.jp',
     '4kdata-p.qvc.jp', 'api.qvc.jp', 'api.nhk.or.jp', 'beacon.nhk.jp', 'img.nhk.jp',
     'hc.nhk.or.jp', 'hc.nhk.jp', 'nhk.jp', 'qvc.jp', 'qvc.scene7.com', 'shv.nhk.jp',
     'tv-stream.nhk.jp', 'tvip.hc.skyperfectv.co.jp', 'www.nhk-cs.jp', 'www.nhk.or.jp',

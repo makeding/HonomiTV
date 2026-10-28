@@ -30,6 +30,7 @@ router = APIRouter(
 ## 実際の BS4K/BS8K 放送アプリで確認できたホストだけを完全一致で許可する。
 ## dev / stg 用ホストやオーサリング環境のプライベート IP は、放送アプリに文字列が含まれていても許可しない。
 ARIB_HTML5_EXTERNAL_PROXY_ALLOWED_HOSTS: frozenset[str] = frozenset({
+    'hc.bsjhc.jp',
     '4kdata-p.qvc.jp',
     'api.qvc.jp',
     'api.nhk.or.jp',

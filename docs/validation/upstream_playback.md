@@ -74,3 +74,29 @@ Remove `.github/workflows/scripts/poetry` when pre-v0.14.1 installers are no lon
 - Server and installer uv locks and dependency synchronization passed. Installer Ruff/Pyright, Linux Nix derivation evaluation and Darwin flake evaluation passed. Docker images, Windows installer builds and Nix builds have not been executed.
 - No KonomiTV API is running locally on port 7000 (the listener is macOS ControlCenter); the development HTTPS endpoint times out. Real playback, browser interaction and iOS blur behavior remain unverified. Existing Vite preview serves another session's dist, so it is not source acceptance for this change.
 - WebVTT uses normal DPlayer options. TLV subtitle-mode handling and quality-switch subtitle reattachment belong to the separately requested DPlayer repair/bump; they require acceptance after that update. No local compatibility renderer was added.
+
+### TLV broadband application entry (2026-10-28)
+
+- BS TV Tokyo 4K (1100171): live raw TLV MH-AIT contains HTTP transport
+  `http://hc.bsjhc.jp/hc/` and `entry/html_mm/startup.min.html`; application
+  type 0x11, organization 0x102e, application 1, AUTOSTART. Application-service
+  signalling declares data-transmission=0. No carousel readiness can arrive.
+- HonomiTV now resolves this transport independently of broadcast entryReady,
+  uses the existing same-origin external VFS and allowlisted server proxy,
+  preserves network-disabled settings, cancels pending requests on exit, and
+  identifies the receiver as A-PAB/1.0. A ready broadcast entry remains preferred.
+- The real proxy router was requested in-process against the public broadcaster:
+  startup HTML, portal HTML, portal.js and x_bjhc.min.js returned HTTP 200;
+  a private-IP destination returned HTTP 403. This is HTTP acceptance, not
+  browser rendering or deployed-service acceptance.
+- Other live 4K services inspected serially: NHK BSP4K (1100101), BS Fuji
+  (1100181), QVC (1100221) advertise carousel application entries. BS Nippon TV
+  (1100141), BS Asahi (1100151), BS-TBS (1100161) supplied media but no application
+  signalling in the approximately 20-second samples. This is a bounded sample,
+  not a claim that they never broadcast applications. Shop Channel (1100211)
+  disconnected during capture and again before HTTP response on retry; its
+  application availability remains unverified. No recording files were retained.
+- Focused URL/transport tests (7) and frontend lint/typecheck passed. Server
+  Ruff/Pyright passed with 10 existing deprecation warnings. Actual HonomiTV
+  D-button rendering, navigation and service-switch acceptance remain unverified:
+  no local user-managed HonomiTV API was running during this check.

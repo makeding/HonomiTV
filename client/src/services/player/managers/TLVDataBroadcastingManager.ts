@@ -13,6 +13,9 @@ import type {
     RuntimeWindow,
 } from 'libaribhtml5';
 
+import APIClient from '@/services/APIClient';
+import { mapARIBProxyURL } from '@/services/player/hybridcast/ARIBProxyURL';
+import { resolveTLVBroadbandEntry } from '@/services/player/hybridcast/TLVApplicationEntry';
 import PlayerManager from '@/services/player/PlayerManager';
 import useChannelsStore from '@/stores/ChannelsStore';
 import usePlayerStore from '@/stores/PlayerStore';
@@ -40,6 +43,8 @@ type TLVApplicationState = {
     applicationPriority: number;
     entryPath: string;
     transportUrls: string[];
+    transportProtocolLabels?: number[];
+    transports?: Array<{protocolId: number; label: number; urls: string[]}>;
     entryReady: boolean;
 };
 
@@ -58,6 +63,7 @@ type ManagedApplication = {
     key: string;
     state: TLVApplicationState;
     entry: string;
+    broadband: boolean;
 };
 
 type TLVStreamEvent = {
@@ -246,6 +252,7 @@ class TLVDataBroadcastingManager implements PlayerManager {
     private ready_application_key: string | null = null;
     private active_application_key: string | null = null;
     private pending_application_key: string | null = null;
+    private application_load_abort: AbortController | null = null;
     private show_requested = false;
     private dispatch_data_key_after_install = false;
     private autostart_scheduled = false;
@@ -298,6 +305,7 @@ class TLVDataBroadcastingManager implements PlayerManager {
         this.iframe.className = 'dplayer-tlv-data-broadcast';
         this.iframe.setAttribute('aria-hidden', 'true');
         this.iframe.tabIndex = -1;
+        this.iframe.dataset.aribSource = this.playback_mode === 'Live' ? 'onair' : 'recorded';
         Object.assign(this.iframe.style, {
             position: 'absolute',
             inset: '0',
@@ -337,6 +345,8 @@ class TLVDataBroadcastingManager implements PlayerManager {
             iframe: this.iframe,
             viewport: this.viewport,
             broadcastBaseUrl: '/data-broadcast/',
+            // BS4K 通信アプリが PC 用ページへ戻らず、MMT 受信機向け分岐を選ぶための識別子。
+            userAgent: 'A-PAB/1.0',
             allowExternalNetwork: useSettingsStore().settings.enable_internet_access_from_data_broadcasting,
             systemInformation: {
                 zipcode: receiver_info.zipcode,
@@ -674,13 +684,16 @@ class TLVDataBroadcastingManager implements PlayerManager {
             }
             return;
         }
-        if (!state.entryReady) return;
-        const entry = this.player.plugins.tlv?.applicationEntry(state.contextId) ?? null;
+        // 通信専用アプリには carousel の入口ファイルが届かないため、entryReady を待たない。
+        const broadcast_entry = state.entryReady
+            ? this.player.plugins.tlv?.applicationEntry(state.contextId) ?? null : null;
+        const network_entry = resolveTLVBroadbandEntry(state, location.origin);
+        const entry = broadcast_entry ?? network_entry;
         if (entry === null) return;
-        const application: ManagedApplication = {key, state: {...state}, entry};
+        const application: ManagedApplication = {key, state: {...state}, entry, broadband: broadcast_entry === null};
         this.applications.set(key, application);
 
-        // demo と同様に、entryReady になった application は D ボタンから到達できる
+        // 放送入口が揃ったアプリと、通信入口が解決できたアプリを D ボタンから到達できる
         // 互換入口として保持する。PRESENT が後から届いた場合は必ずそちらを優先し、
         // 同種の候補同士だけ application_priority で選択する。
         const current = this.ready_application_key === null
@@ -731,7 +744,8 @@ class TLVDataBroadcastingManager implements PlayerManager {
             this.autostart_scheduled = false;
             if (generation !== this.session_generation || this.pending_application_key !== null) return;
             const candidate = [...this.applications.values()]
-                .filter(application => application.state.controlCode === 0x01 && application.state.entryReady)
+                .filter(application => application.state.controlCode === 0x01 &&
+                    (!application.broadband || useSettingsStore().settings.enable_internet_access_from_data_broadcasting))
                 .sort((left, right) => right.state.applicationPriority - left.state.applicationPriority)[0];
             if (candidate === undefined || candidate.key === this.active_application_key) return;
             if (this.active_application_key !== null) {
@@ -910,7 +924,7 @@ class TLVDataBroadcastingManager implements PlayerManager {
             return;
         }
         if (this.vfs === null || this.iframe === null || this.pending_application_key !== null ||
-            this.resource_revisions.has(`${application.state.contextId}:${application.entry}`) === false) {
+            (!application.broadband && this.resource_revisions.has(`${application.state.contextId}:${application.entry}`) === false)) {
             this.show_requested = true;
             return;
         }
@@ -925,15 +939,41 @@ class TLVDataBroadcastingManager implements PlayerManager {
     private async loadManagedApplication(application: ManagedApplication, status: string): Promise<void> {
         if (this.vfs === null || this.iframe === null || this.pending_application_key !== null) return;
         const generation = this.session_generation;
-        const revision = this.resource_revisions.get(`${application.state.contextId}:${application.entry}`);
-        if (revision === undefined) return;
+        if (application.broadband && !useSettingsStore().settings.enable_internet_access_from_data_broadcasting) {
+            this.dispatch_data_key_after_install = false;
+            this.player.notice('通信型データ放送を開けません。設定の「データ放送」でインターネット接続を有効にして、データボタンで再試行してください。[TLV_DATA_NETWORK_DISABLED]', 6000, undefined, '#FF6F6A');
+            return;
+        }
         this.pending_application_key = application.key;
+        const load_abort = new AbortController();
+        this.application_load_abort = load_abort;
         try {
-            await this.vfs.waitFor(revision);
-            await this.vfs.ensure(application.entry, revision);
-            if (generation !== this.session_generation) return;
             const base_url = new URL('/data-broadcast/', location.origin);
-            const application_url = new URL(application.entry.replace(/^\/+/, ''), base_url);
+            let application_url: URL;
+            if (application.broadband) {
+                // 通常の外部資源経路で取得可否を確認し、CORS / mixed content を避ける VFS URL へ渡す。
+                const mapped = mapARIBProxyURL(application.entry, location.origin);
+                if (mapped === null) throw new Error('TLV_DATA_UNSUPPORTED_URL');
+                const response = await APIClient.get<string>('/data-broadcasting/arib-html5/request', {
+                    params: {url: application.entry}, responseType: 'text', signal: load_abort.signal,
+                });
+                if (load_abort.signal.aborted || generation !== this.session_generation || this.pending_application_key !== application.key) return;
+                if (response.type === 'error') {
+                    throw new Error(`TLV_DATA_NETWORK_FETCH_FAILED: HTTP ${response.status}`);
+                }
+                await this.vfs_backend?.initialize();
+                application_url = mapped;
+            } else {
+                const revision = this.resource_revisions.get(`${application.state.contextId}:${application.entry}`);
+                if (revision === undefined) {
+                    this.pending_application_key = null;
+                    return;
+                }
+                await this.vfs.waitFor(revision);
+                await this.vfs.ensure(application.entry, revision);
+                application_url = new URL(application.entry.replace(/^\/+/, ''), base_url);
+            }
+            if (load_abort.signal.aborted || generation !== this.session_generation || this.pending_application_key !== application.key) return;
             if (application_url.origin !== location.origin || !application_url.pathname.startsWith(base_url.pathname)) {
                 throw new Error(`Application entry escaped receiver scope: ${application.entry}`);
             }
@@ -951,10 +991,12 @@ class TLVDataBroadcastingManager implements PlayerManager {
             });
             this.host?.loadApplication(application_url.href, status);
         } catch (error) {
-            if (this.pending_application_key === application.key) this.pending_application_key = null;
+            if (load_abort.signal.aborted || generation !== this.session_generation || this.pending_application_key !== application.key) return;
+            this.pending_application_key = null;
             this.exitApplication();
             console.error('[TLVDataBroadcastingManager] Failed to enter application.', error);
-            this.player.notice('データ放送を起動できませんでした。', 3000, undefined, '#FF6F6A');
+            const reason = error instanceof Error ? error.message : 'TLV_DATA_LOAD_FAILED';
+            this.player.notice(`データ放送を起動できません。通信またはリソースの取得に失敗しました。データボタンで再試行してください。[${reason}]`, 6000, undefined, '#FF6F6A');
         }
     }
 
@@ -979,6 +1021,8 @@ class TLVDataBroadcastingManager implements PlayerManager {
     }
 
     private exitApplication(): void {
+        this.application_load_abort?.abort();
+        this.application_load_abort = null;
         // runtime 導入前の 404 でも iframe.src を about:blank に戻せるよう、visible にかかわらず終了する。
         this.host?.exitApplication();
         this.active_application_key = null;
