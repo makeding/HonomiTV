@@ -39,7 +39,27 @@ describe('ChannelsStore network source recovery', () => {
         iptv_response = createResponse([], null);
         await store.update(true);
         expect(settings.settings.pinned_channel_ids).toEqual(['jellyfin-1']);
+        expect(store.channels_list_with_pinned.has('ネット')).toBe(false);
+        expect(store.channels_list_with_pinned_for_watch.has('ネット')).toBe(false);
         expect(fetch).toHaveBeenCalledTimes(6);
+    });
+
+    it('hides an empty network tab during initialization, loading and source failure', () => {
+        const store = useChannelsStore();
+        expect(store.channels_list_with_pinned.has('ネット')).toBe(false);
+        expect(store.channels_list_with_pinned_for_watch.has('ネット')).toBe(false);
+
+        store.is_channels_list_initial_updated = true;
+        store.channels_list.GR = [{...jellyfinChannel, id: 'broadcast', type: 'GR'}];
+        store.is_iptv_loading = true;
+        expect(Array.from(store.channels_list_with_pinned.keys())).toEqual(['ピン留め', '地デジ']);
+        expect(Array.from(store.channels_list_with_pinned_for_watch.keys())).toEqual(['地デジ']);
+
+        store.is_iptv_loading = false;
+        store.is_iptv_initial_updated = true;
+        store.source_errors.IPTV = 'Jellyfin is unavailable';
+        expect(store.channels_list_with_pinned.has('ネット')).toBe(false);
+        expect(store.channels_list_with_pinned_for_watch.has('ネット')).toBe(false);
     });
 
     it('never treats response metadata as a channel list in getters', () => {

@@ -123,14 +123,6 @@
                                 </div>
                             </div>
                             <div class="pinned-container d-flex justify-center align-center w-100"
-                                v-else-if="channels_type === 'ネット' && channels.length === 0 && channelsStore.source_errors.IPTV === null">
-                                <div class="d-flex justify-center align-center flex-column">
-                                    <h2>ネットテレビのチャンネルがありません。</h2>
-                                    <div class="mt-2 text-text-darken-1">ネットテレビの接続設定を確認して、再試行してください。</div>
-                                    <v-btn class="mt-4" variant="flat" :loading="is_network_retrying" :disabled="is_network_retrying" @click="retryNetworkChannels">再試行</v-btn>
-                                </div>
-                            </div>
-                            <div class="pinned-container d-flex justify-center align-center w-100"
                                 v-else-if="channels_type === 'ネット' && channelsStore.source_errors.IPTV !== null">
                                 <div class="d-flex justify-center align-center flex-column">
                                     <h2>ネットテレビのチャンネルを更新できませんでした。</h2>
@@ -820,8 +812,7 @@ export default defineComponent({
             }
 
             // ピン留めされているチャンネルがないとき
-            &.channels--length-0.channels--tab-ピン留め,
-            &.channels--length-0.channels--tab-ネット {
+            &.channels--length-0.channels--tab-ピン留め {
                 display: flex;
                 justify-content: center !important;
                 flex-grow: 1;

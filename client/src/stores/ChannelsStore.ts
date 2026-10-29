@@ -212,7 +212,6 @@ const useChannelsStore = defineStore('channels', {
 
             // 初回のチャンネル情報更新がまだ実行されていない or 実行中のときは最低限の上記2つだけで返す
             if (this.is_channels_list_initial_updated === false && this.is_iptv_initial_updated === false) {
-                channels_list_with_pinned.set('ネット', []);
                 return channels_list_with_pinned;
             }
 
@@ -315,7 +314,7 @@ const useChannelsStore = defineStore('channels', {
                 if (channel_type === 'ピン留め') {
                     continue;
                 }
-                if (channels.length === 0 && channel_type !== 'ネット') {
+                if (channels.length === 0) {
                     channels_list_with_pinned.delete(channel_type);
                 }
             }
