@@ -67,6 +67,12 @@ async def FetchGGuideAssets() -> GGuideAssets:
             response = await client.get(GetMirakurunAPIEndpointURL('/api/gguide/assets'), timeout=2.0)
             response.raise_for_status()
             raw_assets = TypeAdapter(list[dict[str, Any]]).validate_json(response.content)
+    except httpx.HTTPStatusError as error:
+        # gguide 拡張を持たない Mirakurun は GGuide を提供しない仕様であり、
+        # 取得失敗として毎回エラーを表示すべきものではない。
+        if error.response.status_code in (404, 405):
+            return GGuideAssets(status='Unsupported', assets=())
+        return GGuideAssets(status='Unavailable', assets=())
     except (httpx.HTTPError, ValidationError):
         return GGuideAssets(status='Unavailable', assets=())
 
