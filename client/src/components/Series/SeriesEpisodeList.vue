@@ -69,7 +69,14 @@
                     class="series-episode-list__loading-episode" type="image" />
             </template>
         </div>
-        <div v-if="!is_loading" ref="episodeMatrixScrollElement" class="series-episode-list__matrix-scroll"
+        <div v-if="!is_loading && is_load_failed" class="series-episode-list__load-error">
+            <p>録画番組を取得できませんでした。KonomiTV サーバーが起動しているか確認してから、もう一度お試しください。</p>
+            <v-btn size="small" variant="text" color="text" @click="fetchPrograms">
+                <Icon icon="fluent:arrow-clockwise-20-regular" width="16px" class="mr-1" />
+                再試行
+            </v-btn>
+        </div>
+        <div v-if="!is_loading && !is_load_failed" ref="episodeMatrixScrollElement" class="series-episode-list__matrix-scroll"
             :class="{'series-episode-list__matrix-scroll--single-channel-wrapped': isSingleChannelWrapped}">
             <div v-if="isSingleChannelWrapped" class="series-episode-list__wrapped-channel">
                 <div v-if="displayEpisodeMatrix.rows[0].channel_id" class="series-episode-list__channel-logo">
@@ -164,6 +171,7 @@ import { useRouter } from 'vue-router';
 
 import { collapseBatchEpisodeColumns } from '@/components/Series/SeriesEpisodeMatrix';
 import RecordedProgramMenu from '@/components/Videos/RecordedProgramMenu.vue';
+import Message from '@/message';
 import { IRecordedProgram } from '@/services/Videos';
 import Videos from '@/services/Videos';
 import Utils, { dayjs } from '@/utils';
@@ -203,6 +211,8 @@ const seriesEpisodeListElement = ref<HTMLElement | null>(null);
 const episodeMatrixScrollElement = ref<HTMLElement | null>(null);
 const total_programs = ref(0);
 const is_loading = ref(true);
+// 一覧の取得に失敗したことを、未録画 (0 件) と区別するために保持する
+const is_load_failed = ref(false);
 const episode_number_collator = new Intl.Collator('ja', { numeric: true });
 const activeProfileThumbnailIndex = ref(0);
 const activeProfileRandomFrame = ref<{programID: number; tileIndex: number} | null>(null);
@@ -604,6 +614,9 @@ const missingEpisodeSlotKeys = computed(() => {
 });
 
 const seriesCountLabel = computed(() => {
+    if (is_load_failed.value) {
+        return '取得できませんでした';
+    }
     const episodeSlots = episode_matrix.value.slots.filter(slot => slot.key.startsWith('episode:'));
     if (episodeSlots.length === 0) return `${total_programs.value}件の録画`;
     const latestEpisode = episodeSlots[episodeSlots.length - 1].key.slice('episode:'.length);
@@ -626,6 +639,7 @@ const onProgramDeleted = (programID: number) => {
 
 const fetchPrograms = async () => {
     is_loading.value = true;
+    is_load_failed.value = false;
     const first_page = await Videos.fetchVideosBySeries(props.seriesId, null, 'asc', 1);
     if (first_page) {
         const all_programs = [...first_page.recorded_programs];
@@ -635,11 +649,25 @@ const fetchPrograms = async () => {
                 Videos.fetchVideosBySeries(props.seriesId, null, 'asc', index + 2),
             ),
         );
+        // ページ単位の失敗があったことを記録する。生成できた分の表示は破棄しない。
+        let has_partial_failure = false;
         for (const page of remaining_pages) {
-            if (page) all_programs.push(...page.recorded_programs);
+            if (page) {
+                all_programs.push(...page.recorded_programs);
+            } else {
+                has_partial_failure = true;
+            }
+        }
+        // 一部でもページの取得に失敗したときは、欠けている話数が「未録画」に見える前に通知する。
+        // (API 側のエラー表示だけでは、どの作品の行列が不完全なのか分からない)
+        if (has_partial_failure) {
+            Message.error('一部の録画番組を取得できませんでした。時間をおいてから、もう一度開き直してください。');
         }
         programs.value = all_programs;
         total_programs.value = first_page.total;
+    } else {
+        // 取得失敗は 0 件と区別して、画面内に再試行を表示する
+        is_load_failed.value = true;
     }
     is_loading.value = false;
     // 最初のデータ描画後だけ最新話へ移動し、その後の画像更新・削除では手動の位置を維持する。
@@ -773,6 +801,26 @@ onBeforeUnmount(() => {
         width: max-content;
         min-width: 100%;
         overflow: hidden;
+    }
+
+    // 取得失敗の表示。0 件の行列と区別するため、通常の行列の代わりに再試行を示す。
+    &__load-error {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 200px;
+        padding: 32px 24px;
+        background: rgb(var(--v-theme-background-lighten-1));
+        border-radius: 8px;
+        color: rgb(var(--v-theme-text-darken-1));
+        text-align: center;
+
+        p {
+            margin: 0;
+            font-size: 14px;
+        }
     }
 
     &__loading-corner,

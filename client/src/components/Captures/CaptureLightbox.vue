@@ -41,7 +41,7 @@
                                 </div>
                             </template>
                             <v-list density="compact" bg-color="background-lighten-1">
-                                <v-list-item v-if="canSetThumbnail" @click="setAsThumbnail">
+                                <v-list-item v-if="canSetThumbnail" @click="isSetThumbnailConfirmOpen = true">
                                     <template #prepend>
                                         <Icon icon="fluent:image-20-regular" width="20px" height="20px" />
                                     </template>
@@ -124,6 +124,29 @@
                         </v-card-actions>
                     </v-card>
                 </v-dialog>
+                <!-- サムネイルの変更は既存のサムネイルを上書きするため、押してすぐに送らず、内容を確認してから送る -->
+                <v-dialog max-width="520" :model-value="isSetThumbnailConfirmOpen" @update:model-value="isSetThumbnailConfirmOpen = $event">
+                    <v-card>
+                        <v-card-title class="d-flex justify-center pt-6 font-weight-bold">録画番組のサムネイルを変更しますか？</v-card-title>
+                        <v-card-text class="pt-2 pb-0">
+                            <div>
+                                このキャプチャを、録画番組「{{ setThumbnailProgramTitle }}」のサムネイルにします。
+                                現在のサムネイルはこのキャプチャで上書きされます。
+                            </div>
+                        </v-card-text>
+                        <v-card-actions class="pt-4 px-6 pb-6">
+                            <v-spacer></v-spacer>
+                            <v-btn color="text" variant="text" height="40" @click="isSetThumbnailConfirmOpen = false">
+                                <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
+                                <span class="ml-1">キャンセル</span>
+                            </v-btn>
+                            <v-btn color="secondary" variant="flat" height="40" class="px-3" @click="setAsThumbnail">
+                                <Icon icon="fluent:image-16-regular" width="18px" height="18px" />
+                                <span class="ml-1">サムネイルに変更</span>
+                            </v-btn>
+                        </v-card-actions>
+                    </v-card>
+                </v-dialog>
             </div>
         </transition>
     </Teleport>
@@ -144,9 +167,10 @@ import CaptureInfo from '@/components/Captures/CaptureInfo.vue';
 import CaptureTagDialog from '@/components/Captures/CaptureTagDialog.vue';
 import Message from '@/message';
 import Captures, { ICapture, ICaptureDetail, ICaptureProgram, ICaptureTag } from '@/services/Captures';
-import Videos from '@/services/Videos';
+import Videos, { IRecordedProgram } from '@/services/Videos';
 import useUserStore from '@/stores/UserStore';
 import { dayjs } from '@/utils';
+import { ProgramUtils } from '@/utils/ProgramUtils';
 
 
 const props = defineProps<{
@@ -179,11 +203,18 @@ const EASING = 'cubic-bezier(0.26, 0.68, 0.55, 0.99)';
 
 const isTagDialogOpen = ref(false);
 const isDeleteConfirmOpen = ref(false);
+// サムネイルへの変更の確認 (既存のサムネイルを上書きする取り消せない操作のため)
+const isSetThumbnailConfirmOpen = ref(false);
 const detail = ref<ICaptureDetail | null>(null);
 const tags = ref<ICaptureTag[]>([]);
 
 const isAdmin = computed(() => userStore.user?.is_admin === true);
 const program = computed(() => detail.value?.program ?? props.programHint ?? null);
+// 確認ダイアログに載せる、録画番組のタイトル (EPG の番組名に使う装飾の記号を除いた文面で表す)
+const setThumbnailProgramTitle = computed(() => {
+    if (program.value === null) return '';
+    return ProgramUtils.decorateProgramInfo(program.value as unknown as IRecordedProgram, 'title').replace(/<[^>]*>/g, '');
+});
 const tagNames = computed(() => {
     const ids = new Set(props.capture?.tag_ids ?? []);
     return tags.value.filter(tag => ids.has(tag.id)).map(tag => tag.name);
@@ -696,11 +727,18 @@ const canSetThumbnail = computed(() => (program.value?.recorded_program_ids.leng
 
 // このキャプチャを、対応する録画番組のサムネイルにする
 const setAsThumbnail = async () => {
+    isSetThumbnailConfirmOpen.value = false;
     if (props.capture === null || program.value === null || program.value.recorded_program_ids.length === 0) {
         return;
     }
+    // 確認ダイアログが開いている間に隣へ送られたり閉じられたりしたら、ダイアログを出したときのキャプチャで終えるために保持する
+    const target = props.capture;
     const videoId = program.value.recorded_program_ids[0];
-    if (await Videos.updateThumbnailFromCapture(videoId, props.capture.id)) {
+    if (await Videos.updateThumbnailFromCapture(videoId, target.id)) {
+        // 待っている間に別のキャプチャへ移っていたら、移り先のサムネイルを変更したことにならないよう画面には出さない
+        if (props.capture?.id !== target.id) {
+            return;
+        }
         Message.success('録画番組のサムネイルを、このキャプチャに変更しました。');
     }
 };
@@ -747,9 +785,10 @@ let hasHistoryEntry = false;
 const onPopState = () => {
     if (hasHistoryEntry) {
         // タグや削除の確認のダイアログが上に重なっているときは、写真アプリと同じく一番上のダイアログだけを閉じ、1枚表示の履歴を積み直す
-        if (isTagDialogOpen.value || isDeleteConfirmOpen.value) {
+        if (isTagDialogOpen.value || isDeleteConfirmOpen.value || isSetThumbnailConfirmOpen.value) {
             isTagDialogOpen.value = false;
             isDeleteConfirmOpen.value = false;
+            isSetThumbnailConfirmOpen.value = false;
             window.history.pushState({ ...window.history.state }, '');
             return;
         }
@@ -777,7 +816,7 @@ const leaveTo = (path: string) => {
 
 // キーボードの操作 (左右で前後、Esc で閉じる、F でお気に入り、T でタグ、I で情報)
 const onKeyDown = (event: KeyboardEvent) => {
-    if (props.capture === null || isTagDialogOpen.value || isDeleteConfirmOpen.value) {
+    if (props.capture === null || isTagDialogOpen.value || isDeleteConfirmOpen.value || isSetThumbnailConfirmOpen.value) {
         return;
     }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
@@ -827,6 +866,7 @@ watch(() => props.capture !== null, (isOpen) => {
         dismissY.value = 0;
         isTagDialogOpen.value = false;
         isDeleteConfirmOpen.value = false;
+        isSetThumbnailConfirmOpen.value = false;
     }
 }, { immediate: true });
 onBeforeUnmount(() => {

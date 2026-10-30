@@ -126,13 +126,22 @@
         <TimeTableSettingsDialog v-model:isOpen="isSettingsDialogOpen" />
         <v-dialog v-model="isNetworkProgramDialogOpen" max-width="640">
             <v-card v-if="networkProgram !== null">
-                <v-card-title class="pt-5 px-6"><span v-html="ProgramUtils.decorateProgramInfo(networkProgram, 'title')"></span></v-card-title>
-                <v-card-text class="px-6">
-                    <div class="text-text-darken-1 mb-3">{{ networkProgramChannel?.name }}・{{ networkProgram.start_time }} ～ {{ networkProgram.end_time }}</div>
-                    <div class="mb-4" v-html="ProgramUtils.decorateProgramInfo(networkProgram, 'description')"></div>
-                    <v-alert type="info" variant="tonal" density="compact">ネットテレビでは録画予約を利用できません。</v-alert>
+                <v-card-title class="d-flex justify-center pt-6 font-weight-bold">
+                    <span v-html="ProgramUtils.decorateProgramInfo(networkProgram, 'title')"></span>
+                </v-card-title>
+                <v-card-text class="pt-2 pb-0 px-6">
+                    <div class="text-text-darken-1 mb-3">{{ networkProgramChannel?.name }}・{{ networkProgramTimeText }}</div>
+                    <div class="pb-4" v-html="ProgramUtils.decorateProgramInfo(networkProgram, 'description')"></div>
+                    <v-alert type="info" variant="tonal" density="compact">
+                        ネットテレビでは録画予約や録画の管理を利用できません。録画予約は放送波 (地デジ・BS・CS) のチャンネルでのみ利用できます。
+                    </v-alert>
                 </v-card-text>
-                <v-card-actions class="px-6 pb-5"><v-spacer /><v-btn variant="text" @click="isNetworkProgramDialogOpen = false">閉じる</v-btn></v-card-actions>
+                <v-card-actions class="pt-4 px-6 pb-6">
+                    <v-spacer />
+                    <v-btn variant="text" color="text" @click="isNetworkProgramDialogOpen = false">
+                        <Icon icon="fluent:dismiss-16-filled" width="16px" /><span class="ml-1">閉じる</span>
+                    </v-btn>
+                </v-card-actions>
             </v-card>
         </v-dialog>
         <!-- 番組詳細ドロワー (予約詳細ドロワーを流用) -->
@@ -187,10 +196,10 @@ const settingsStore = useSettingsStore();
 const serverSettingsStore = useServerSettingsStore();
 const serverSettings = computed(() => serverSettingsStore.server_settings);
 
-// EDCB バックエンドかどうか
-// サーバー設定がまだ取得されていない場合は EDCB と判定しない
+// 共通の録画予約を利用できるバックエンドかどうか
+// サーバー設定がまだ取得されていない場合は録画予約を有効にしない
 // (デフォルト値が 'EDCB' のため、未取得状態で誤って true を返すと Mirakurun バックエンドでも予約操作が有効化されてしまう)
-const isEDCBBackend = computed(() => serverSettingsStore.is_loaded === true && serverSettings.value.general.backend === 'EDCB');
+const isRecordingBackend = computed(() => serverSettingsStore.is_loaded === true && ['EDCB', 'EPGStation'].includes(serverSettings.value.general.backend));
 
 // デフォルト録画設定のキャッシュ (初回 API 呼出時に取得され、以降はキャッシュから返される)
 let defaultRecordSettingsCache: IRecordSettings | null = null;
@@ -205,7 +214,7 @@ async function getDefaultRecordSettings(): Promise<IRecordSettings> {
 
     // EDCB バックエンドでない場合は API を呼ばずにフォールバック値を返す
     // プリセット API は EDCB 専用のため、Mirakurun バックエンドで呼ぶとエラーになる
-    if (isEDCBBackend.value === false) {
+    if (serverSettings.value.general.backend !== 'EDCB') {
         return structuredClone(IRecordSettingsDefault);
     }
     if (defaultRecordSettingsCache !== null) {
@@ -279,6 +288,14 @@ const isDrawerProgramPast = ref(false);
 const isNetworkProgramDialogOpen = ref(false);
 const networkProgram = ref<ITimeTableProgram | null>(null);
 const networkProgramChannel = ref<IChannel | null>(null);
+
+// ネットテレビ番組の放送時刻の表示用テキスト (28 時間表記を適用)
+const networkProgramTimeText = computed(() => {
+    if (networkProgram.value === null) return '';
+    const start_time = dayjs(networkProgram.value.start_time);
+    const end_time = dayjs(networkProgram.value.end_time);
+    return Utils.apply28HourClock(`${start_time.format('YYYY/MM/DD (dd) HH:mm')} ～ ${end_time.format('HH:mm')}`);
+});
 
 
 // チャンネルタイプの選択肢
@@ -645,10 +662,11 @@ async function onShowProgramDetail(programId: string, channel: IChannel, program
             drawerProgram.value = null;
             drawerChannel.value = null;
         } else {
-            // 取得失敗時は mock の IReservation を作成して渡す
-            drawerReservation.value = await createMockReservation(program, channel);
-            drawerProgram.value = null;
-            drawerChannel.value = null;
+            // 予約の完全な情報の取得に失敗したときは、ドロワーを開かずに失敗を通知する
+            // 失敗を「予約なし」と同じ扱いにして mock を渡すと、実在する予約の番組で
+            // 予約追加ボタン (id: -1 判定) が表示されてしまい、重複予約の原因になる
+            Message.error('予約の情報を取得できませんでした。しばらく待ってから、もう一度お試しください。');
+            return;
         }
     } else {
         // 予約がない場合は mock の IReservation を作成して渡す
@@ -728,15 +746,23 @@ async function onQuickReserve(programId: string, channel: IChannel, program: ITi
         Message.warning('ネットテレビでは録画予約を利用できません。');
         return;
     }
-    // 過去番組の場合は何もしない
+    // 過去番組の場合は録画予約の追加・変更ができないことを通知する
+    // 何も表示せずに無音で返すと、利用者はボタンが反応しない理由を理解できない
     const endTime = dayjs(program.end_time);
     if (endTime.isBefore(dayjs())) {
+        Message.warning('過去の番組のため、録画予約を追加・変更できません。');
         return;
     }
 
-    // EDCB バックエンドでない場合はエラー
-    if (isEDCBBackend.value === false) {
-        Message.warning('録画予約機能は EDCB バックエンド選択時のみ利用できます。');
+    // 録画予約に対応するバックエンドを確認する
+    if (isRecordingBackend.value === false) {
+        Message.warning('録画予約機能は EDCB または EPGStation バックエンド選択時に利用できます。');
+        return;
+    }
+
+    // EPGStation の予約は共通の詳細画面で、対象に対応する設定と取消を行う。
+    if (serverSettings.value.general.backend === 'EPGStation' && program.reservation !== null) {
+        await onShowProgramDetail(programId, channel, program);
         return;
     }
 
@@ -745,6 +771,8 @@ async function onQuickReserve(programId: string, channel: IChannel, program: ITi
         // 完全な予約情報を取得
         const reservation = await Reservations.fetchReservation(program.reservation.id);
         if (reservation === null) {
+            // 取得失敗時に無音で返すと、利用者は切り替えが失敗した理由を理解できない
+            Message.error('予約の情報を取得できませんでした。しばらく待ってから、もう一度お試しください。');
             return;
         }
 

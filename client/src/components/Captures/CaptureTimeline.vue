@@ -11,6 +11,11 @@
                 </div>
                 <span class="capture-timeline__header-date">{{ formatDate(section.date) }}</span>
                 <span class="capture-timeline__header-count">{{ section.count.toLocaleString() }}枚</span>
+                <!-- 日単位の読み込みが失敗したときは、プレースホルダーの灰色と同じにせず、失敗したことを示して読み直せるようにする -->
+                <span v-if="isDayFailed(section)" class="capture-timeline__header-failed">
+                    読み込めませんでした
+                    <v-btn size="x-small" variant="text" color="text" @click="retryDay(section)">再読み込み</v-btn>
+                </span>
             </div>
             <template v-for="tile in visibleTiles(section)" :key="tile.key">
                 <div class="capture-timeline__tile" :style="tile.style">
@@ -89,6 +94,19 @@ type DayLoadResult = 'Loaded' | 'Queued' | 'Failed';
 // 読み込み中の日と、その読み込みの完了 (同じ日を待つ呼び出しで完了を共有する)
 // 絞り込みを変えたあとの読み込みを、変える前の読み込みと分けるため、世代と日付の組で持つ
 const loadingDays = new Map<string, Promise<DayLoadResult>>();
+// 読み込みに失敗した日付。灰色のプレースホルダーだけでは「読み込み中」と区別できないため、見出しに失敗を表示する
+const failedDaySet = shallowRef(new Set<string>());
+const isDayFailed = (section: ITimelineSection) => failedDaySet.value.has(section.date);
+/**
+ * 失敗した日の読み込みを取り直す (見出しの「再読み込み」ボタンから呼び出される)
+ * @param section 対象の日
+ */
+const retryDay = (section: ITimelineSection) => {
+    const next = new Set(failedDaySet.value);
+    next.delete(section.date);
+    failedDaySet.value = next;
+    void loadDay(section.date);
+};
 const programs = new Map<number, ICaptureProgram>();
 let generation = 0;  // 絞り込みが変わるたびに増やし、古い読み込みの結果を捨てる
 
@@ -262,10 +280,20 @@ const loadDay = (date: string): Promise<DayLoadResult> => {
             if (myGeneration !== generation || result === null) {
                 if (result === null) {
                     failedDays.set(loadingKey, performance.now());
+                    if (failedDaySet.value.has(date) === false) {
+                        const next = new Set(failedDaySet.value);
+                        next.add(date);
+                        failedDaySet.value = next;
+                    }
                 }
                 return 'Failed';
             }
             failedDays.delete(loadingKey);
+            if (failedDaySet.value.has(date) === true) {
+                const next = new Set(failedDaySet.value);
+                next.delete(date);
+                failedDaySet.value = next;
+            }
             for (const program of result.programs) {
                 programs.set(program.id, program);
             }
@@ -300,6 +328,10 @@ const reload = async () => {
     const myGeneration = generation;
     loadedDays.value = new Map();
     pendingDays.length = 0;
+    // 条件が変わった前提のまま、前の条件で失敗した日の表示を残さない
+    if (failedDaySet.value.size > 0) {
+        failedDaySet.value = new Set();
+    }
     const request = Captures.fetchSections({ axis: props.axis, day_start_hour: props.dayStartHour, filter: props.filter });
     reloadingSections = request;
     const result = await request;
@@ -631,6 +663,16 @@ defineExpose({ reload, getNeighbor, replaceCapture, getProgram });
             margin-left: 10px;
             font-size: 12.5px;
             color: rgb(var(--v-theme-text-darken-1));
+        }
+        // 日単位の読み込みの失敗 (見出しの日の中身が灰色のプレースホルダーのままになる)
+        &-failed {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: auto;
+            padding: 2px 4px 2px 10px;
+            font-size: 12px;
+            color: rgb(var(--v-theme-error));
         }
     }
 

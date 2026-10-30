@@ -39,7 +39,11 @@
                         </div>
                     </div>
 
-                    <div ref="onAirGridElement" class="on-air-week">
+                    <v-alert v-if="isLoadFailed && !isSeasonSwitching" class="mb-4" type="error" variant="tonal" density="compact">
+                    放送中のシリーズを取得できませんでした。KonomiTV サーバーが起動しているか確認してから、もう一度お試しください。
+                    <template #append><v-btn size="small" variant="text" @click="loadOnAirSeries()">再試行</v-btn></template>
+                </v-alert>
+                <div ref="onAirGridElement" class="on-air-week">
                         <header v-for="day in weekdays" :key="`header-${day.index}`"
                             class="on-air-day-header"
                             :class="[
@@ -117,6 +121,13 @@
                                     :bangumiSubjectSummary="expandedSeriesSummary.bangumi_subject_summary"
                                     :bangumiSubjectImageUrl="expandedSeriesSummary.bangumi_subject_image_url"
                                     @heightChanged="rememberDetailsHeight" />
+                                <!-- 概要の取得に失敗したときは、0 件と区別して次の行動を示す。 -->
+                                <div v-else class="on-air-week__loading">
+                                    <p>シリーズ概要を取得できませんでした。KonomiTV サーバーが起動しているか確認してから、もう一度お試しください。</p>
+                                    <v-btn variant="flat" class="mt-2" color="secondary" @click="retrySummary()">
+                                        <Icon icon="mdi-refresh" width="16px" /><span class="ml-1">再試行</span>
+                                    </v-btn>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -167,6 +178,10 @@ const settingsStore = useSettingsStore();
 const expandedSeriesID = ref<number | null>(null);
 const expandedSeriesSummary = ref<ISeriesSummary | null>(null);
 const isSummaryLoading = ref(false);
+// 概要の取得に失敗したことを、未取得 (null) や 0 件と区別するために保持する。
+const isSummaryLoadFailed = ref(false);
+// 放送中一覧の取得に失敗したことを、0 件と区別するために保持する。
+const isLoadFailed = ref(false);
 const onAirGridElement = ref<HTMLElement | null>(null);
 const rememberedDetailsHeight = ref(620);
 
@@ -245,12 +260,26 @@ const syncExpandedSeriesFromRoute = async () => {
     }
     expandedSeriesID.value = parsedSeriesID;
     expandedSeriesSummary.value = null;
+    isSummaryLoadFailed.value = false;
     isSummaryLoading.value = true;
     const summary = await Series.fetchSeriesSummary(parsedSeriesID);
     // 遅れて返った前の作品を、新しく選択した作品の詳細へ上書きしない。
     if (expandedSeriesID.value !== parsedSeriesID) return;
     expandedSeriesSummary.value = summary;
+    // null は「取得に失敗」を表す。存在しない作品は route 同期の段階で既に除外されているため、
+    // 失敗したことを示して、この枠内で再試行できるようにする。
+    isSummaryLoadFailed.value = summary === null;
     isSummaryLoading.value = false;
+};
+
+/**
+ * 詳細の再取得
+ * 画面内の「再試行」ボタンから呼び出される
+ */
+const retrySummary = async () => {
+    if (expandedSeriesID.value !== null) {
+        await syncExpandedSeriesFromRoute();
+    }
 };
 
 const toggleSeries = async (seriesID: number) => {
@@ -330,6 +359,10 @@ const loadOnAirSeries = async () => {
         const urlSeason = route.query.season;
         const validSeason = typeof urlSeason === 'string' && result.seasons.some(s => s.season_id === urlSeason);
         selectedSeasonId.value = validSeason ? urlSeason! : result.current_season_id;
+        isLoadFailed.value = false;
+    } else {
+        // 取得失敗は 0 件と区別して、画面内にエラーと再試行を表示する
+        isLoadFailed.value = true;
     }
     isLoading.value = false;
     await syncExpandedSeriesFromRoute();

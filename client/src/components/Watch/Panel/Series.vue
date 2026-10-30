@@ -76,11 +76,6 @@
                     <div class="series-item__thumbnail-duration">
                         {{ ProgramUtils.getProgramDuration(match.program) }}
                     </div>
-                    <!-- スコアバッジ（デバッグ用） -->
-                    <div v-if="show_debug_scores" class="series-item__score-badge"
-                         v-ftooltip="`タイトル: ${match.breakdown.title}, 時間: ${match.breakdown.time}, CH: ${match.breakdown.channel}, Meta: ${match.breakdown.metadata}`">
-                        {{ match.score }}
-                    </div>
                     <!-- 録画状態インジケーター -->
                     <div v-if="match.program.recorded_video.status === 'Recording'"
                          class="series-item__thumbnail-status series-item__thumbnail-status--recording">
@@ -107,6 +102,17 @@
                     </div>
                 </div>
             </router-link>
+        </div>
+
+        <!-- 取得失敗 -->
+        <!-- 「見つかりません (0 件)」と取得の失敗を区別して、次の行動を示す。 -->
+        <div v-else-if="is_load_failed" class="series-empty">
+            <Icon icon="fluent:tv-20-regular" width="48px" class="series-empty__icon" />
+            <p class="series-empty__text">シリーズ番組を取得できませんでした</p>
+            <v-btn size="small" variant="text" color="text" @click="forceRefresh">
+                <Icon icon="fluent:arrow-clockwise-20-regular" width="16px" class="mr-1" />
+                再試行
+            </v-btn>
         </div>
 
         <!-- 結果なし -->
@@ -137,22 +143,16 @@
 import { mapStores } from 'pinia';
 import { defineComponent } from 'vue';
 
+import Message from '@/message';
 import { IRecordedProgram } from '@/services/Videos';
 import Videos from '@/services/Videos';
 import usePlayerStore from '@/stores/PlayerStore';
 import Utils, { dayjs } from '@/utils';
 import { ProgramUtils } from '@/utils/ProgramUtils';
 
-/** シリーズマッチング結果 */
+/** シリーズ番組リストの1件 */
 interface SeriesMatch {
     program: IRecordedProgram;
-    score: number;
-    breakdown: {
-        title: number;
-        time: number;
-        channel: number;
-        metadata: number;
-    };
 }
 
 export default defineComponent({
@@ -175,7 +175,7 @@ export default defineComponent({
             // 取得した全番組リスト
             all_programs: [] as IRecordedProgram[],
 
-            // シリーズマッチング結果
+            // シリーズ番組リスト
             series_matches: [] as SeriesMatch[],
 
             // API から取得済みのページ数
@@ -193,17 +193,12 @@ export default defineComponent({
             // 手動リフレッシュが必要かどうか
             needs_refresh: false,
 
-            // デバッグ用スコア表示
-            show_debug_scores: false,
+            // 一覧の取得に失敗したことを、0 件と区別するために保持する
+            is_load_failed: false,
         };
     },
     computed: {
         ...mapStores(usePlayerStore),
-
-        // スコア閾値
-        score_threshold(): number {
-            return this.filter_mode === 'strict' ? 70 : 50;
-        },
 
         // 現在の録画番組のシリーズページパス
         current_series_path(): string | null {
@@ -286,13 +281,11 @@ export default defineComponent({
 
             // 同じ番組で既に検索中の場合はスキップ
             if (this.is_loading && this.current_searching_program_id === current_program.id) {
-                console.log('[Series] 既に検索中のためスキップ');
                 return;
             }
 
             // 同じ番組・同じ API 条件で既に検索済みの場合はスキップ
             if (this.current_searching_program_id === current_program.id && this.series_matches.length > 0) {
-                console.log('[Series] 既に検索済みのためスキップ');
                 return;
             }
 
@@ -303,6 +296,7 @@ export default defineComponent({
             this.all_programs = [];
             this.fetched_api_pages = 0;
             this.has_more_api_data = true;
+            this.is_load_failed = false;
 
             try {
                 const result = await Videos.fetchRelatedVideos(
@@ -312,13 +306,17 @@ export default defineComponent({
                     'desc',
                     1,
                 );
-                const related_programs = result?.recorded_programs ?? [];
+                // result が null のときは一覧の取得に失敗している (0 件は空配列で返る)
+                // 失敗を 0 件と同じ「見つかりません」にせず、失敗したことを表示する
+                if (result === null) {
+                    this.is_load_failed = true;
+                    return;
+                }
+
+                const related_programs = result.recorded_programs;
                 this.all_programs = related_programs;
                 this.fetched_api_pages = 1;
-                this.has_more_api_data = result !== null && related_programs.length < result.total;
-
-                console.log(`[Series] 現在の番組: ${current_program.title}`);
-                console.log(`[Series] 取得した番組数: ${related_programs.length}件`);
+                this.has_more_api_data = related_programs.length < result.total;
 
                 // API 側で Series.vue と同等の条件でフィルタ済みの番組を表示用データへ変換する
                 const program_ids = new Set<number>();
@@ -330,21 +328,11 @@ export default defineComponent({
                         program_ids.add(program.id);
                         return true;
                     })
-                    .map(program => ({
-                        program,
-                        score: 0,
-                        breakdown: {
-                            title: 0,
-                            time: 0,
-                            channel: 0,
-                            metadata: 0,
-                        },
-                    }));
-
-                console.log(`[Series] マッチング結果: ${this.series_matches.length}件`);
+                    .map(program => ({ program }));
 
             } catch (error) {
                 console.error('Failed to search series programs:', error);
+                this.is_load_failed = true;
             } finally {
                 this.is_loading = false;
             }
@@ -389,17 +377,7 @@ export default defineComponent({
                             new_programs.forEach(p => existing_program_ids.add(p.id));
 
                             // API 側でフィルタ済みの番組を表示用データへ変換して追加
-                            const new_matches = new_programs.map(program => ({
-                                program,
-                                score: 0,
-                                breakdown: {
-                                    title: 0,
-                                    time: 0,
-                                    channel: 0,
-                                    metadata: 0,
-                                },
-                            }));
-
+                            const new_matches = new_programs.map(program => ({ program }));
                             this.series_matches.push(...new_matches);
                         }
 
@@ -409,16 +387,15 @@ export default defineComponent({
                             break;
                         }
                     } else {
+                        if (result === null) {
+                            // ページ単位の取得失敗を「データなし」と同じ扱いにしない
+                            // 読み込めた分だけ表示を維持し、失敗したことを通知して再度読み込めるようにする
+                            Message.error('追加の番組を取得できませんでした。しばらく待ってから、もう一度お試しください。');
+                        }
                         // データがなくなったら終了
                         this.has_more_api_data = false;
                         break;
                     }
-                }
-
-                console.log(`[Series] ページ${start_page}～${this.fetched_api_pages}を読み込み: +${loaded_count}件`);
-
-                if (!this.has_more_api_data) {
-                    console.log('[Series] これ以上のデータはありません');
                 }
 
             } catch (error) {
@@ -428,276 +405,8 @@ export default defineComponent({
             }
         },
 
-        // シリーズマッチングのスコアを計算
-        calculateSeriesMatch(current: IRecordedProgram, target: IRecordedProgram): SeriesMatch {
-            const title_score = this.calculateTitleScore(current.title, target.title);
-            const time_score = this.calculateTimeScore(current, target);
-            const channel_score = this.calculateChannelScore(current, target);
-            const metadata_score = this.calculateMetadataScore(current, target);
-
-            return {
-                program: target,
-                score: title_score + time_score + channel_score + metadata_score,
-                breakdown: {
-                    title: title_score,
-                    time: time_score,
-                    channel: channel_score,
-                    metadata: metadata_score,
-                },
-            };
-        },
-
-        // タイトルマッチングスコア（最大60点）
-        calculateTitleScore(current_title: string, target_title: string): number {
-            // enclosed_characters を除去
-            const clean_current = this.removeEnclosedCharacters(current_title);
-            const clean_target = this.removeEnclosedCharacters(target_title);
-
-            // エピソード番号前のベースタイトルを抽出
-            const current_base = this.extractBaseTitle(clean_current);
-            const target_base = this.extractBaseTitle(clean_target);
-
-            // 完全一致
-            if (current_base === target_base && current_base.length > 0) {
-                return 60;
-            }
-
-            // 文字列類似度計算
-            const similarity = this.calculateStringSimilarity(current_base, target_base);
-            if (similarity >= 0.9) return 55;
-            if (similarity >= 0.8) return 50;
-            if (similarity >= 0.7) return 40;
-
-            // キーワードマッチング
-            const keywords = this.extractKeywords(current_base);
-            if (keywords.length === 0) return 0;
-
-            const match_rate = this.calculateKeywordMatchRate(keywords, target_base);
-            if (match_rate >= 0.8) return 35;
-            if (match_rate >= 0.6) return 25;
-            if (match_rate >= 0.4) return 15;
-            if (match_rate >= 0.2) return 8;
-
-            return 0;
-        },
-
-        // 時間帯マッチングスコア（最大20点）
-        calculateTimeScore(current: IRecordedProgram, target: IRecordedProgram): number {
-            const current_time = dayjs(current.start_time);
-            const target_time = dayjs(target.start_time);
-
-            // 日付の差分（絶対値）
-            const date_diff_days = Math.abs(current_time.diff(target_time, 'day'));
-
-            // 曜日の差分（0-6）
-            const day_diff = Math.abs((current_time.day() - target_time.day() + 7) % 7);
-
-            // 時間の差分（分単位）
-            const hour_diff = Math.abs(current_time.hour() - target_time.hour());
-            const minute_diff = Math.abs(current_time.minute() - target_time.minute());
-            const total_minute_diff = hour_diff * 60 + minute_diff;
-
-            // 連続放送パターン（毎日放送、例：朝ドラ、帯番組）
-            // 日付差が1-7日以内で時間がほぼ同じ
-            if (date_diff_days >= 1 && date_diff_days <= 7) {
-                if (total_minute_diff <= 5) return 20;   // ほぼ同時刻
-                if (total_minute_diff <= 15) return 18;  // 15分以内
-                if (total_minute_diff <= 30) return 16;  // 30分以内
-            }
-
-            // 週間番組パターン（同じ曜日・時間、7日間隔の可能性高い）
-            if (day_diff === 0) {
-                if (total_minute_diff <= 5) return 20;
-                if (total_minute_diff <= 15) return 18;
-                if (total_minute_diff <= 30) return 15;
-                if (total_minute_diff <= 60) return 10;
-            }
-
-            // それ以外で時間が近い場合（日間番組の可能性）
-            if (total_minute_diff <= 15) return 12;
-            if (total_minute_diff <= 30) return 8;
-            if (total_minute_diff <= 60) return 5;
-
-            return 0;
-        },
-
-        // チャンネルマッチングスコア（最大10点）
-        calculateChannelScore(current: IRecordedProgram, target: IRecordedProgram): number {
-            if (!current.channel || !target.channel) return 0;
-
-            // 同一チャンネル
-            if (current.channel.id === target.channel.id) {
-                return 10;
-            }
-
-            // 同一ネットワーク系列
-            if (current.channel.network_id && target.channel.network_id &&
-                current.channel.network_id === target.channel.network_id) {
-                return 6;
-            }
-
-            // チャンネルタイプが同じ（地上波同士、BS同士など）
-            const current_type = this.getChannelType(current.channel.channel_number);
-            const target_type = this.getChannelType(target.channel.channel_number);
-            if (current_type === target_type) {
-                return 3;
-            }
-
-            return 0;
-        },
-
-        // メタデータマッチングスコア（最大10点）
-        calculateMetadataScore(current: IRecordedProgram, target: IRecordedProgram): number {
-            let score = 0;
-
-            // EPGのシリーズID一致（最重要）
-            if (current.series_id && current.series_id === target.series_id) {
-                return 10;
-            }
-
-            // ジャンル一致
-            if (current.genres.length > 0 && target.genres.length > 0) {
-                // major と middle が完全一致
-                const exact_match = current.genres.some(g1 =>
-                    target.genres.some(g2 => g1.major === g2.major && g1.middle === g2.middle)
-                );
-
-                if (exact_match) {
-                    // 連続物ジャンル（アニメ、ドラマ等）は高配点
-                    const series_genres = ['アニメ・特撮', 'ドラマ', '情報・ワイドショー'];
-                    const is_series_genre = current.genres.some(g => series_genres.includes(g.major));
-                    score += is_series_genre ? 5 : 4;
-                } else {
-                    // major のみ一致
-                    const major_match = current.genres.some(g1 =>
-                        target.genres.some(g2 => g1.major === g2.major)
-                    );
-                    if (major_match) {
-                        score += 2;
-                    }
-                }
-            }
-
-            // 番組の長さが近い（±5分）
-            const duration_diff = Math.abs(current.duration - target.duration);
-            if (duration_diff <= 300) {
-                score += 3;
-            } else if (duration_diff <= 600) {
-                score += 2;
-            } else if (duration_diff <= 900) {
-                score += 1;
-            }
-
-            return Math.min(score, 10);
-        },
-
-        // enclosed_characters を除去
-        removeEnclosedCharacters(title: string): string {
-            const patterns = ProgramUtils.getEnclosedCharactersRemovalPatterns();
-            let result = title;
-            for (const pattern of patterns) {
-                result = result.replace(pattern, '');
-            }
-            return result.trim();
-        },
-
-        // エピソード番号前のベースタイトルを抽出
-        extractBaseTitle(title: string): string {
-            let base = title;
-
-            // まず副標題を除去（「」『』の中身を削除）
-            base = base.replace(/[「『].*?[」』]/g, '').trim();
-
-            // エピソード番号パターンを除去
-            const patterns = [
-                /\(\d+\)/,       // xxx(1)
-                /#\d+/,          // xxx#1
-                /第\d+話/,       // xxx第1話
-                /第\d+回/,       // xxx第1回
-                /【\d+】/,       // xxx【1】
-                /\s+\d+\s*$/,    // xxx 1 (末尾の数字)
-            ];
-
-            for (const pattern of patterns) {
-                const match = base.match(pattern);
-                if (match) {
-                    base = base.substring(0, match.index).trim();
-                    break;
-                }
-            }
-
-            return base;
-        },
-
-        // エピソード番号を抽出
-        extractEpisodeNumber(title: string): number | null {
-            const patterns = [
-                /#(\d+)/,
-                /\((\d+)\)/,
-                /第(\d+)話/,
-                /第(\d+)回/,
-                /【(\d+)】/,
-            ];
-
-            for (const pattern of patterns) {
-                const match = title.match(pattern);
-                if (match && match[1]) {
-                    return parseInt(match[1], 10);
-                }
-            }
-
-            return null;
-        },
-
-        // キーワードを抽出（2文字以上の単語）
-        extractKeywords(title: string): string[] {
-            // スペースで分割
-            const words = title.split(/[\s\u3000]+/).filter(w => w.length >= 2);
-            return words;
-        },
-
-        // キーワードマッチ率を計算
-        calculateKeywordMatchRate(keywords: string[], target: string): number {
-            if (keywords.length === 0) return 0;
-
-            const matched = keywords.filter(keyword => target.includes(keyword)).length;
-            return matched / keywords.length;
-        },
-
-        // 文字列類似度を計算（簡易版）
-        calculateStringSimilarity(str1: string, str2: string): number {
-            if (str1 === str2) return 1;
-            if (str1.length === 0 || str2.length === 0) return 0;
-
-            // 共通部分の長さ / 長い方の長さ
-            const longer = str1.length > str2.length ? str1 : str2;
-            const shorter = str1.length > str2.length ? str2 : str1;
-
-            if (longer.includes(shorter)) {
-                return shorter.length / longer.length;
-            }
-
-            // 共通文字数をカウント
-            const chars1 = new Set(str1);
-            const chars2 = new Set(str2);
-            const common = [...chars1].filter(c => chars2.has(c)).length;
-            const total = Math.max(chars1.size, chars2.size);
-
-            return common / total;
-        },
-
-        // チャンネルタイプを取得
-        getChannelType(channel_number: string): string {
-            const num = parseInt(channel_number);
-            if (num >= 1 && num <= 12) return 'terrestrial'; // 地上波
-            if (num >= 101 && num <= 999) return 'bs'; // BS
-            if (num >= 1000) return 'cs'; // CS
-            return 'other';
-        },
-
         // 手動リフレッシュ
         forceRefresh() {
-            console.log('[Series] 手動リフレッシュを実行');
             // 検索済みフラグをクリアして再検索
             this.current_searching_program_id = null;
             this.needs_refresh = false;
@@ -787,10 +496,6 @@ export default defineComponent({
     &__count {
         font-weight: 600;
         color: rgb(var(--v-theme-text));
-    }
-
-    &__threshold {
-        font-size: 12px;
     }
 
     &__refresh {
@@ -920,19 +625,6 @@ export default defineComponent({
                 animation: recording-pulse 1.5s ease-in-out infinite;
             }
         }
-    }
-
-    &__score-badge {
-        position: absolute;
-        top: 4px;
-        right: 4px;
-        padding: 3px 6px;
-        border-radius: 3px;
-        background: rgba(0, 0, 0, 0.8);
-        color: #4caf50;
-        font-size: 11px;
-        font-weight: 700;
-        line-height: 1;
     }
 
     &__info {

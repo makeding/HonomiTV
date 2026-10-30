@@ -24,13 +24,22 @@
             <div v-if="scanStatus !== null && scanStatus.is_running && scanStatus.has_registered_files" class="capture-header__scan"
                 v-ftooltip.bottom="'保存先フォルダに追加・変更されたキャプチャを探しています。登録済みのキャプチャは、スキャン中もそのまま表示されます。'">
                 <Icon icon="line-md:loading-twotone-loop" width="16px" />
-                <span>新しいキャプチャを探しています... ({{ scanStatus.processed_count.toLocaleString() }} / {{ scanStatus.total_count.toLocaleString() }} 枚)</span>
+                <span class="capture-header__scan-text">新しいキャプチャを探しています... ({{ scanStatus.processed_count.toLocaleString() }} / {{ scanStatus.total_count.toLocaleString() }} 枚)</span>
+                <span class="capture-header__scan-text-short">スキャン中...</span>
             </div>
             <div v-else-if="scanStatus !== null && scanStatus.is_running" class="capture-header__scan"
                 v-ftooltip.bottom="'保存先フォルダのキャプチャをスキャンしています。解析が完了した画像から順次表示されます。'">
                 <Icon icon="line-md:loading-twotone-loop" width="16px" />
-                <span v-if="scanStatus.total_count === 0">保存先フォルダを確認しています...</span>
-                <span v-else>キャプチャをスキャンしています... ({{ scanStatus.processed_count.toLocaleString() }} / {{ scanStatus.total_count.toLocaleString() }} 枚)</span>
+                <span v-if="scanStatus.total_count === 0" class="capture-header__scan-text">保存先フォルダを確認しています...</span>
+                <span v-else class="capture-header__scan-text">キャプチャをスキャンしています... ({{ scanStatus.processed_count.toLocaleString() }} / {{ scanStatus.total_count.toLocaleString() }} 枚)</span>
+                <span class="capture-header__scan-text-short">スキャン中...</span>
+            </div>
+            <!-- 手元の画像のアップロードの経過 (1枚ごとに数秒かかるため、枚数で進捗を出す) -->
+            <div v-if="is_uploading" class="capture-header__scan"
+                v-ftooltip.bottom="'選択した画像をアップロードしています。登録済みのキャプチャは、アップロード中もそのまま表示されます。'">
+                <Icon icon="line-md:loading-twotone-loop" width="16px" />
+                <span class="capture-header__scan-text">画像をアップロードしています... ({{ uploaded_count }} / {{ upload_total }} 枚)</span>
+                <span class="capture-header__scan-text-short">アップロード中...</span>
             </div>
             <v-spacer></v-spacer>
             <!-- スマホの縦画面では、上部のヘッダーを隠しているので、ここに検索の入口を置く -->
@@ -245,13 +254,30 @@ const clearFilters = () => {
 
 // 手元の画像のアップロード (メタデータのない画像でも、ファイルの更新日時を撮影日時として扱う)
 // メニューから選んだファイルと、画面にドロップしたファイルの両方をここで送る
+// 1枚のリクエストは数秒かかるため、見出しに枚数の経過と通知で結果を出す
+const is_uploading = ref(false);
+const uploaded_count = ref(0);
+const upload_total = ref(0);
 const uploadFiles = async (files: File[]) => {
     if (files.length === 0) {
         return;
     }
-    Message.info(`${files.length}枚の画像をアップロードしています...`);
-    const results = await Promise.all(files.map(file => Captures.uploadLocalFile(file)));
+    is_uploading.value = true;
+    uploaded_count.value = 0;
+    upload_total.value = files.length;
+    const results = await Promise.all(
+        files.map(async file => {
+            const capture = await Captures.uploadLocalFile(file);
+            uploaded_count.value++;
+            return capture;
+        }),
+    );
+    is_uploading.value = false;
     const uploaded = results.filter((capture): capture is ICapture => capture !== null);
+    // アップロードできなかった画像があったときは、成功の通知と同じく枚数と次の行動を伝える
+    if (uploaded.length !== files.length) {
+        Message.error(`${files.length - uploaded.length}枚の画像をアップロードできませんでした。しばらく待ってから、もう一度お試しください。`);
+    }
     if (uploaded.length > 0) {
         Message.success(`${uploaded.length}枚の画像をアップロードしました。`);
         emit('uploaded', uploaded);
@@ -433,8 +459,20 @@ onBeforeUnmount(() => {
         background: rgb(var(--v-theme-background-lighten-1));
         font-size: 12px;
         color: rgb(var(--v-theme-text-darken-1));
-        @include smartphone-vertical {
+        // スマホの縦画面でも走っている間の表示を消さず、見出しを飛び出さない長さの文言に入れ替える
+        // (初回のスキャンは数時間かかることがあり、停止したのか待つべきかが分からせる必要がある)
+        &-text-short {
             display: none;
+        }
+        @include smartphone-vertical {
+            padding: 0 8px;
+            font-size: 11px;
+            &-text {
+                display: none;
+            }
+            &-text-short {
+                display: inline;
+            }
         }
     }
     // 並べ替えと絞り込みのボタン (スマホの縦画面ではアイコンだけにする)

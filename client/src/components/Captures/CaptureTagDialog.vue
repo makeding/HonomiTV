@@ -16,7 +16,11 @@
                 <div class="capture-tag-dialog__list">
                     <div v-if="isLoading" class="capture-tag-dialog__empty">タグを読み込んでいます...</div>
                     <div v-else-if="isLoadFailed" class="capture-tag-dialog__empty">
-                        タグの一覧を読み込めませんでした。<br>KonomiTV サーバーが起動しているか確認してから、もう一度お試しください。
+                        タグの一覧を読み込めませんでした。<br>下の「再試行」ボタンでもう一度お試しください。
+                        <v-btn size="small" variant="text" color="text" class="mt-1" @click="retryLoadTags">
+                            <Icon icon="fluent:arrow-clockwise-20-regular" width="16px" />
+                            <span class="ml-1">再試行</span>
+                        </v-btn>
                     </div>
                     <div v-else-if="tags.length === 0" class="capture-tag-dialog__empty">
                         タグはまだありません。<br>下の入力欄から、新しいタグを追加できます。
@@ -79,12 +83,24 @@ watch(() => props.show, async (show) => {
     }
     workingCaptures.value = props.captures.map(capture => ({ ...capture, tag_ids: [...(capture.tag_ids ?? [])] }));
     newTagName.value = '';
+    await loadTags();
+});
+
+/**
+ * タグの一覧を読み込む (ダイアログを開いたときと、「再試行」ボタンから呼び出される)
+ */
+const loadTags = async () => {
     isLoading.value = true;
     const result = await Captures.fetchTags();
     isLoadFailed.value = result === null;
     tags.value = result ?? [];
     isLoading.value = false;
-});
+};
+// 一覧の読み込みに失敗したときの、画面内での再試行
+const retryLoadTags = () => {
+    if (isBusy.value === true) return;
+    void loadTags();
+};
 
 // 選んだキャプチャのうち、そのタグが付いている数で、全部・一部・なしを返す
 const stateOf = (tag: ICaptureTag): 'All' | 'Some' | 'None' => {

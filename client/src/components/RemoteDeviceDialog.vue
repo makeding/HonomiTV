@@ -19,15 +19,28 @@
             <v-progress-linear v-if="isLoading" color="primary" indeterminate />
             <template v-else-if="devices.length > 0">
                 <v-list-item v-for="device in devices" :key="device.device_id" :active="device.device_id === selectedDeviceId"
-                    color="primary" @click="selectDevice(device)">
+                    color="primary" :disabled="isHandoffInProgress" @click="selectDevice(device)">
                     <template #prepend>
                         <Icon icon="fluent:tv-20-regular" width="23px" class="mr-3" />
                     </template>
                     <v-list-item-title>{{ device.device_name }}</v-list-item-title>
                     <v-list-item-subtitle>オンライン</v-list-item-subtitle>
                     <template #append>
+                        <!-- テレビへの移し替え (ハンドオフ) が進行中のときは、二度押しと迷いを防ぐため経過を出す -->
                         <Icon v-if="device.device_id === selectedDeviceId" icon="fluent:checkmark-20-filled" width="21px" />
+                        <Icon v-else-if="isHandoffInProgress && device.device_id === handoffInProgressDeviceId"
+                            icon="line-md:loading-twotone-loop" width="19px" />
                     </template>
+                </v-list-item>
+            </template>
+            <!-- 取得の失敗と「1台もない」を区別する。失敗のまま0件と同じ文言にすると、テレビが壊れたと誤解される -->
+            <template v-else-if="isDeviceListUnavailable">
+                <v-list-item lines="two">
+                    <template #prepend>
+                        <Icon icon="fluent:cloud-off-20-regular" width="23px" class="mr-3" />
+                    </template>
+                    <v-list-item-title>テレビ一覧を更新できませんでした</v-list-item-title>
+                    <v-list-item-subtitle>通信状況を確認してから、右上の更新ボタンでもう一度お試しください</v-list-item-subtitle>
                 </v-list-item>
             </template>
             <v-list-item v-else lines="two">
@@ -57,7 +70,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="remote-device-menu__nhk-exclusion-feedback" aria-live="polite">
+                <div class="remote-device-menu__nhk-exclusion-feedback" :class="{'remote-device-menu__nhk-exclusion-feedback--filled': temporaryNHKHideFeedback !== 'Idle'}" aria-live="polite">
                     <template v-if="temporaryNHKHideFeedback !== 'Idle'">
                         <span>{{ temporaryNHKHideFeedbackMessage }}</span>
                         <v-btn v-if="temporaryNHKHideCanRetry" size="x-small" variant="text" color="primary"
@@ -100,6 +113,9 @@
                     <v-btn icon size="small" variant="text" aria-label="停止" @click="sendControl({type: 'Stop'})">
                         <Icon icon="fluent:stop-20-filled" width="22px" />
                     </v-btn>
+                </div>
+                <div v-if="canSeek === false" class="remote-device-menu__hint remote-device-menu__hint--embedded">
+                    このテレビは再生位置の移動に対応していません。
                 </div>
                 <div v-if="cmSkipMode !== null" class="remote-device-menu__cm-skip">
                     <div class="remote-device-menu__section-title">CM スキップ</div>
@@ -205,6 +221,11 @@ const router = useRouter();
 const isOpen = ref(false);
 const isLoading = ref(false);
 const devices = ref<IRemoteDevice[]>([]);
+// テレビ一覧の取得に失敗していることを、0 台と区別するために保持する
+const isDeviceListUnavailable = ref(false);
+// テレビへの移し替え (ハンドオフ) の進行中。項目の無効化と経過の表示に使う
+const isHandoffInProgress = ref(false);
+const handoffInProgressDeviceId = ref<string | null>(null);
 const isLoggedIn = computed(() => Utils.getAccessToken() !== null);
 const selectedDeviceId = computed(() => settingsStore.settings.selected_remote_device_id);
 const isPinned = computed(() => settingsStore.settings.remote_control_menu_pinned);
@@ -457,8 +478,15 @@ async function refreshDevices(): Promise<void> {
     try {
         const fetchedDevices = await RemoteControl.fetchDevices();
         // 通信失敗時は直前の成功結果を維持し、一瞬だけ「オフライン」に切り替わるのを防ぐ。
-        if (fetchedDevices === null) return;
+        // 失敗は 0 台と区別して、一覧が空のときだけ「更新できない」旨を表示する
+        if (fetchedDevices === null) {
+            if (devices.value.length === 0) {
+                isDeviceListUnavailable.value = true;
+            }
+            return;
+        }
         devices.value = fetchedDevices;
+        isDeviceListUnavailable.value = false;
         isAwaitingDeviceSnapshot = false;
     } finally {
         isLoading.value = isAwaitingDeviceSnapshot && devices.value.length === 0;
@@ -499,6 +527,10 @@ function connectDeviceSubscription(): void {
 }
 
 function selectDevice(device: IRemoteDevice): void {
+    // ハンドオフはネットワーク越しの送信を挟むため、終わるまで項目を押せないようにして進捗を出す
+    if (isHandoffInProgress.value === true) return;
+    isHandoffInProgress.value = true;
+    handoffInProgressDeviceId.value = device.device_id;
     settingsStore.settings.selected_remote_device_id = device.device_id;
     // 視聴画面 (TV Watch / Videos Watch) でブラウザが再生中の場合は、テレビの選択をそのまま
     // 「いま見ているものをテレビへ移す」動作 (ハンドオフ) にする。視聴画面以外では従来どおり、
@@ -508,7 +540,14 @@ function selectDevice(device: IRemoteDevice): void {
         .then((result) => {
             if (result === 'Success') isOpen.value = false;
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+            // 失敗または遷移しなかった場合は押せるように戻す (成功時は isOpen の監視で閉じている)
+            if (isHandoffInProgress.value === true) {
+                isHandoffInProgress.value = false;
+                handoffInProgressDeviceId.value = null;
+            }
+        });
 }
 
 async function sendControl(command: Exclude<RemoteCommand, {type: 'OpenLive' | 'OpenRecording'}>): Promise<boolean> {
@@ -677,10 +716,15 @@ watch(remoteDeviceMenuOpenRequest, () => {
         display: flex;
         gap: 4px;
         align-items: center;
-        min-height: 64px;
-        padding: 0 12px 4px;
+        // Idle では余白を見えなくし、結果を出すときは 1 行ぶんの高さだけ確保して跳ねにくくする
+        min-height: 0;
+        padding: 0 12px;
         color: rgb(var(--v-theme-text-darken-1));
         font-size: 12px;
+        &--filled {
+            min-height: 28px;
+            padding-bottom: 4px;
+        }
     }
 
     &__media-title,
@@ -755,6 +799,11 @@ watch(remoteDeviceMenuOpenRequest, () => {
         margin-top: 6px;
         color: rgb(var(--v-theme-text-darken-1));
         font-size: 11px;
+        // 操作ボタンや CM スキップの行の直後に置くこともある
+        &--embedded {
+            margin-top: 0;
+            padding: 0 12px 6px;
+        }
     }
 
     &__volume {

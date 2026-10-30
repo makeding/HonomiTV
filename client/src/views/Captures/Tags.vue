@@ -23,7 +23,7 @@
                 <v-text-field v-model="newTagName" color="primary" bg-color="background-lighten-1" variant="solo" density="comfortable"
                     hide-details flat placeholder="新しいタグの名前 (例: 作品名、キャラクター名、名シーン)" maxlength="100"
                     @keydown.enter.prevent="createTag" />
-                <v-btn color="primary" variant="flat" height="48" class="capture-tags__create-button"
+                <v-btn color="secondary" variant="flat" height="48" class="capture-tags__create-button"
                     :disabled="newTagName.trim() === ''" @click="createTag">
                     <Icon icon="fluent:add-12-filled" width="18px" />
                     <span class="ml-1">タグを作成</span>
