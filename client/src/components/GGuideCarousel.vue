@@ -42,6 +42,10 @@
                                             番組情報を取得できませんでした。クリックして再試行してください。
                                             <small>[GGUIDE_PROGRAM_UNAVAILABLE]</small>
                                         </span>
+                                        <!-- 画像全体が押せることを常時示す、文字なしの小さなヒント。 -->
+                                        <span v-else class="gguide__hint" aria-hidden="true">
+                                            <v-icon icon="mdi-open-in-new" size="12" />
+                                        </span>
                                     </button>
                                 </div>
                             </div>
@@ -70,7 +74,9 @@
                 <v-card-title class="d-flex align-center">
                     <span>H ガイド</span>
                     <v-spacer />
-                    <v-btn icon="mdi-close" variant="text" aria-label="閉じる" @click="isDetailOpen = false" />
+                    <v-btn variant="text" color="text" aria-label="閉じる" @click="isDetailOpen = false">
+                        <Icon icon="fluent:dismiss-12-filled" width="14px" />
+                    </v-btn>
                 </v-card-title>
                 <v-card-text>
                     <v-img :src="imageURL(detailAsset.id)" :key="`${detailAsset.id}-${imageRetries[detailAsset.id] ?? 0}`"
@@ -439,6 +445,19 @@ onBeforeUnmount(() => {
         background: rgb(var(--v-theme-background) / 95%);
         font-size: 12px;
         small { display: block; }
+    }
+    &__hint {
+        position: absolute;
+        right: 4px;
+        bottom: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2px;
+        border-radius: 4px;
+        background: rgb(0 0 0 / 55%);
+        color: rgb(255 255 255 / 90%);
+        user-select: none;
     }
     :deep(.v-window__controls) { align-items: center; padding: 4px; }
     :deep(.v-window__controls .v-btn) { width: 32px; height: 32px; }

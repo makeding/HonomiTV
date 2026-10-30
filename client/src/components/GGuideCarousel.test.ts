@@ -37,6 +37,7 @@ const options = {global: {stubs: {
     'v-img': image,
     'v-btn': {template: '<button><slot /></button>'},
     'v-progress-circular': true,
+    'v-icon': true,
     'v-dialog': {props: ['modelValue'], template: '<div v-if="modelValue" role="dialog"><slot /></div>'},
     'v-card': {template: '<div><slot /></div>'},
     'v-card-title': {template: '<div><slot /></div>'},
@@ -220,6 +221,8 @@ describe('H ガイドの任意コレクション', () => {
         const wrapper = mount(GGuideCarousel, options);
         await flushPromises();
         await wrapper.get('[aria-label="H ガイドの詳細を開く"]').trigger('click');
+        // 本文のある画像は、クリック可能を示す常時ヒントを持つ。
+        expect(wrapper.find('.gguide__hint').exists()).toBe(true);
         expect(wrapper.get('[role="dialog"]').text()).toContain(advertisement.text);
         expect(wrapper.find('[role="dialog"] script').exists()).toBe(false);
         const links = wrapper.findAll('.gguide-detail__text a');
