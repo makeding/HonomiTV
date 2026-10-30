@@ -13,12 +13,22 @@
                     <Icon icon="fluent:search-20-regular" width="18px" class="text-text-darken-1" />
                 </template>
             </v-text-field>
-            <v-select v-model="recordedFilter" class="capture-programs__recorded"
-                :items="[{ title: 'すべての番組', value: null }, { title: '録画番組あり', value: true }, { title: '録画番組なし', value: false }]"
-                color="primary" bg-color="background-lighten-1" variant="solo" density="comfortable" hide-details flat />
+            <!-- 絞り込みは検索欄の隣、並べ替えは同じ行の右端に配置する (スマホの縦画面では検索欄の下に2つを並べる) -->
+            <div class="capture-programs__selects">
+                <v-select v-model="recordedFilter" class="capture-programs__select"
+                    :items="[{ title: 'すべての番組', value: null }, { title: '録画番組あり', value: true }, { title: '録画番組なし', value: false }]"
+                    color="primary" bg-color="background-lighten-1" variant="solo" density="comfortable" hide-details flat />
+                <v-select v-model="order" class="capture-programs__select capture-programs__select--order"
+                    :items="[{ title: '放送が新しい順', value: 'BroadcastAtDesc' }, { title: '放送が古い順', value: 'BroadcastAtAsc' }]"
+                    color="primary" bg-color="background-lighten-1" variant="solo" density="comfortable" hide-details flat />
+            </div>
         </div>
 
-        <div v-if="isLoadFailed" class="capture-empty">
+        <!-- 最初のページの読み込み中は、ほかのキャプチャの画面と同じく見出しより下の領域の中央にスピナーを表示する -->
+        <div v-if="isLoading && programs.length === 0" class="capture-loading">
+            <Icon icon="line-md:loading-twotone-loop" width="48px" height="48px" />
+        </div>
+        <div v-else-if="isLoadFailed" class="capture-empty">
             <Icon class="capture-empty__icon" icon="fluent:cloud-error-20-regular" width="54px" height="54px" />
             <div class="capture-empty__message">番組の一覧を読み込めませんでした。</div>
             <div class="capture-empty__sub">KonomiTV サーバーが起動しているか確認してから、ページを再読み込みしてください。</div>
@@ -55,8 +65,10 @@
                 </div>
             </router-link>
         </div>
-        <div ref="sentinelRef" class="capture-programs__sentinel">
-            <Icon v-if="isLoading" icon="line-md:loading-twotone-loop" width="28px" />
+        <!-- 番組が0件の間は、読み込み中や空の状態の表示が上下中央に配置されるよう、無限スクロールの監視用の要素の余白をなくす -->
+        <div ref="sentinelRef" class="capture-programs__sentinel" :class="{'capture-programs__sentinel--empty': programs.length === 0}">
+            <!-- 2ページ目以降の読み込み中のみ、一覧の下端にスピナーを表示する -->
+            <Icon v-if="isLoading && programs.length > 0" icon="line-md:loading-twotone-loop" width="28px" />
         </div>
     </CapturePage>
 </template>
@@ -67,7 +79,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import CaptureHeader from '@/components/Captures/CaptureHeader.vue';
 import CapturePage from '@/components/Captures/CapturePage.vue';
-import Captures, { ICaptureProgramAlbum } from '@/services/Captures';
+import Captures, { CaptureProgramSortOrder, ICaptureProgramAlbum } from '@/services/Captures';
 import Utils, { dayjs, ProgramUtils } from '@/utils';
 
 
@@ -82,6 +94,8 @@ const queryInput = ref(String(route.query.query ?? ''));
 // 最初のページを読み込めなかったか (0件と区別して、読み込めなかったことを伝えるため)
 const isLoadFailed = ref(false);
 const recordedFilter = ref<boolean | null>(route.query.has_recorded_program === 'true' ? true : route.query.has_recorded_program === 'false' ? false : null);
+// 並び順は絞り込みと同じく URL のクエリパラメータに保持し、ブラウザバックしても維持されるようにする
+const order = ref<CaptureProgramSortOrder>(route.query.order === 'BroadcastAtAsc' ? 'BroadcastAtAsc' : 'BroadcastAtDesc');
 let generation = 0;
 // 戻る操作でこの一覧へ戻ったときの、離れたときのスクロール位置
 // 続きのページは下端の目印が見えるまで読み込まないので、この位置が画面に入るところまで続けて読み込み、Vue Router が位置を戻せる高さにする
@@ -98,6 +112,7 @@ const loadMore = async () => {
         cursor: nextCursor.value,
         query: String(route.query.query ?? ''),
         has_recorded_program: recordedFilter.value,
+        order: order.value,
     });
     if (myGeneration !== generation) {
         return;
@@ -131,7 +146,10 @@ const applyQuery = () => {
 watch(recordedFilter, (value) => {
     void router.replace({ query: { ...route.query, has_recorded_program: value === null ? undefined : String(value) } });
 });
-watch(() => [route.query.query, route.query.has_recorded_program], () => {
+watch(order, (value) => {
+    void router.replace({ query: { ...route.query, order: value === 'BroadcastAtDesc' ? undefined : value } });
+});
+watch(() => [route.query.query, route.query.has_recorded_program, route.query.order], () => {
     restoringScrollTop = null;
     reset();
 });
@@ -193,6 +211,14 @@ const onLogoError = (event: Event) => {
         display: flex;
         gap: 10px;
         margin-bottom: 16px;
+        // 検索欄と2つの選択欄を1行に並べられない画面幅では、1段目に検索欄を全幅で、2段目に選択欄を並べる
+        @include tablet-vertical {
+            flex-direction: column;
+        }
+        @include smartphone-horizontal {
+            flex-direction: column;
+            gap: 8px;
+        }
         @include smartphone-vertical {
             flex-direction: column;
             gap: 8px;
@@ -205,17 +231,49 @@ const onLogoError = (event: Event) => {
             font-size: 15px !important;
         }
     }
+    // 1行に並べる場合は検索欄の幅を優先して確保し、残りの幅に選択欄を並べる
     &__search {
-        flex: 1;
-        max-width: 420px;
-        @include smartphone-vertical {
-            max-width: none;
+        flex: 0 1 420px;
+        min-width: 0;
+        @include tablet-vertical {
+            flex: none;
         }
-    }
-    &__recorded {
-        flex: 0 0 172px;
+        @include smartphone-horizontal {
+            flex: none;
+        }
         @include smartphone-vertical {
             flex: none;
+        }
+    }
+    &__selects {
+        display: flex;
+        flex: 1 1 auto;
+        gap: 10px;
+        min-width: 0;
+        @include smartphone-horizontal {
+            gap: 8px;
+        }
+        @include smartphone-vertical {
+            gap: 8px;
+        }
+    }
+    // 絞り込みと並べ替えの選択欄は同じ幅に揃える (2段目に並べる場合は、それぞれ半分ずつの幅に広げる)
+    &__select {
+        flex: 0 0 196px;
+        @include tablet-vertical {
+            flex: 1 1 0;
+            min-width: 0;
+        }
+        @include smartphone-horizontal {
+            flex: 1 1 0;
+            min-width: 0;
+        }
+        @include smartphone-vertical {
+            flex: 1 1 0;
+            min-width: 0;
+        }
+        &--order {
+            margin-left: auto;
         }
     }
     &__grid {
@@ -232,6 +290,9 @@ const onLogoError = (event: Event) => {
         justify-content: center;
         padding: 24px 0;
         color: rgb(var(--v-theme-text-darken-1));
+        &--empty {
+            padding: 0;
+        }
     }
 }
 

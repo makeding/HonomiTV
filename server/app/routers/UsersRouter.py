@@ -224,7 +224,7 @@ async def GetSpecifiedUser(
     if not user:
         logging.error(f'[GetSpecifiedUser] Specified user was not found. [username: {username}]')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified user was not found',
         )
 
@@ -285,7 +285,7 @@ async def UserCreateAPI(
     if await User.filter(name=user_create_request.username).get_or_none() is not None:
         logging.warning(f'[UsersRouter][UserCreateAPI] Specified username is duplicated. [username: {user_create_request.username}]')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified username is duplicated',
         )
 
@@ -296,7 +296,7 @@ async def UserCreateAPI(
     if user_create_request.username.lower() in PERMITTED_USERNAMES:
         logging.warning(f'[UsersRouter][UserCreateAPI] Specified username is not permitted. [username: {user_create_request.username}]')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified username is not permitted',
         )
 
@@ -530,7 +530,7 @@ async def AccountLinkCreateAPI(
     ).get_or_none()
     if twitter_account is None:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified Twitter account does not exist',
         )
 
@@ -541,7 +541,7 @@ async def AccountLinkCreateAPI(
     ).get_or_none()
     if bluesky_account is None:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified Bluesky account does not exist',
         )
 
@@ -557,12 +557,12 @@ async def AccountLinkCreateAPI(
         ## 事前確認だけでは複数タブの同時作成を防げないため、競合後に実際の重複側を調べて既存のエラー文へ戻す
         if await AccountLink.filter(twitter_account_id=twitter_account.id).exists() is True:
             raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail = 'Specified Twitter account is already linked',
             ) from ex
         if await AccountLink.filter(bluesky_account_id=bluesky_account.id).exists() is True:
             raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail = 'Specified Bluesky account is already linked',
             ) from ex
         logging.error(
@@ -570,7 +570,7 @@ async def AccountLinkCreateAPI(
             exc_info=ex,
         )
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Failed to create account link',
         ) from ex
     await account_link.fetch_related('twitter_account', 'bluesky_account')
@@ -596,7 +596,7 @@ async def AccountLinkDeleteAPI(
     account_link = await AccountLink.filter(id=link_id, user_id=current_user.id).get_or_none()
     if account_link is None:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified account link does not exist',
         )
     await account_link.delete()
@@ -624,7 +624,7 @@ async def UserUpdateAPI(
         if user_update_request.username != current_user.name and await User.filter(name=user_update_request.username).get_or_none():
             logging.warning(f'[UsersRouter][UserUpdateAPI] Specified username is duplicated. [username: {user_update_request.username}]')
             raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail = 'Specified username is duplicated',
             )
 
@@ -635,7 +635,7 @@ async def UserUpdateAPI(
         if user_update_request.username.lower() in PERMITTED_USERNAMES:
             logging.warning(f'[UsersRouter][UserUpdateAPI] Specified username is not permitted. [username: {user_update_request.username}]')
             raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail = 'Specified username is not permitted',
             )
 
@@ -704,7 +704,7 @@ async def UserUpdateIconAPI(
     if image.content_type != 'image/jpeg' and image.content_type != 'image/png':
         logging.warning(f'[UsersRouter][UserUpdateIconAPI] Please upload JPEG or PNG image. [content_type: {image.content_type}]')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Please upload JPEG or PNG image',
         )
 
@@ -788,7 +788,7 @@ async def SpecifiedUserUpdateAPI(
         if remaining_admins == 0:
             logging.warning('[UsersRouter][SpecifiedUserUpdateAPI] Cannot revoke admin permission because there are no more admins.')
             raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail = 'Cannot revoke admin permission because there are no more admins',
             )
 

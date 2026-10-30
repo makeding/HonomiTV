@@ -22,7 +22,7 @@ class SeriesBroadcastPeriod(TortoiseModel):
         table: str = 'series_broadcast_periods'
         unique_together = (('series', 'channel'),)
 
-    id = fields.IntField(pk=True)
+    id = fields.IntField(primary_key=True)
     series: fields.ForeignKeyRelation[Series] = \
         fields.ForeignKeyField('models.Series', related_name='broadcast_periods', on_delete=fields.CASCADE)
     series_id: int

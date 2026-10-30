@@ -9,7 +9,7 @@
             <slot name="timetable-controls"></slot>
             <div class="header-actions">
                 <!-- スマホ縦画面では Navigation が非表示のため、ヘッダー側にバッジを残す -->
-                <OfflineDownloadBadge />
+                <OfflineDownloadBadge class="offline-download-badge" />
                 <RemoteDeviceActivator class="header-actions__cast" />
                 <div v-if="showSearchButton" v-ripple class="search-button" @click="activateSearch">
                     <Icon icon="fluent:search-20-filled" height="24px" />
@@ -280,6 +280,12 @@ watch(() => props.searchQuery, (searchQueryValue) => {
                 width: 28px;
                 height: 28px;
             }
+        }
+    }
+
+    .offline-download-badge {
+        @include smartphone-horizontal {
+            display: none;
         }
     }
 

@@ -6,7 +6,8 @@ import io
 import os
 import re
 import struct
-from contextlib import AsyncExitStack
+from collections.abc import AsyncGenerator
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 from tortoise import connections, transactions
+from tortoise.backends.base.client import BaseDBAsyncClient
 from tortoise.exceptions import IntegrityError, OperationalError
 from watchfiles import Change, awatch
 
@@ -165,15 +167,48 @@ def NormalizeCapturePath(path: str | Path | anyio.Path) -> str:
     """
     すべての取り込みの経路で、同じ形の絶対パスを作る
     Docker のパスは、設定の読み込み時に付けた /host-rootfs をそのまま残し、実際のアクセスにも同じ値を使う
+    大文字と小文字は、画面にそのまま表示できるよう実際の表記のまま残す (同じファイルかどうかは CapturePathKey() で判定する)
 
     Args:
         path (str | Path | anyio.Path): ファイルまたはフォルダのパス
 
     Returns:
-        str: Windows の大文字小文字と区切りも揃えた絶対パス
+        str: 区切りを揃えた絶対パス
     """
 
-    return os.path.normcase(os.path.abspath(os.path.normpath(str(path))))
+    return os.path.abspath(os.path.normpath(str(path)))
+
+
+def CapturePathKey(path: str) -> str:
+    """
+    同じファイルを指すパスかどうかを判定するためのキーを作る
+    Windows のファイルシステムは大文字と小文字を区別しないため、表記だけが異なるパスを同じキーにする (Linux ではパスをそのまま返す)
+
+    Args:
+        path (str): NormalizeCapturePath() で正規化したパス
+
+    Returns:
+        str: パスの同一性の判定に使うキー
+    """
+
+    return os.path.normcase(path)
+
+
+@asynccontextmanager
+async def InWriteTransaction() -> AsyncGenerator[BaseDBAsyncClient]:
+    """
+    最初の SQL 文で書き込みのロックを取るトランザクションを開始する
+    番組情報の更新は別のプロセスから別の DB 接続で書き込むため、読み取りから始めたトランザクションが書き込みを始めると、
+    ロック待ちのタイムアウト (busy_timeout) を待たずに即座に SQLITE_BUSY のエラー (database is locked) になる
+    行を更新しない UPDATE 文を最初に実行して書き込みのロックを取り、ほかの接続の書き込みが完了するまで待ってから読み取りを始める
+
+    Yields:
+        BaseDBAsyncClient: トランザクションの DB 接続
+    """
+
+    async with transactions.in_transaction() as connection:
+        await connection.execute_query('UPDATE capture_files SET id = id WHERE 0')
+        yield connection
 
 
 def ReadCaptureImage(data: bytes, filename: str, modified_at: datetime) -> CaptureImageInfo:
@@ -285,6 +320,12 @@ class CaptureScanTask:
     # 一括スキャンで1度に一覧から取り出して処理するファイルの数
     SCAN_CHUNK_SIZE: ClassVar[int] = 2000
 
+    # 一括スキャンの開始時に、登録済みの場所を DB から1度に取得する行数
+    SNAPSHOT_PAGE_SIZE: ClassVar[int] = 2000
+
+    # 大文字と小文字だけが異なるパスを、1つのトランザクションで付け替える行数
+    PATH_UPDATE_BATCH_SIZE: ClassVar[int] = 100
+
     # キャプチャとして扱う画像の拡張子
     CAPTURE_EXTENSIONS: ClassVar[tuple[str, ...]] = ('.jpg', '.jpeg', '.png')
 
@@ -332,7 +373,7 @@ class CaptureScanTask:
         self.task: asyncio.Task[None] | None = None
 
         # 絞り込みなしの日付ごとの件数のキャッシュ (CaptureSectionsAPI が参照する)
-        ## 集計の途中で DB が変わった場合に古い集計を書き戻さないよう、invalidateSections() のたびに世代番号を進める
+        ## 集計の途中で DB が変わった場合に古い集計を書き戻さないよう、invalidateSections() と addCaptureToSections() のたびに世代番号を進める
         self.sections_generation = 0
         self.sections_cache: dict[tuple[str, int], schemas.CaptureSections] = {}
 
@@ -346,6 +387,45 @@ class CaptureScanTask:
         self.sections_cache.clear()
 
 
+    def addCaptureToSections(self, capture: Capture) -> None:
+        """
+        新しく登録したキャプチャの登録をコミットした直後に呼び、日付ごとの件数のキャッシュで、そのキャプチャの日付の件数を1つ増やす
+        百万枚規模では集計し直すのに数秒かかり、その間ほかの API のクエリも待たされるため、キャプチャが増えただけのときはキャッシュを捨てない
+
+        Args:
+            capture (Capture): 新しく登録したキャプチャ
+        """
+
+        # 集計の途中だった CaptureSectionsAPI の結果は、このキャプチャを含むかどうか分からないので、キャッシュに書き戻させない
+        self.sections_generation += 1
+
+        for (axis, day_start_hour), cached in list(self.sections_cache.items()):
+
+            # CaptureSectionsAPI の集計と同じく、日本時間の日時を日付の境目の時刻の分だけずらした日付で数える
+            ## 放送日時の分からないキャプチャは、放送日時の軸の件数には含めない
+            if axis == 'CapturedAt':
+                value = capture.captured_at
+            else:
+                value = capture.broadcast_at
+            if value is None:
+                continue
+            date = (value.astimezone(JST) - timedelta(hours=day_start_hour)).date().isoformat()
+
+            # その日の件数を1つ増やす (その日のキャプチャがまだなければ、新しい日付を新しい順の位置に追加する)
+            sections: list[schemas.CaptureSection] = []
+            is_counted = False
+            for section in cached.sections:
+                if section.date == date:
+                    sections.append(schemas.CaptureSection(date=date, count=section.count + 1))
+                    is_counted = True
+                else:
+                    sections.append(section)
+            if is_counted is False:
+                sections.append(schemas.CaptureSection(date=date, count=1))
+                sections.sort(key=lambda section: section.date, reverse=True)
+            self.sections_cache[(axis, day_start_hour)] = schemas.CaptureSections(sections=sections, total=cached.total + 1)
+
+
     def getPathLock(self, path: str) -> asyncio.Lock:
         """
         パスごとのロックを取得する
@@ -357,10 +437,12 @@ class CaptureScanTask:
             asyncio.Lock: そのパスを扱うすべての処理で共通のロック
         """
 
-        lock = self.path_locks.get(path)
+        # Windows で大文字と小文字だけが異なるパスも、同じファイルなので同じロックにする
+        key = CapturePathKey(path)
+        lock = self.path_locks.get(key)
         if lock is None:
             lock = asyncio.Lock()
-            self.path_locks[path] = lock
+            self.path_locks[key] = lock
         return lock
 
 
@@ -463,8 +545,10 @@ class CaptureScanTask:
             raise OSError('Capture changed while being read')
 
         # ファイルの読み込みと画像の解析を終えてから、SQLite の接続のロックを取る
-        async with transactions.in_transaction():
+        async with InWriteTransaction():
             capture = None
+            # まだどこにもない内容のキャプチャを、新しく登録したかどうか
+            is_capture_created = False
             if info is not None:
                 capture = await Capture.get_or_none(file_hash=info.file_hash)
                 if capture is None:
@@ -510,7 +594,7 @@ class CaptureScanTask:
                         broadcast_at = program.start_time + timedelta(seconds=playback_position)
 
                     # 同じハッシュのキャプチャを同時に登録しようとしても1件になるよう、get_or_create で登録する
-                    capture, _ = await Capture.get_or_create(
+                    capture, is_capture_created = await Capture.get_or_create(
                         file_hash = info.file_hash,
                         defaults = {
                             'image_width': info.image_width,
@@ -556,7 +640,13 @@ class CaptureScanTask:
                 if has_other_files is False:
                     await Capture.filter(id=existing_file.capture_id).update(detached_since=datetime.now(JST))
 
-        self.invalidateSections()
+        # 新しいキャプチャが、このパスにあったほかのキャプチャを置き換えずに増えたときは、日付ごとの件数を1つ増やすだけにする
+        ## 同じ内容のキャプチャが別の場所にも置かれたときや、上書きで別のキャプチャが見えなくなったときは、件数が変わるかどうかが分からないので集計し直す
+        is_capture_replaced = existing_file is not None and existing_file.capture_id is not None
+        if capture is not None and is_capture_created is True and is_capture_replaced is False:
+            self.addCaptureToSections(capture)
+        else:
+            self.invalidateSections()
         return capture
 
 
@@ -633,6 +723,8 @@ class CaptureScanTask:
                 for root in roots:
                     registered_count = await CaptureFile.filter(file_path__startswith=os.path.join(root, '')).count()
                     self.batch_scan_status.total_count += registered_count
+                # 登録済みのキャプチャがあれば、画面では初回のスキャンではなく、追加・変更されたキャプチャを探していると表示する
+                self.batch_scan_status.has_registered_files = self.batch_scan_status.total_count > 0
 
                 # 保存先を1つずつ走査する
                 results: list[CaptureRootScanResult] = []
@@ -701,37 +793,44 @@ class CaptureScanTask:
 
         scan_started_at = datetime.now(JST)
 
-        # この保存先に登録済みの場所を取得する (メモリを抑えるため、照合に使う列だけを取得する)
-        ## 保存先がドライブのルート (F:\ や /) のときも区切りが二重にならないよう、末尾の区切りを os.path.join() で1つにそろえる
-        rows = await CaptureFile.filter(file_path__startswith=os.path.join(root, '')).values(
-            'id',
-            'file_path',
-            'file_name',
-            'file_size',
-            'file_created_at',
-            'file_modified_at',
-            'capture_id',
-            'status',
-            'missing_since',
-        )
-        snapshots = cast(list[CaptureFileSnapshot], rows)
-
         # 走査でまだ見つかっていない場所 (走査が終わった時点で残っているものが、消えたファイルの候補になる)
+        ## Windows で大文字と小文字だけが異なるパスも同じファイルとして照合するため、CapturePathKey() のキーで引く
         unseen: dict[str, CaptureFileSnapshot] = {}
-        for snapshot in snapshots:
-            unseen[str(snapshot['file_path'])] = snapshot
-
         # 移動の照合に使う、ファイル名・サイズ・更新日時から登録済みのパスを引く辞書
         paths_by_signature: dict[tuple[str, int, datetime], list[str]] = {}
-        for snapshot in snapshots:
-            signature = (snapshot['file_name'], snapshot['file_size'], snapshot['file_modified_at'])
-            paths_by_signature.setdefault(signature, []).append(snapshot['file_path'])
-
         # 消えたファイルの割合は、すでに Missing の場所を除いて数える
         original_count = 0
-        for snapshot in snapshots:
-            if snapshot['status'] != 'Missing':
-                original_count += 1
+
+        # この保存先に登録済みの場所を、ID の順に一定の件数ずつ取得する (メモリを抑えるため、照合に使う列だけを取得する)
+        ## Tortoise ORM は取得した行を辞書に変換する処理をイベントループ上で実行するため、百万件を一度に取得すると、
+        ## 変換が終わるまでのあいだ (十数秒以上) ほかのすべての API が応答しなくなる
+        ## 保存先がドライブのルート (F:\ や /) のときも区切りが二重にならないよう、末尾の区切りを os.path.join() で1つにそろえる
+        last_id = 0
+        while True:
+            rows = await CaptureFile.filter(
+                file_path__startswith = os.path.join(root, ''),
+                id__gt = last_id,
+            ).order_by('id').limit(self.SNAPSHOT_PAGE_SIZE).values(
+                'id',
+                'file_path',
+                'file_name',
+                'file_size',
+                'file_created_at',
+                'file_modified_at',
+                'capture_id',
+                'status',
+                'missing_since',
+            )
+            if len(rows) == 0:
+                break
+            last_id = rows[-1]['id']
+            for snapshot in cast(list[CaptureFileSnapshot], rows):
+                unseen[CapturePathKey(snapshot['file_path'])] = snapshot
+                signature = (snapshot['file_name'], snapshot['file_size'], snapshot['file_modified_at'])
+                paths_by_signature.setdefault(signature, []).append(snapshot['file_path'])
+                if snapshot['status'] != 'Missing':
+                    original_count += 1
+
         found_count = 0
         is_complete = True
 
@@ -756,8 +855,9 @@ class CaptureScanTask:
             # 同じ保存先の中で、ファイル名・サイズ・更新日時が同じで、まだ見つかっていない場所を候補にする
             candidate_ids: dict[str, int] = {}
             for candidate_path in paths_by_signature.get((file_name, size, modified_at), []):
-                if candidate_path in unseen:
-                    candidate_ids[candidate_path] = unseen[candidate_path]['id']
+                candidate = unseen.get(CapturePathKey(candidate_path))
+                if candidate is not None:
+                    candidate_ids[candidate_path] = candidate['id']
 
             # 同じ保存先に候補がなければ、保存先をまたぐ移動の候補を DB から探す
             if len(candidate_ids) == 0:
@@ -770,12 +870,12 @@ class CaptureScanTask:
                     candidate_ids[candidate_row['file_path']] = candidate_row['id']
 
             for old_path, old_id in candidate_ids.items():
-                if old_path == path:
+                if CapturePathKey(old_path) == CapturePathKey(path):
                     continue
 
                 # 古いパスと新しいパスの両方のロックを、パスの順に取る (取る順を揃えてデッドロックを避ける)
                 async with AsyncExitStack() as stack:
-                    for locked_path in sorted((old_path, path)):
+                    for locked_path in sorted((old_path, path), key=CapturePathKey):
                         await stack.enter_async_context(self.getPathLock(locked_path))
 
                     # 古いパスにまだファイルがあれば移動ではない (読めない場合も移動とは判定しない)
@@ -803,7 +903,7 @@ class CaptureScanTask:
 
                     # 新しいパスがまだ登録されていなければ、古い場所の行を新しいパスに付け替える
                     is_moved = False
-                    async with transactions.in_transaction():
+                    async with InWriteTransaction():
                         if not await CaptureFile.filter(file_path=path).exists():
                             if current_file.capture_id is not None:
                                 moved_status = 'Available'
@@ -816,7 +916,7 @@ class CaptureScanTask:
                                 status = moved_status,
                                 missing_since = None,
                             )
-                            unseen.pop(old_path, None)
+                            unseen.pop(CapturePathKey(old_path), None)
                             is_moved = True
 
                     if is_moved is True:
@@ -847,12 +947,16 @@ class CaptureScanTask:
             for chunk_end in range(len(files), 0, -self.SCAN_CHUNK_SIZE):
                 chunk = files[max(0, chunk_end - self.SCAN_CHUNK_SIZE):chunk_end]
 
+                # 変更はないが、大文字と小文字だけが異なるパスで登録されている場所の ID と実際のパス (塊ごとにまとめて付け替える)
+                case_changed_files: list[tuple[int, str]] = []
+
                 async def Process(entry: tuple[str, int, datetime, datetime]) -> None:
                     nonlocal is_complete
                     path, size, created_at, modified_at = entry
+                    key = CapturePathKey(path)
                     try:
                         # 2回目以降の走査では、一覧の stat の情報だけで変更のないファイルを飛ばす
-                        known = unseen.get(path)
+                        known = unseen.get(key)
                         if known is not None:
                             is_unchanged = (
                                 known['file_size'] == size and
@@ -860,11 +964,20 @@ class CaptureScanTask:
                                 known['file_modified_at'] == modified_at and
                                 known['status'] != 'Missing'
                             )
+
+                            # Windows で大文字と小文字だけが異なるパスで登録されている場所は、DB のパスを実際の表記に付け替える
+                            ## 以前の版が小文字にそろえて登録した場所や、名前の大文字と小文字だけを変更したファイルが該当する
+                            ## 変更のないファイルは塊の処理を終えてからまとめて付け替え、変更のあるファイルは登録し直す前に付け替える
+                            is_case_changed = known['file_path'] != path
                             if is_unchanged is True:
+                                if is_case_changed is True:
+                                    case_changed_files.append((known['id'], path))
                                 return
+                            if is_case_changed is True:
+                                await CaptureFile.filter(id=known['id']).update(file_path=path, file_name=Path(path).name)
 
                         # 新しく見つかったパスは、まず別の場所からの移動かを照合する
-                        if path not in unseen:
+                        else:
                             is_moved = await MoveCaptureFile(path, size, created_at, modified_at)
                             if is_moved is True:
                                 return
@@ -879,7 +992,7 @@ class CaptureScanTask:
                         logging.warning(f'Cannot inspect capture: {path}', exc_info=ex)
 
                     finally:
-                        unseen.pop(path, None)
+                        unseen.pop(key, None)
                         self.batch_scan_status.processed_count += 1
                         self.batch_scan_status.total_count = max(
                             self.batch_scan_status.total_count,
@@ -891,6 +1004,23 @@ class CaptureScanTask:
                 for offset in range(0, len(chunk), self.NETWORK_DRIVE_CONCURRENCY):
                     entries = chunk[offset:offset + self.NETWORK_DRIVE_CONCURRENCY]
                     await asyncio.gather(*(Process(entry) for entry in entries))
+
+                # 大文字と小文字だけが異なる場所を、一定の件数ずつ1つのトランザクションにまとめて付け替える
+                ## 以前の版で登録した Windows の環境では、更新後の最初の走査で登録済みのすべての場所が該当するため、1件ずつコミットしない
+                ## SQLite の接続は API のクエリと共有しているため、1つのトランザクションを大きくすると、その間 API のクエリが待たされる
+                if len(case_changed_files) > 0:
+                    try:
+                        for offset in range(0, len(case_changed_files), self.PATH_UPDATE_BATCH_SIZE):
+                            async with InWriteTransaction():
+                                for file_id, path in case_changed_files[offset:offset + self.PATH_UPDATE_BATCH_SIZE]:
+                                    # 走査の途中で監視やアップロードが実際の表記のパスを登録していた場合は、付け替えずに残す
+                                    try:
+                                        await CaptureFile.filter(id=file_id).update(file_path=path, file_name=Path(path).name)
+                                    except IntegrityError as ex:
+                                        logging.warning(f'Cannot update capture path: {path}', exc_info=ex)
+                    except OperationalError as ex:
+                        is_complete = False
+                        logging.warning(f'Cannot update capture paths in {folder}', exc_info=ex)
 
         return CaptureRootScanResult(
             unseen = unseen,
@@ -918,7 +1048,8 @@ class CaptureScanTask:
             return False
 
         scan_started_at = result.started_at
-        for path, snapshot in result.unseen.items():
+        for snapshot in result.unseen.values():
+            path = snapshot['file_path']
             async with self.getPathLock(path):
 
                 # 走査のあとで同じパスに戻ってきていれば、消えていないので何もしない (読めない場合も確定しない)
@@ -930,7 +1061,7 @@ class CaptureScanTask:
                 except OSError:
                     continue
 
-                async with transactions.in_transaction():
+                async with InWriteTransaction():
 
                     # 走査を始めたあとに行が変わっていたら (アップロードや付け替え)、確定しない
                     current_file = await CaptureFile.get_or_none(id=snapshot['id'], file_path=path)
@@ -1170,10 +1301,12 @@ class CaptureScanTask:
         capture = await Capture.get_or_none(id=capture_id)
         if capture is None:
             return True
-        files = await CaptureFile.filter(capture_id=capture_id).order_by('file_path')
+        files = await CaptureFile.filter(capture_id=capture_id)
         async with AsyncExitStack() as stack:
 
             # 削除の途中で一括スキャンが登録し直さないよう、すべての場所のロックを取る
+            ## 移動の照合と同じく、ロックのキーの順に取る (取る順を揃えてデッドロックを避ける)
+            files.sort(key=lambda file: CapturePathKey(file.file_path))
             for file in files:
                 await stack.enter_async_context(self.getPathLock(file.file_path))
 
@@ -1206,7 +1339,7 @@ class CaptureScanTask:
 
             # 削除の途中で場所が追加されたり、移動の照合で別のパスへ付け替えられたりしていたら、DB の行は残す
             ## 付け替えられた場所は古いパスの削除が FileNotFoundError で飛ばされ、移動先の画像が残っているため、ID とパスの組で照合する
-            async with transactions.in_transaction():
+            async with InWriteTransaction():
                 current_files: set[tuple[int, str]] = set()
                 for current_file in await CaptureFile.filter(capture_id=capture_id).values('id', 'file_path'):
                     current_files.add((current_file['id'], current_file['file_path']))

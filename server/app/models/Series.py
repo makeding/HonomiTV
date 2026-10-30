@@ -24,7 +24,7 @@ class Series(TortoiseModel):
     class Meta(TortoiseModel.Meta):
         table: str = 'series'
 
-    id = fields.IntField(pk=True)
+    id = fields.IntField(primary_key=True)
     normalized_title = fields.CharField(512, unique=True)
     title = fields.TextField()
     description = fields.TextField()

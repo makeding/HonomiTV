@@ -463,7 +463,7 @@ async def GetRecordedProgram(video_id: Annotated[int, Path(description='録画�
     if recorded_program is None or recorded_program.recorded_video.status == 'Missing':
         logging.error(f'[VideosRouter][GetRecordedProgram] Specified video_id was not found. [video_id: {video_id}]')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified video_id was not found',
         )
 
@@ -1416,7 +1416,7 @@ async def VideoDownloadAPI(
             f'[video_id: {recorded_program.id}]'
         )
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'The recorded video is recording',
         )
 
@@ -1754,7 +1754,7 @@ async def VideoThumbnailUpdateAPI(
     thumbnail_info = recorded_program.recorded_video.thumbnail_info
     if thumbnail_info is None:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'The thumbnails of the recorded program have not been generated yet',
         )
 
@@ -1762,7 +1762,7 @@ async def VideoThumbnailUpdateAPI(
     capture = await Capture.get_or_none(id=body.capture_id)
     if capture is None:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified capture_id was not found',
         )
     is_same_program = await CaptureProgram.filter(
@@ -1774,7 +1774,7 @@ async def VideoThumbnailUpdateAPI(
     ).exists()
     if is_same_program is False:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'The capture does not belong to the recorded program',
         )
 
@@ -1793,7 +1793,7 @@ async def VideoThumbnailUpdateAPI(
             break
     if image_data is None:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'The capture file was not found or is not readable',
         )
 
@@ -1804,7 +1804,7 @@ async def VideoThumbnailUpdateAPI(
         image = None
     if image is None:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'The capture file is not a valid image',
         )
     # IMREAD_COLOR の返す画像は、入力形式にかかわらず8ビット BGR の3チャンネルになる

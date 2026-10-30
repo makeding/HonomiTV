@@ -1,5 +1,12 @@
 # Selective upstream integration
 
+## Full upstream merge (2026-10-30)
+
+- Merge upstream/master at `9a48e789` into h-dev, preserving the fork playback, Hybridcast, device integration and device-local time display.
+- Adopt upstream program-update batching, capture scanning/query improvements and capture UI fixes. Number the capture-file status index migration as 21 and generate its model state from this fork.
+- Preserve tracked `client/dist` from pre-merge `0cf34f9f`; keep existing local changes separate. Release artifacts remain owned by CI. No service restart or deployment is performed.
+- Client ESLint/TypeScript and server Ruff/Pyright passed (existing FastAPI deprecation warnings remain). Eight program/capture tests and four snapshots passed, including both backend update paths under concurrent writes. Live-service and real broadcast acceptance are not included.
+
 ## Full upstream merge (2026-10-28)
 
 - Merge upstream/master at `8cf7f0fd` into h-dev, retaining fork playback, Hybridcast, BS4K, CM analysis, notifications and device-local time display.

@@ -18,14 +18,15 @@
             </div>
             <h2 class="capture-header__title">
                 <span class="capture-header__title-text">{{ title }}</span>
-                <!-- 読み込み中は、録画番組の検索結果と同じく、枚数の代わりに読み込み中であることを出す -->
-                <span v-if="loadingLabel !== null" class="capture-header__title-count capture-header__title-count--loading">
-                    <Icon icon="line-md:loading-twotone-loop" width="18px" height="18px" />
-                    <span>{{ loadingLabel }}</span>
-                </span>
-                <span v-else-if="total !== null" class="capture-header__title-count">{{ total.toLocaleString() }}枚</span>
+                <span v-if="total !== null" class="capture-header__title-count">{{ total.toLocaleString() }}枚</span>
             </h2>
-            <div v-if="scanStatus !== null && scanStatus.is_running" class="capture-header__scan"
+            <!-- 登録済みのキャプチャがあるときは、初回のスキャンではなく、追加・変更されたキャプチャを探していることを表示する -->
+            <div v-if="scanStatus !== null && scanStatus.is_running && scanStatus.has_registered_files" class="capture-header__scan"
+                v-ftooltip.bottom="'保存先フォルダに追加・変更されたキャプチャを探しています。登録済みのキャプチャは、スキャン中もそのまま表示されます。'">
+                <Icon icon="line-md:loading-twotone-loop" width="16px" />
+                <span>新しいキャプチャを探しています... ({{ scanStatus.processed_count.toLocaleString() }} / {{ scanStatus.total_count.toLocaleString() }} 枚)</span>
+            </div>
+            <div v-else-if="scanStatus !== null && scanStatus.is_running" class="capture-header__scan"
                 v-ftooltip.bottom="'保存先フォルダのキャプチャをスキャンしています。解析が完了した画像から順次表示されます。'">
                 <Icon icon="line-md:loading-twotone-loop" width="16px" />
                 <span v-if="scanStatus.total_count === 0">保存先フォルダを確認しています...</span>
@@ -145,7 +146,6 @@ export type CaptureTypeFilterKey = 'is_caption_composited' | 'is_comment_composi
 const props = withDefaults(defineProps<{
     title: string;
     total?: number | null;
-    loadingLabel?: string | null;
     activeTab: 'Timeline' | 'Programs' | 'Favorites' | 'Tags' | null;
     showTimelineControls?: boolean;
     showBackButton?: boolean;
@@ -155,7 +155,6 @@ const props = withDefaults(defineProps<{
     queryTargets?: CaptureQueryTarget[];
 }>(), {
     total: null,
-    loadingLabel: null,
     showTimelineControls: false,
     showBackButton: false,
     showQueryTargets: false,
@@ -421,13 +420,6 @@ onBeforeUnmount(() => {
                 margin-left: 8px;
                 font-size: 12.5px;
             }
-            &--loading {
-                display: flex;
-                align-items: center;
-                align-self: center;
-                gap: 4px;
-                flex-shrink: 0;
-            }
         }
     }
     &__scan {
@@ -615,6 +607,12 @@ onBeforeUnmount(() => {
         user-select: none;
         transition: color 0.15s ease, border-color 0.15s ease;
         white-space: nowrap;
+        // スマホの横画面では左側にナビゲーションが表示されて横幅が狭くなるため、4つのタブが収まるよう文字数に応じて幅を割り当てる
+        @include smartphone-horizontal {
+            flex: 1 1 auto;
+            min-width: 0;
+            padding: 0 8px;
+        }
         // スマホの縦画面では、4つのタブが画面の幅に収まるよう、アイコンを小さくして文字の長さに応じて幅を配る
         // iPhone SE などの小さいスマホでは、アイコンを並べる幅が足りないのでアイコンを外す
         @include smartphone-vertical {

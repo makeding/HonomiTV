@@ -7,6 +7,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 from datetime import date as Date
 from datetime import datetime, timedelta
@@ -61,6 +62,9 @@ router = APIRouter(
 
 # キャプチャの一覧の並び順
 CaptureOrder = Literal['CapturedAtDesc', 'CapturedAtAsc', 'BroadcastAtDesc', 'BroadcastAtAsc', 'PlaybackPosition']
+
+# 放送回の一覧の並び順 (値の名前は、キャプチャの一覧の並び順のうち放送日時順のものに合わせる)
+CaptureProgramOrder = Literal['BroadcastAtDesc', 'BroadcastAtAsc']
 
 # 検索語を探す範囲 (1つも指定しない場合は、字幕・番組名・番組概要・チャンネル名・ファイル名のすべてから探す)
 CaptureQueryTarget = Literal['CaptionText', 'ProgramTitle', 'ProgramDescription']
@@ -206,7 +210,7 @@ async def BuildCaptureWhere(filters: CaptureFilters, user: User | None) -> tuple
         is_program_key_complete = all(value is not None for value in program_key)
         if is_program_key_complete is False or filters.start_time is None:
             raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail = 'Specify all four program key fields',
             )
         conditions.append('p.network_id = ? AND p.service_id = ? AND p.event_id = ? AND p.start_time = ?')
@@ -276,6 +280,8 @@ async def BuildCaptureWhere(filters: CaptureFilters, user: User | None) -> tuple
     # 検索語は、録画番組の検索と同じく空白で区切った語の AND による部分一致で探す
     ## 範囲の指定がないか、3つの範囲をすべて指定した場合は、字幕・番組名・番組概要・チャンネル名・ファイル名のどれかに含まれていれば当てはまる
     ## 範囲を指定した場合は、指定した範囲のどれかに含まれていれば当てはまる
+    ## 番組名・番組概要・チャンネル名は放送回 (capture_programs) の数千行の中で、ファイル名は capture_files の中で1回だけ探し、
+    ## 当てはまった放送回とキャプチャの ID で絞り込む (キャプチャ1枚ごとに放送回やファイルを探し直すと、百万枚規模では数倍遅くなる)
     query_targets = set(filters.query_targets or [])
     is_all_targets = len(query_targets) == 0 or query_targets == {'CaptionText', 'ProgramTitle', 'ProgramDescription'}
     for keyword in (filters.query or '').split():
@@ -286,15 +292,16 @@ async def BuildCaptureWhere(filters: CaptureFilters, user: User | None) -> tuple
             conditions.append("""
                 (
                     LOWER(c.caption_text) LIKE ? OR
-                    LOWER(p.title) LIKE ? OR
-                    LOWER(p.description) LIKE ? OR
-                    EXISTS (
-                        SELECT 1 FROM channels ch
-                        WHERE ch.network_id = p.network_id AND ch.service_id = p.service_id AND LOWER(ch.name) LIKE ?
+                    c.capture_program_id IN (
+                        SELECT p2.id FROM capture_programs p2
+                        WHERE LOWER(p2.title) LIKE ? OR LOWER(p2.description) LIKE ? OR EXISTS (
+                            SELECT 1 FROM channels ch
+                            WHERE ch.network_id = p2.network_id AND ch.service_id = p2.service_id AND LOWER(ch.name) LIKE ?
+                        )
                     ) OR
-                    EXISTS (
-                        SELECT 1 FROM capture_files f
-                        WHERE f.capture_id = c.id AND LOWER(f.file_name) LIKE ?
+                    c.id IN (
+                        SELECT f.capture_id FROM capture_files f
+                        WHERE LOWER(f.file_name) LIKE ?
                     )
                 )
             """.strip())
@@ -305,12 +312,17 @@ async def BuildCaptureWhere(filters: CaptureFilters, user: User | None) -> tuple
         target_conditions: list[str] = []
         if 'CaptionText' in query_targets:
             target_conditions.append('LOWER(c.caption_text) LIKE ?')
+            params.append(pattern)
+        program_conditions: list[str] = []
         if 'ProgramTitle' in query_targets:
-            target_conditions.append('LOWER(p.title) LIKE ?')
+            program_conditions.append('LOWER(p2.title) LIKE ?')
+            params.append(pattern)
         if 'ProgramDescription' in query_targets:
-            target_conditions.append('LOWER(p.description) LIKE ?')
+            program_conditions.append('LOWER(p2.description) LIKE ?')
+            params.append(pattern)
+        if len(program_conditions) > 0:
+            target_conditions.append(f'c.capture_program_id IN (SELECT p2.id FROM capture_programs p2 WHERE {" OR ".join(program_conditions)})')
         conditions.append(f'({" OR ".join(target_conditions)})')
-        params.extend([pattern] * len(target_conditions))
 
     # 利用できる場所があるかの EXISTS は最後に置き、ほかの条件に当てはまったキャプチャだけで評価させる
     conditions.append(CAPTURE_AVAILABLE_CONDITION)
@@ -432,7 +444,7 @@ def DecodeCursor(cursor: str, signature: str, key_count: int) -> list[str | int 
         return parsed.keys
     except (ValueError, ValidationError) as ex:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Invalid cursor',
         ) from ex
 
@@ -763,7 +775,7 @@ async def CaptureUploadAPI(
             modified_at = datetime.fromtimestamp(file_modified_at / 1000, JST)
         except (ValueError, OverflowError, OSError) as ex:
             raise HTTPException(
-                status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail = 'Invalid file_modified_at',
             ) from ex
 
@@ -772,7 +784,7 @@ async def CaptureUploadAPI(
     if filename in ('', '.', '..') or '/' in filename or '\\' in filename or '\x00' in filename or ':' in filename:
         logging.error('[CapturesRouter][CaptureUploadAPI] Invalid filename was specified.')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Specified filename is invalid',
         )
 
@@ -781,7 +793,7 @@ async def CaptureUploadAPI(
     if filename.lower().endswith(('.jpg', '.jpeg', '.png')) is False:
         logging.error('[CapturesRouter][CaptureUploadAPI] Filename with unsupported extension was specified.')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Please upload JPEG or PNG image',
         )
 
@@ -793,7 +805,7 @@ async def CaptureUploadAPI(
     except (UnidentifiedImageError, SyntaxError, ValueError, Image.DecompressionBombError, OSError) as ex:
         logging.error('[CapturesRouter][CaptureUploadAPI] Invalid image file was uploaded.')
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Please upload JPEG or PNG image',
         ) from ex
 
@@ -864,7 +876,7 @@ async def CaptureUploadAPI(
                     capture = await scanner.registerFile(path, data=data)
                     if capture is None:
                         raise HTTPException(
-                            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail = 'Please upload JPEG or PNG image',
                         )
                     return (await SerializeCaptures(await GetCaptureRows([capture.id]), user))[0]
@@ -884,7 +896,7 @@ async def CaptureUploadAPI(
 
                     if isinstance(ex, PermissionError):
                         raise HTTPException(
-                            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail = 'Permission denied to save the file',
                         ) from ex
 
@@ -894,12 +906,12 @@ async def CaptureUploadAPI(
                         detail = 'No space left on the device'
                     logging.error('Cannot save capture image.', exc_info=ex)
                     raise HTTPException(
-                        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
                         detail = detail,
                     ) from ex
 
     raise HTTPException(
-        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail = 'No available folder to save the file',
     )
 
@@ -971,12 +983,18 @@ async def CaptureSectionsAPI(
     ## DB の日時は +09:00 付きで保存されていて、SQLite の date() は UTC に直して扱うので、9時間を足して日本時間に戻す
     date_expression = f"date(c.{column}_at, '+9 hours', '-{day_start_hour} hours')"
 
+    # 放送回の列 (p.) を条件に使う場合のみ、capture_programs テーブルを JOIN する
+    ## JOIN しない場合は、captures テーブルの行を読み込まずに、日時と ID のインデックスだけを走査して件数を数えられる
+    program_join = ''
+    if any(re.search(r'\bp\.', condition) is not None for condition in conditions):
+        program_join = 'LEFT JOIN capture_programs p ON p.id = c.capture_program_id'
+
     rows = await connections.get('default').execute_query_dict(f"""
         SELECT
             {date_expression} AS date,
             COUNT(*) AS count
         FROM captures c
-        LEFT JOIN capture_programs p ON p.id = c.capture_program_id
+        {program_join}
         WHERE {' AND '.join(conditions)}
         GROUP BY {date_expression}
         ORDER BY date DESC
@@ -1004,9 +1022,10 @@ async def CaptureProgramsAPI(
     limit: Annotated[int, Query(ge=1, le=200, description='1ページに取得する最大の放送回の数。')] = 60,
     query: Annotated[str | None, Query(description='検索キーワード。番組名かチャンネル名に部分一致する放送回を検索する。')] = None,
     has_recorded_program: Annotated[bool | None, Query(description='同じ番組の録画番組があるかどうかで絞り込む。')] = None,
+    order: Annotated[CaptureProgramOrder, Query(description='並び順 (BroadcastAtDesc or BroadcastAtAsc) 。')] = 'BroadcastAtDesc',
 ):
     """
-    キャプチャのある放送回を、放送の新しい順にアルバムとして一覧する。<br>
+    キャプチャのある放送回を、放送日時の順 (既定は新しい順) にアルバムとして一覧する。<br>
     半角または全角スペースで区切ることで、複数のキーワードによる AND 検索が可能。
     """
 
@@ -1057,18 +1076,24 @@ async def CaptureProgramsAPI(
         conditions.append(f'NOT {recorded_program_condition}')
 
     # 放送開始日時と ID の組で、前のページの続きから取得する
+    ## 降順なら前のページの最後の行より前の行を、昇順なら後ろの行を取得する
+    is_descending = order == 'BroadcastAtDesc'
     user_id = user.id if user is not None else None
-    signature = CursorSignature(['Programs', query, has_recorded_program, user_id])
+    signature = CursorSignature(['Programs', query, has_recorded_program, order, user_id])
     if cursor is not None:
-        conditions.append('(p.start_time, p.id) < (?, ?)')
+        if is_descending:
+            conditions.append('(p.start_time, p.id) < (?, ?)')
+        else:
+            conditions.append('(p.start_time, p.id) > (?, ?)')
         params.extend(DecodeCursor(cursor, signature, 2))
 
     # 放送回を取得する (次のページがあるかを知るため、1件多く取得する)
+    direction = 'DESC' if is_descending else 'ASC'
     rows = await connections.get('default').execute_query_dict(f"""
         SELECT p.id, p.start_time
         FROM capture_programs p
         WHERE {' AND '.join(conditions)}
-        ORDER BY p.start_time DESC, p.id DESC
+        ORDER BY p.start_time {direction}, p.id {direction}
         LIMIT ?
     """, [*params, limit + 1])
 
@@ -1154,7 +1179,7 @@ async def CaptureTagCreateAPI(
         tag = await CaptureTag.create(user_id=user.id, name=body.name)
     except IntegrityError as ex:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Capture tag name already exists',
         ) from ex
 
@@ -1185,7 +1210,7 @@ async def CaptureTagUpdateAPI(
         await tag.save()
     except IntegrityError as ex:
         raise HTTPException(
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail = 'Capture tag name already exists',
         ) from ex
 
