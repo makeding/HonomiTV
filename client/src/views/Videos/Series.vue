@@ -32,7 +32,7 @@
                                 </a>
                                 <a v-if="bangumi_subject_id" :href="`https://bgm.tv/subject/${bangumi_subject_id}`"
                                     class="series-external-links__link" target="_blank" rel="noopener noreferrer">
-                                    <Icon icon="fluent:book-open-20-regular" width="18px" />
+                                    <img src="/assets/images/bangumi.svg" alt="" width="18" height="18">
                                     Bangumi
                                     <Icon icon="fluent:open-16-regular" width="14px" />
                                 </a>

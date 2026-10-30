@@ -38,7 +38,7 @@
                         <span class="ml-4">ニコニコ実況</span>
                     </v-btn>
                     <v-btn variant="flat" class="settings-navigation__button" to="/settings/bangumi">
-                        <Icon icon="fluent:movies-and-tv-20-filled" width="26px" />
+                        <img src="/assets/images/bangumi.svg" alt="" width="26" height="26">
                         <span class="ml-4">Bangumi 連携</span>
                     </v-btn>
                     <v-btn variant="flat" class="settings-navigation__button" to="/settings/twitter">

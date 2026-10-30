@@ -5,7 +5,7 @@
             <a v-ripple class="settings__back-button" @click="$router.back()">
                 <Icon icon="fluent:chevron-left-12-filled" width="27px" />
             </a>
-            <Icon icon="fluent:movies-and-tv-20-filled" width="23px" />
+            <img src="/assets/images/bangumi.svg" alt="" width="23" height="23">
             <span class="ml-2">Bangumi 連携</span>
         </h2>
         <div class="settings__description">
@@ -16,7 +16,7 @@
             <div class="bangumi-account bangumi-account--anonymous"
                 v-if="isLoading === false && (userStore.user === null || userStore.user.bangumi_user_id === null)">
                 <div class="bangumi-account-wrapper">
-                    <Icon class="flex-shrink-0" icon="fluent:movies-and-tv-20-filled" width="45px" />
+                    <img class="bangumi-brand-icon flex-shrink-0" src="/assets/images/bangumi.svg" alt="" width="45" height="45">
                     <div class="bangumi-account__info ml-4">
                         <div class="bangumi-account__info-name">Bangumi アカウントと連携していません</div>
                         <span class="bangumi-account__info-description">
@@ -275,7 +275,7 @@ async function logoutBangumiAccount(): Promise<void> {
 
     &--anonymous {
         @include smartphone-horizontal-short {
-            .bangumi-account-wrapper > svg {
+            .bangumi-account-wrapper > .bangumi-brand-icon {
                 display: none;
             }
             .bangumi-account__info {
@@ -283,7 +283,7 @@ async function logoutBangumiAccount(): Promise<void> {
             }
         }
         @include smartphone-vertical {
-            .bangumi-account-wrapper > svg {
+            .bangumi-account-wrapper > .bangumi-brand-icon {
                 display: none;
             }
             .bangumi-account__info {
