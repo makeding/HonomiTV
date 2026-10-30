@@ -29,7 +29,7 @@
         </div>
 
         <!-- 録画予約の有効/無効 -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend || reservation.comment.includes('EPG自動予約')" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__header">
                 <div class="reservation-recording-settings__label">録画予約の有効/無効</div>
                 <v-switch
@@ -49,7 +49,7 @@
         </div>
 
         <!-- 録画予約の優先度 -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画予約の優先度</div>
             <div class="reservation-recording-settings__description mb-0">
                 放送時間が重なりチューナーが足りないときは、より優先度が高い予約から優先的に録画します。
@@ -72,7 +72,7 @@
         </div>
 
         <!-- 録画フォルダのパス -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画フォルダのパス</div>
             <div class="reservation-recording-settings__description">
                 空欄にすると、デフォルトの録画フォルダに保存されます。
@@ -90,7 +90,7 @@
         </div>
 
         <!-- 録画ファイル名テンプレート -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画ファイル名テンプレート (マクロ)</div>
             <div class="reservation-recording-settings__description">
                 空欄にすると、デフォルトの録画ファイル名テンプレート (マクロ) が録画ファイル名の変更に利用されます。<br>
@@ -111,7 +111,7 @@
         </div>
 
         <!-- 録画マージン -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画マージン (秒)</div>
             <div class="reservation-recording-settings__description">
                 番組開始時刻の何秒前から録画を開始し、番組終了時刻の何秒後に録画を終了するかの設定です。最低でも5秒以上をおすすめします。(0秒だと番組の冒頭/末尾が欠けてしまいます。)
@@ -162,7 +162,7 @@
         </div>
 
         <!-- 字幕データ録画設定 -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">字幕データ録画設定</div>
             <div class="reservation-recording-settings__description">
                 字幕データはほとんど録画容量を消費しません。<br>
@@ -181,7 +181,7 @@
         </div>
 
         <!-- データ放送録画設定 -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend || !reservation.comment.includes('EPG自動予約')" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">データ放送録画設定</div>
             <div class="reservation-recording-settings__description">
                 データ放送は30分で 500MB 以上録画容量を消費する上、KonomiTV は録画再生時のデータ放送表示に非対応です。<br>
@@ -200,7 +200,7 @@
         </div>
 
         <!-- 録画後動作設定 -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画後動作設定</div>
             <div class="reservation-recording-settings__description">
                 通常は [何もしない] のままで大丈夫です。録画後に録画 PC をスリープさせておきたい方のみ設定してください。環境によっては復帰できず以降の録画に失敗することがあります。
@@ -218,7 +218,7 @@
         </div>
 
         <!-- 録画後実行スクリプトのパス -->
-        <div class="reservation-recording-settings__section">
+        <div v-if="isEDCBBackend" class="reservation-recording-settings__section">
             <div class="reservation-recording-settings__label">録画後実行スクリプトのパス</div>
             <div class="reservation-recording-settings__description">
                 通常は空欄のままで大丈夫です。録画後に指定の {{ versionStore.is_linux_environment ? '.sh / .lua' : '.bat / .ps1 / .lua' }} スクリプトを実行させたい方のみ設定してください。
@@ -242,6 +242,7 @@ import { objectHash } from 'ohash';
 import { ref, computed, watch, onMounted, toRaw } from 'vue';
 
 import { type IReservation, type IRecordSettings, type IRecordSettingsPresets } from '@/services/Reservations';
+import useServerSettingsStore from '@/stores/ServerSettingsStore';
 import useVersionStore from '@/stores/VersionStore';
 
 // Props
@@ -259,6 +260,8 @@ const emit = defineEmits<{
 
 // ストア
 const versionStore = useVersionStore();
+const serverSettingsStore = useServerSettingsStore();
+const isEDCBBackend = computed(() => serverSettingsStore.server_settings.general.backend === 'EDCB');
 
 // 設定のコピーを作成（元の設定を変更しないため）
 const settings = ref<IRecordSettings>(structuredClone(toRaw(props.reservation.record_settings)));

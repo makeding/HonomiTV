@@ -133,7 +133,8 @@ class Program(PydanticModel):
     start_time: datetime
     end_time: datetime
     duration: float
-    is_free: bool
+    # EPGStation の時刻指定予約など、番組属性が返されない場合は不明のまま表示側へ渡す。
+    is_free: bool | None
     genres: list[Genre]
     video_type: str | None
     video_codec: str | None

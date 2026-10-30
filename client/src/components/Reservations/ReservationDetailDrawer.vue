@@ -49,10 +49,10 @@
                     </span>
                 </div>
                 <!-- Mirakurun バックエンド時の通知 -->
-                <div v-if="!isEDCBBackend && !isPastProgram && !hasRealReservation" class="status-banner status-banner--info mb-4">
+                <div v-if="!isRecordingBackend && !isPastProgram && !hasRealReservation" class="status-banner status-banner--info mb-4">
                     <Icon icon="fluent:info-16-regular" class="status-banner__icon" />
                     <span class="status-banner__text">
-                        録画予約機能は EDCB バックエンド選択時のみ利用できます。
+                        録画予約機能は EDCB または EPGStation バックエンド選択時に利用できます。
                     </span>
                 </div>
                 <!-- 番組情報 -->
@@ -90,7 +90,7 @@
                 </v-btn>
                 <!-- mock の予約 (予約なし) の場合: 予約追加ボタン -->
                 <v-btn v-if="showAddButton" class="px-3" color="secondary" variant="flat"
-                    :disabled="!isEDCBBackend" :loading="isAdding" @click="handleAddReservation">
+                    :disabled="!isRecordingBackend" :loading="isAdding" @click="handleAddReservation">
                     <Icon icon="fluent:timer-16-regular" width="20px" height="20px" />
                     <span class="ml-1">予約を追加</span>
                 </v-btn>
@@ -187,7 +187,7 @@
 </template>
 <script lang="ts" setup>
 
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, toRaw } from 'vue';
 
 import ReservationProgramInfo from '@/components/Reservations/ReservationProgramInfo.vue';
 import ReservationRecordingSettings from '@/components/Reservations/ReservationRecordingSettings.vue';
@@ -273,10 +273,10 @@ const hasRealReservation = computed(() => hasReservation.value && !isMockReserva
 // 表示用の番組情報（予約があればそちらを優先）
 const displayProgram = computed(() => props.reservation?.program ?? props.program ?? null);
 
-// EDCB バックエンドかどうか
-// サーバー設定がまだ取得されていない場合は EDCB と判定しない
+// 共通の録画予約を利用できるバックエンドかどうか
+// サーバー設定がまだ取得されていない場合は録画予約を有効にしない
 // (デフォルト値が 'EDCB' のため、未取得状態で誤って true を返すと Mirakurun バックエンドでも予約操作が有効化されてしまう)
-const isEDCBBackend = computed(() => serverSettingsStore.is_loaded === true && serverSettings.value.general.backend === 'EDCB');
+const isRecordingBackend = computed(() => serverSettingsStore.is_loaded === true && ['EDCB', 'EPGStation'].includes(serverSettings.value.general.backend));
 
 // 録画設定タブを表示するかどうか
 // - 実際の予約がある場合: 表示 (既存予約の設定編集)
@@ -313,7 +313,7 @@ const isUnavailableRecording = computed(() => recordingAvailability.value === 'U
 onMounted(async () => {
     await serverSettingsStore.fetchServerSettingsOnce();
     // EDCB バックエンドの場合のみプリセットを取得
-    if (isEDCBBackend.value) {
+    if (serverSettings.value.general.backend === 'EDCB') {
         presets.value = await Reservations.fetchRecordingPresets();
     }
 });
@@ -380,18 +380,19 @@ const handleSave = async () => {
     // バリデーションチェック
     const captionIsDefault = currentSettings.value.caption_recording_mode === 'Default';
     const dataBroadcastingIsDefault = currentSettings.value.data_broadcasting_recording_mode === 'Default';
-    if (captionIsDefault !== dataBroadcastingIsDefault) {
+    if (serverSettings.value.general.backend === 'EDCB' && captionIsDefault !== dataBroadcastingIsDefault) {
         Message.warning('字幕データ録画設定・データ放送録画設定を明示的に設定する際は、両方とも「デフォルト設定を使う」以外に設定してください。');
         return;
     }
 
     isSaving.value = true;
     try {
-        const result = await Reservations.updateReservation(props.reservation.id, currentSettings.value);
-        if (result) {
+        const reservationId = props.reservation.id;
+        const recordSettings = structuredClone(toRaw(currentSettings.value));
+        const result = await Reservations.updateReservation(reservationId, recordSettings);
+        if (result && props.reservation?.id === reservationId) {
             Message.success('録画設定の変更を保存しました。');
-            const updatedReservation = { ...props.reservation, record_settings: currentSettings.value };
-            emit('updated', updatedReservation);
+            emit('updated', result);
             hasChanges.value = false;
         }
     } catch (error) {
@@ -411,12 +412,13 @@ const handleDelete = () => {
 const confirmDelete = async () => {
     showDeleteDialog.value = false;
     if (!props.reservation) return;
+    const reservationId = props.reservation.id;
 
     try {
-        const success = await Reservations.deleteReservation(props.reservation.id);
-        if (success) {
+        const success = await Reservations.deleteReservation(reservationId);
+        if (success && props.reservation?.id === reservationId) {
             Message.success('録画予約を削除しました。');
-            emit('deleted', props.reservation.id);
+            emit('deleted', reservationId);
             isVisible.value = false;
         }
     } catch (error) {
@@ -430,8 +432,8 @@ const handleAddReservation = async () => {
     if (isAdding.value || !displayProgram.value || !props.reservation) return;
 
     // EDCB バックエンドでない場合はエラー
-    if (!isEDCBBackend.value) {
-        Message.error('録画予約機能は EDCB バックエンド選択時のみ利用できます。');
+    if (!isRecordingBackend.value) {
+        Message.error('録画予約機能は EDCB または EPGStation バックエンド選択時に利用できます。');
         return;
     }
 
@@ -441,7 +443,7 @@ const handleAddReservation = async () => {
         const recordSettings = currentSettings.value ?? props.reservation.record_settings;
         const captionIsDefault = recordSettings.caption_recording_mode === 'Default';
         const dataBroadcastingIsDefault = recordSettings.data_broadcasting_recording_mode === 'Default';
-        if (captionIsDefault !== dataBroadcastingIsDefault) {
+        if (serverSettings.value.general.backend === 'EDCB' && captionIsDefault !== dataBroadcastingIsDefault) {
             Message.warning('字幕データ録画設定・データ放送録画設定を明示的に設定する際は、両方とも「デフォルト設定を使う」以外に設定してください。');
             isAdding.value = false;
             return;

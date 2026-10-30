@@ -2,6 +2,7 @@
 import APIClient from '@/services/APIClient';
 import { IChannel } from '@/services/Channels';
 import { IProgram } from '@/services/Programs';
+import useServerSettingsStore from '@/stores/ServerSettingsStore';
 
 
 /**
@@ -149,6 +150,8 @@ class Reservations {
      * @returns 録画予約情報のリスト、取得失敗時は null
      */
     static async fetchReservations(): Promise<IReservations | null> {
+        // 既存一覧から開く場合も、共通コンポーネントがバックエンドに合う操作を表示できるようにする。
+        await useServerSettingsStore().fetchServerSettingsOnce();
         const response = await APIClient.get<IReservations>('/recording/reservations');
 
         if (response.type === 'error') {
@@ -198,7 +201,7 @@ class Reservations {
         if (response.type === 'error') {
             switch (response.data.detail) {
                 case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, '録画予約機能は EDCB バックエンド選択時のみ利用できます。');
+                    APIClient.showGenericError(response, '録画予約機能は EDCB または EPGStation バックエンド選択時に利用できます。');
                     break;
                 case 'Specified program was not found':
                     APIClient.showGenericError(response, '指定された番組が見つかりませんでした。');
@@ -250,7 +253,7 @@ class Reservations {
         if (response.type === 'error') {
             switch (response.data.detail) {
                 case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, '録画予約機能は EDCB バックエンド選択時のみ利用できます。');
+                    APIClient.showGenericError(response, '録画予約機能は EDCB または EPGStation バックエンド選択時に利用できます。');
                     break;
                 case 'Specified reservation_id was not found':
                     APIClient.showGenericError(response, '指定された録画予約が見つかりませんでした。');
@@ -279,7 +282,7 @@ class Reservations {
         if (response.type === 'error') {
             switch (response.data.detail) {
                 case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, '録画予約機能は EDCB バックエンド選択時のみ利用できます。');
+                    APIClient.showGenericError(response, '録画予約機能は EDCB または EPGStation バックエンド選択時に利用できます。');
                     break;
                 case 'Specified reservation_id was not found':
                     APIClient.showGenericError(response, '指定された録画予約が見つかりませんでした。');
@@ -319,6 +322,12 @@ class Reservations {
      * @returns デフォルトの録画設定
      */
     static async fetchDefaultRecordSettings(): Promise<IRecordSettings> {
+        // EDCB のプリセット取得は EDCB 選択時に限り、EPGStation は共通の初期設定を使う。
+        const serverSettings = await useServerSettingsStore().fetchServerSettingsOnce();
+        if (serverSettings === null || serverSettings.general.backend !== 'EDCB') {
+            return structuredClone(IRecordSettingsDefault);
+        }
+
         const presets = await Reservations.fetchRecordingPresets();
         if (presets !== null) {
             // ID=0 のデフォルトプリセットを探す

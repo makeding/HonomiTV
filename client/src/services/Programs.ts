@@ -19,7 +19,7 @@ export interface IProgram {
     start_time: string;
     end_time: string;
     duration: number;
-    is_free: boolean;
+    is_free: boolean | null;
     genres: { major: string; middle: string; }[];
     video_type: string | null;
     video_codec: string | null;
@@ -273,7 +273,7 @@ class Programs {
         if (response.type === 'error') {
             switch (response.data.detail) {
                 case 'This API is only available when the backend is EDCB':
-                    APIClient.showGenericError(response, '番組検索機能は EDCB バックエンド選択時のみ利用できます。');
+                    APIClient.showGenericError(response, '番組検索機能は EDCB または EPGStation バックエンド選択時に利用できます。');
                     break;
                 default:
                     APIClient.showGenericError(response, '番組情報の検索に失敗しました。');

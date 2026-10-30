@@ -24,7 +24,7 @@ from app.config import Config
 from app.constants import HTTPX_CLIENT, JST
 from app.models.Channel import Channel
 from app.routers.ReservationConditionsRouter import EncodeEDCBSearchKeyInfo
-from app.routers.ReservationsRouter import GetCtrlCmdUtil
+from app.routers.ReservationsRouter import GetRecordingBackendClient
 from app.utils import (
     GetBackendForChannelAndProgram,
     GetMirakurunAPIEndpointURL,
@@ -34,6 +34,7 @@ from app.utils import (
 from app.utils.edcb import EventInfo, ReserveDataRequired, SearchKeyInfo
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
+from app.utils.EPGStationRecording import EPGStationRecording
 from app.utils.GGuide import (
     GetGGuideAssets,
     GetGGuideImages,
@@ -349,11 +350,15 @@ def DecodeEDCBEventInfo(event_info: EventInfo) -> schemas.Program:
 )
 async def ProgramSearchAPI(
     program_search_condition: Annotated[schemas.ProgramSearchCondition, Body(description='番組検索条件。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     番組情報を検索する。
     """
+
+    # バックエンドの検索結果を同じ番組検索レスポンスへそろえる。
+    if edcb is None:
+        return await EPGStationRecording.search(program_search_condition)
 
     # schemas.ProgramSearchCondition オブジェクトを SearchKeyInfo オブジェクトに変換
     search_key_info = await EncodeEDCBSearchKeyInfo(program_search_condition, edcb)
@@ -812,6 +817,21 @@ async def TimeTableAPI(
         except Exception as ex:
             # 予約情報の取得に失敗しても番組表自体は返す
             logging.warning('[ProgramsRouter][TimeTableAPI] Failed to get reservations:', exc_info=ex)
+
+    elif Config().general.backend == 'EPGStation':
+        # EPGStation の予約も既存の番組表の予約アイコン・詳細ドロワーへ反映する。
+        epgstation_reservations = await EPGStationRecording.getReservations()
+        for reservation in epgstation_reservations.reservations:
+            epgstation_status: Literal['Reserved', 'Recording', 'Disabled'] = 'Reserved'
+            if reservation.is_recording_in_progress:
+                epgstation_status = 'Recording'
+            elif reservation.record_settings.is_enabled is False:
+                epgstation_status = 'Disabled'
+            reservations_by_program_id[reservation.program.id] = schemas.TimeTableProgramReservation(
+                id = reservation.id,
+                status = epgstation_status,
+                recording_availability = reservation.recording_availability,
+            ).model_dump()
 
     # チャンネルごとに番組をグループ化
     programs_by_channel: dict[str, list[dict[str, Any]]] = {c['id']: [] for c in channels_result}

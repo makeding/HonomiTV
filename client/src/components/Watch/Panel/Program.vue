@@ -52,7 +52,7 @@
             <div v-ripple="isRecordButtonClickable"
                 class="program-info__record-button"
                 :class="{
-                    'program-info__record-button--disabled': !isEDCBBackend || !canRecord,
+                    'program-info__record-button--disabled': !isRecordingBackend || !canRecord,
                     'program-info__record-button--preparing': isPreparing,
                 }"
                 @click="handleRecordButtonClick">
@@ -67,12 +67,12 @@
                         style="color: #EF5350; margin-bottom: -1px" />
                     <span style="margin-left: 5px;">録画開始中...</span>
                 </template>
-                <!-- 未予約 (EDCB バックエンド): クリックで録画開始 -->
+                <!-- 未予約 (EDCB / EPGStation バックエンド): クリックで録画開始 -->
                 <template v-else-if="!canRecord">
                     <Icon icon="fluent:record-16-regular" width="17px" height="17px" style="margin-bottom: -1px" />
                     <span style="margin-left: 5px;">ネットテレビでは録画できません</span>
                 </template>
-                <template v-else-if="isEDCBBackend">
+                <template v-else-if="isRecordingBackend">
                     <Icon icon="fluent:record-16-regular" width="17px" height="17px"
                         style="color: #EF5350; margin-bottom: -1px" />
                     <span style="margin-left: 5px;">録画開始</span>
@@ -80,7 +80,7 @@
                 <!-- Mirakurun バックエンド: グレーアウト表示 -->
                 <template v-else>
                     <Icon icon="fluent:record-16-regular" width="17px" height="17px" style="margin-bottom: -1px" />
-                    <span style="margin-left: 5px;">録画開始 (EDCB 専用)</span>
+                    <span style="margin-left: 5px;">録画開始 (EDCB / EPGStation)</span>
                 </template>
             </div>
             <a v-if="channelsStore.channel.current.program_present" v-ripple class="program-info__captures"
@@ -176,14 +176,14 @@ export default defineComponent({
     computed: {
         ...mapStores(useChannelsStore, useServerSettingsStore),
 
-        // EDCB バックエンドかどうか
-        // サーバー設定がまだ取得されていない場合は EDCB と判定しない
+        // 共通の録画予約を利用できるバックエンドかどうか
+        // サーバー設定がまだ取得されていない場合は録画予約を有効にしない
         // (デフォルト値が 'EDCB' のため、未取得状態で誤って true を返すと Mirakurun バックエンドでも予約 API が呼ばれてしまう)
-        isEDCBBackend(): boolean {
+        isRecordingBackend(): boolean {
             if (this.serverSettingsStore.is_loaded !== true) {
                 return false;
             }
-            return this.serverSettingsStore.server_settings.general.backend === 'EDCB';
+            return ['EDCB', 'EPGStation'].includes(this.serverSettingsStore.server_settings.general.backend);
         },
         canRecord(): boolean {
             return this.channelsStore.channel.current.capabilities.recording;
@@ -209,9 +209,9 @@ export default defineComponent({
         },
 
         // 録画ボタンがクリック可能かどうか（v-ripple エフェクトの表示判定に使用）
-        // 録画中（停止ダイアログを開く）または未予約 (EDCB バックエンド) の場合のみクリック可能
+        // 録画中（停止ダイアログを開く）または未予約 (EDCB / EPGStation バックエンド) の場合のみクリック可能
         isRecordButtonClickable(): boolean {
-            return this.canRecord && (this.isRecording || (this.isEDCBBackend && !this.hasReservation && !this.is_starting_recording));
+            return this.canRecord && (this.isRecording || (this.isRecordingBackend && !this.hasReservation && !this.is_starting_recording));
         },
 
         // 録画予約状態チェック用の現在番組 ID
@@ -287,7 +287,7 @@ export default defineComponent({
             // channelsStore.channel.current.program_present は PSI/SI 取得済みならリアルタイムの event_id を含み、
             // 未取得なら channels API のデータ (DB スナップショット) が使用される
             const programPresent = this.channelsStore.channel.current.program_present;
-            if (this.isEDCBBackend !== true || this.canRecord !== true || programPresent === null || programPresent.source !== 'Broadcast') {
+            if (this.isRecordingBackend !== true || this.canRecord !== true || programPresent === null || programPresent.source !== 'Broadcast') {
                 this.reservation = null;
                 return false;
             }
@@ -306,8 +306,8 @@ export default defineComponent({
                     return false;
                 }
 
-                // 通信待ちの間に EDCB 以外へ切り替わった場合も結果を破棄する
-                if (this.isEDCBBackend !== true || this.canRecord !== true) {
+                // 通信待ちの間に録画予約非対応のバックエンドへ切り替わった場合も結果を破棄する
+                if (this.isRecordingBackend !== true || this.canRecord !== true) {
                     this.reservation = null;
                     return false;
                 }
@@ -341,8 +341,8 @@ export default defineComponent({
                 return;
             }
             // Mirakurun バックエンドの場合は警告を表示
-            if (this.isEDCBBackend !== true) {
-                Message.warning('録画予約機能は EDCB バックエンド選択時のみ利用できます。');
+            if (this.isRecordingBackend !== true) {
+                Message.warning('録画予約機能は EDCB または EPGStation バックエンド選択時に利用できます。');
                 return;
             }
             if (this.canRecord !== true) {
@@ -455,7 +455,7 @@ export default defineComponent({
          */
         startBackgroundPolling(): void {
             // Mirakurun バックエンドの場合は録画予約 API が使えないためポーリング不要
-            if (this.isEDCBBackend !== true) {
+            if (this.isRecordingBackend !== true) {
                 return;
             }
             this.stopBackgroundPolling();
@@ -499,7 +499,7 @@ export default defineComponent({
     },
     async mounted() {
         // サーバー設定を取得してから録画予約関連の処理を開始する
-        // デフォルト値が 'EDCB' のため、Mirakurun バックエンドでもサーバー設定取得前は isEDCBBackend が
+        // デフォルト値が 'EDCB' のため、Mirakurun バックエンドでもサーバー設定取得前は isRecordingBackend が
         // true になってしまい、不要な予約 API 呼び出しでエラーが出続けるのを防ぐ
         await this.serverSettingsStore.fetchServerSettingsOnce();
         // 初期状態の録画予約状態をチェックしバックグラウンドポーリングを開始

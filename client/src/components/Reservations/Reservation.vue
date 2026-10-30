@@ -20,11 +20,11 @@
                         <Icon :icon="programSearchActionIcon" width="18px" height="18px" />
                     </v-btn>
                 </div>
-                <div v-else class="reservation__priority">
+                <div v-else-if="serverSettingsStore.server_settings.general.backend === 'EDCB'" class="reservation__priority">
                     <div class="reservation__priority-badge">{{ reservation.record_settings.priority }}</div>
                     <div class="reservation__priority-label">優先度</div>
                 </div>
-                <div v-if="!shouldShowProgramSearchAddButton && !reservation.is_recording_in_progress" class="reservation__toggle" @click="handleSwitchClick">
+                <div v-if="!shouldShowProgramSearchAddButton && !reservation.is_recording_in_progress && canToggleReservation" class="reservation__toggle" @click="handleSwitchClick">
                     <v-switch
                         v-model="isEnabled"
                         color="primary"
@@ -35,7 +35,7 @@
                     ></v-switch>
                     <div class="reservation__toggle-label">{{ isEnabled ? '有効' : '無効' }}</div>
                 </div>
-                <div v-else-if="!shouldShowProgramSearchAddButton" class="reservation__recording">
+                <div v-else-if="!shouldShowProgramSearchAddButton && reservation.is_recording_in_progress" class="reservation__recording">
                     <div class="reservation__recording-icon"></div>
                 </div>
             </div>
@@ -92,7 +92,7 @@
                         </div>
                         <div class="reservation__content-meta-size">
                             <Icon icon="fluent:hard-drive-20-filled" width="14px" height="14px" class="reservation__content-meta-size-icon" />
-                            約 {{ Utils.formatBytes(reservation.estimated_recording_file_size, 1, true) }}
+                            {{ estimatedRecordingSize }}
                         </div>
                     </div>
                     <!-- PC版のみ：上段右側の時刻表示 -->
@@ -118,13 +118,13 @@
                         </div>
                         <div class="reservation__content-description-size">
                             <Icon icon="fluent:hard-drive-20-filled" width="14px" height="14px" class="reservation__content-description-size-icon" />
-                            約 {{ Utils.formatBytes(reservation.estimated_recording_file_size, 1, true) }}
+                            {{ estimatedRecordingSize }}
                         </div>
                     </div>
                     <!-- PC・タブレット横版：概要行の右側に推定録画容量を表示 -->
                     <div v-if="!shouldShowProgramSearchAddButton" class="reservation__content-description-size-pc">
                         <Icon icon="fluent:hard-drive-20-filled" width="14px" height="14px" class="reservation__content-description-size-icon" />
-                        約 {{ Utils.formatBytes(reservation.estimated_recording_file_size, 1, true) }}
+                        {{ estimatedRecordingSize }}
                     </div>
                 </div>
             </div>
@@ -137,6 +137,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import Message from '@/message';
 import Reservations, { IReservation } from '@/services/Reservations';
+import useServerSettingsStore from '@/stores/ServerSettingsStore';
 import Utils, { ProgramUtils, dayjs } from '@/utils';
 
 // Props
@@ -155,6 +156,13 @@ const emit = defineEmits<{
 
 // 有効・無効の状態を管理
 const isEnabled = ref(props.reservation.record_settings.is_enabled);
+const serverSettingsStore = useServerSettingsStore();
+const canToggleReservation = computed(() => serverSettingsStore.server_settings.general.backend !== 'EPGStation'
+    || props.reservation.comment.includes('EPG自動予約'));
+const estimatedRecordingSize = computed(() => {
+    if (props.reservation.estimated_recording_file_size <= 0) return '容量不明';
+    return `約 ${Utils.formatBytes(props.reservation.estimated_recording_file_size, 1, true)}`;
+});
 const isUpdating = ref(false);
 const isAddingReservation = ref(false);
 const currentTime = ref(dayjs());

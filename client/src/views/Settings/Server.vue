@@ -24,7 +24,7 @@
                 <div class="settings__item-heading">利用するバックエンド</div>
                 <div class="settings__item-label">
                     EDCB・Mirakurun・EPGStation のいずれかを選択してください。<br>
-                    バックエンドに Mirakurun または EPGStation が選択されているときは、EDCB 専用の録画予約機能は利用できません。<br>
+                    EDCB または EPGStation を選択すると、録画予約・番組検索を利用できます。<br>
                 </div>
                 <v-select class="settings__item-form" color="primary" variant="outlined" hide-details
                     :density="is_form_dense ? 'compact' : 'default'"

@@ -79,6 +79,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 
 import { ITimeTableChannel, ITimeTableProgram } from '@/services/Programs';
+import useServerSettingsStore from '@/stores/ServerSettingsStore';
 import useSettingsStore from '@/stores/SettingsStore';
 import useTimeTableStore from '@/stores/TimeTableStore';
 import { dayjs } from '@/utils';
@@ -201,6 +202,10 @@ const hasReservation = computed(() => {
 });
 
 const canReserve = computed(() => {
+    // EPGStation の既存予約は共通の詳細ボタンから設定・取消を行う。
+    if (useServerSettingsStore().server_settings.general.backend === 'EPGStation' && hasReservation.value) {
+        return false;
+    }
     return props.channel.capabilities.recording && !props.isPast;
 });
 

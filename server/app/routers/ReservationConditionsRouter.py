@@ -10,6 +10,7 @@ from app.routers.ReservationsRouter import (
     DecodeEDCBRecSettingData,
     EncodeEDCBRecSettingData,
     GetCtrlCmdUtil,
+    GetRecordingBackendClient,
 )
 from app.utils.edcb import (
     AutoAddData,
@@ -23,6 +24,7 @@ from app.utils.edcb import (
 )
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
+from app.utils.EPGStationRecording import EPGStationRecording
 
 
 # ルーター
@@ -512,11 +514,16 @@ async def GetAutoAddData(
     response_model = schemas.ReservationConditions,
 )
 async def ReservationConditionsAPI(
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     すべてのキーワード自動予約条件 (EPG 予約) の情報を取得する。
     """
+
+    # EPGStation のルールを既存の自動予約条件 API で扱う。
+    if edcb is None:
+        return await EPGStationRecording.getConditions()
+
 
     # EDCB から現在のすべてのキーワード自動予約条件の情報を取得
     auto_add_data_list: list[AutoAddDataRequired] | None = await edcb.sendEnumAutoAdd()
@@ -543,11 +550,17 @@ async def ReservationConditionsAPI(
 )
 async def RegisterReservationConditionAPI(
     reserve_condition_add_request: Annotated[schemas.ReservationConditionAddRequest, Body(description='登録するキーワード自動予約条件。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     キーワード自動予約条件を登録する。
     """
+
+    # EPGStation のルールを既存の自動予約条件 API で扱う。
+    if edcb is None:
+        await EPGStationRecording.addCondition(reserve_condition_add_request)
+        return
+
 
     # EDCB の AutoAddData オブジェクトを組み立てる
     ## data_id は EDCB 側で自動で割り振られるため省略している
@@ -581,12 +594,18 @@ async def RegisterReservationConditionAPI(
     response_model = schemas.ReservationCondition,
 )
 async def ReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID。')],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     指定されたキーワード自動予約条件の情報を取得する。
     """
+
+    # EPGStation のルールを既存の自動予約条件 API で扱う。
+    if edcb is None:
+        return await EPGStationRecording.getCondition(reservation_condition_id)
+
+    auto_add_data = await GetAutoAddData(reservation_condition_id, edcb)
 
     # EDCB の AutoAddData オブジェクトを schemas.ReservationCondition オブジェクトに変換して返す
     chset5_services = await GetChSet5Services(edcb)
@@ -600,13 +619,19 @@ async def ReservationConditionAPI(
     response_model = schemas.ReservationCondition,
 )
 async def UpdateReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID。')],
     reserve_condition_update_request: Annotated[schemas.ReservationConditionUpdateRequest, Body(description='更新するキーワード自動予約条件。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     指定されたキーワード自動予約条件を更新する。
     """
+
+    # EPGStation のルールを既存の自動予約条件 API で扱う。
+    if edcb is None:
+        return await EPGStationRecording.updateCondition(reservation_condition_id, reserve_condition_update_request)
+
+    auto_add_data = await GetAutoAddData(reservation_condition_id, edcb)
 
     # 現在のキーワード自動予約条件の AutoAddData に新しい検索条件・録画設定を上書きマージする形で EDCB に送信する
     chset5_services = await GetChSet5Services(edcb)
@@ -642,12 +667,19 @@ async def UpdateReservationConditionAPI(
     status_code = status.HTTP_204_NO_CONTENT,
 )
 async def DeleteReservationConditionAPI(
-    auto_add_data: Annotated[AutoAddDataRequired, Depends(GetAutoAddData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_condition_id: Annotated[int, Path(description='キーワード自動予約条件 ID。')],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     指定されたキーワード自動予約条件を削除する。
     """
+
+    # EPGStation のルールを既存の自動予約条件 API で扱う。
+    if edcb is None:
+        await EPGStationRecording.deleteCondition(reservation_condition_id)
+        return
+
+    auto_add_data = await GetAutoAddData(reservation_condition_id, edcb)
 
     # TODO: キーワード自動予約条件を削除した後に残った予約をクリーンアップする処理を追加する
 

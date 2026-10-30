@@ -25,6 +25,7 @@ from app.utils.edcb import (
 )
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
+from app.utils.EPGStationRecording import EPGStationRecording
 from app.utils.TSInformation import TSInformation
 
 
@@ -687,6 +688,23 @@ def GetCtrlCmdUtil() -> CtrlCmdUtil:
         )
 
 
+def GetRecordingBackendClient() -> CtrlCmdUtil | None:
+    """
+    共通の録画 API でバックエンドを選択する。
+
+    Args:
+        None: 引数なし。
+
+    Returns:
+        CtrlCmdUtil | None: EDCB クライアント。EPGStation は各 API の専用分岐へ進む。
+    """
+
+    # EPGStation では EDCB の接続設定と専用 API を参照せず、既存の共通 API から処理する。
+    if Config().general.backend == 'EPGStation':
+        return None
+    return GetCtrlCmdUtil()
+
+
 async def GetReserveDataList(
     edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
 ) -> list[ReserveDataRequired]:
@@ -970,11 +988,16 @@ async def GetIsRecordingInProgress(reserve_data: ReserveDataRequired, edcb: Ctrl
     response_model = schemas.Reservations,
 )
 async def ReservationsAPI(
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     すべての録画予約の情報を取得する。
     """
+
+    # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
+    if edcb is None:
+        return await EPGStationRecording.getReservations()
+
 
     # EDCB から現在のすべての録画予約の情報を取得
     reserve_data_list: list[ReserveDataRequired] | None = await edcb.sendEnumReserve()
@@ -1027,11 +1050,17 @@ async def ReservationsAPI(
 )
 async def AddReservationAPI(
     reserve_add_request: Annotated[schemas.ReservationAddRequest, Body(description='追加する録画予約の設定。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     録画予約を追加する。
     """
+
+    # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
+    if edcb is None:
+        await EPGStationRecording.addReservation(reserve_add_request)
+        return
+
 
     def HasSameReservation(
         reserve_data_list: list[ReserveDataRequired],
@@ -1315,12 +1344,18 @@ async def AddReservationAPI(
     response_model = schemas.Reservation,
 )
 async def ReservationAPI(
-    reserve_data: Annotated[ReserveDataRequired, Depends(GetReserveData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_id: Annotated[int, Path(description='録画予約 ID。')],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     指定された録画予約の情報を取得する。
     """
+
+    # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
+    if edcb is None:
+        return await EPGStationRecording.getReservation(reservation_id)
+
+    reserve_data = await GetReserveData(reservation_id, edcb)
 
     # EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換して返す
     return await DecodeEDCBReserveData(
@@ -1336,13 +1371,19 @@ async def ReservationAPI(
     response_model = schemas.Reservation,
 )
 async def UpdateReservationAPI(
-    reserve_data: Annotated[ReserveDataRequired, Depends(GetReserveData)],
+    reservation_id: Annotated[int, Path(description='録画予約 ID。')],
     reserve_update_request: Annotated[schemas.ReservationUpdateRequest, Body(description='更新する録画予約の設定。')],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     指定された録画予約の設定を更新する。
     """
+
+    # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
+    if edcb is None:
+        return await EPGStationRecording.updateReservation(reservation_id, reserve_update_request.record_settings)
+
+    reserve_data = await GetReserveData(reservation_id, edcb)
 
     # 現在の録画予約の ReserveData に新しい録画設定を上書きマージする形で EDCB に送信する
     ## 一見省略しても良さそうな録画予約対象のチャンネル情報や番組情報なども省略せずに全て含める必要がある (さもないと録画予約情報が破壊される…)
@@ -1372,12 +1413,19 @@ async def UpdateReservationAPI(
     status_code = status.HTTP_204_NO_CONTENT,
 )
 async def DeleteReservationAPI(
-    reserve_data: Annotated[ReserveDataRequired, Depends(GetReserveData)],
-    edcb: Annotated[CtrlCmdUtil, Depends(GetCtrlCmdUtil)],
+    reservation_id: Annotated[int, Path(description='録画予約 ID。')],
+    edcb: Annotated[CtrlCmdUtil | None, Depends(GetRecordingBackendClient)],
 ):
     """
     指定された録画予約を削除する。
     """
+
+    # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
+    if edcb is None:
+        await EPGStationRecording.deleteReservation(reservation_id)
+        return
+
+    reserve_data = await GetReserveData(reservation_id, edcb)
 
     # EDCB に指定された録画予約を削除するように指示
     result = await edcb.sendDelReserve([reserve_data['reserve_id']])
