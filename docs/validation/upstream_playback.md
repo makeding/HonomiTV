@@ -92,6 +92,9 @@ Remove `.github/workflows/scripts/poetry` when pre-v0.14.1 installers are no lon
 
 ### TLV broadband application entry (2026-10-28)
 
+- BS テレ東の `/error/bsjhc/error.php` はバックエンドの外部通信プロキシで
+  HTTP 403 として拒否する。HTTP / HTTPS、クエリ付き要求、リダイレクト先にも
+  同じ制約を適用し、通常の放送アプリ資源は引き続き許可する。
 - BS TV Tokyo 4K (1100171): live raw TLV MH-AIT contains HTTP transport
   `http://hc.bsjhc.jp/hc/` and `entry/html_mm/startup.min.html`; application
   type 0x11, organization 0x102e, application 1, AUTOSTART. Application-service

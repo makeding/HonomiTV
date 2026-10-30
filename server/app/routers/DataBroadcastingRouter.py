@@ -183,8 +183,14 @@ def ValidateARIBHTML5ExternalProxyURL(request_url: str) -> str:
             detail = 'Request URL host is not allowed',
         )
 
-    # SkyPerfecTV の実験は公開コンテンツだけに限定し、リダイレクト先にも同じ制約を適用する。
     decoded_path = unquote(parsed_url.path)
+    if normalized_hostname == 'hc.bsjhc.jp' and decoded_path == '/error/bsjhc/error.php':
+        raise HTTPException(
+            status_code = status.HTTP_403_FORBIDDEN,
+            detail = 'Request URL path is not allowed',
+        )
+
+    # SkyPerfecTV の実験は公開コンテンツだけに限定し、リダイレクト先にも同じ制約を適用する。
     if normalized_hostname == 'tvip.hc.skyperfectv.co.jp' and (
         not decoded_path.startswith('/content-sky/') or '..' in decoded_path.split('/') or '\\' in decoded_path
     ):
