@@ -926,6 +926,13 @@ class TLVDataBroadcastingManager implements PlayerManager {
             this.show_requested = true;
             return;
         }
+        // 通信専用の入口は D キーを押した時点で設定を案内し、読み込み待ちと区別する。
+        if (application.broadband && !useSettingsStore().settings.enable_internet_access_from_data_broadcasting) {
+            this.show_requested = false;
+            this.dispatch_data_key_after_install = false;
+            this.player.notice('このデータ放送の表示にはインターネット接続が必要です。設定 → データ放送の「データ放送からのインターネットアクセスを有効にする」をオンにして、データボタンを押してください。[TLV_DATA_NETWORK_DISABLED]', 8000, undefined, '#FF6F6A');
+            return;
+        }
         if (application.key === this.active_application_key) {
             this.show_requested = false;
             this.setApplicationInputActive(true);
@@ -948,11 +955,6 @@ class TLVDataBroadcastingManager implements PlayerManager {
     private async loadManagedApplication(application: ManagedApplication, status: string): Promise<void> {
         if (this.vfs === null || this.iframe === null || this.pending_application_key !== null) return;
         const generation = this.session_generation;
-        if (application.broadband && !useSettingsStore().settings.enable_internet_access_from_data_broadcasting) {
-            this.dispatch_data_key_after_install = false;
-            this.player.notice('通信型データ放送を開けません。設定の「データ放送」でインターネット接続を有効にして、データボタンで再試行してください。[TLV_DATA_NETWORK_DISABLED]', 6000, undefined, '#FF6F6A');
-            return;
-        }
         this.pending_application_key = application.key;
         const load_abort = new AbortController();
         this.application_load_abort = load_abort;
