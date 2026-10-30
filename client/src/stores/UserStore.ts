@@ -2,6 +2,7 @@
 import { defineStore } from 'pinia';
 
 import Message from '@/message';
+import CloudflareZerotrust, { type ICloudflareZerotrustIdentity } from '@/services/CloudflareZerotrust';
 import Users, { IUser, IUserUpdateRequest } from '@/services/Users';
 import useSettingsStore from '@/stores/SettingsStore';
 import Utils from '@/utils';
@@ -16,6 +17,9 @@ const useUserStore = defineStore('user', {
         // 現在ログイン中かどうか
         is_logged_in: false as boolean,
 
+        // 現在のサイトの Access 認証状態。ユーザー設定から独立した実行中の状態として保持する
+        cloudflare_identity: null as ICloudflareZerotrustIdentity,
+
         // ログイン済みのユーザーの情報
         user: null as IUser | null,
 
@@ -23,6 +27,11 @@ const useUserStore = defineStore('user', {
         user_icon_url: null as string | null,
     }),
     getters: {
+
+        /** 現在のサイトで Access のログインを確認済みか */
+        is_cloudflare_logged_in(): boolean {
+            return this.cloudflare_identity !== null && this.cloudflare_identity !== false;
+        },
 
         /**
          * ログイン済みのユーザーのニコニコアカウントのユーザーアイコンの URL (ニコニコアカウントと連携されている場合のみ)
@@ -38,6 +47,15 @@ const useUserStore = defineStore('user', {
         }
     },
     actions: {
+
+        /**
+         * 現在のサイトの Access 認証状態を確認する
+         * @returns 有効なユーザー情報、Access の未ログイン応答なら false、それ以外は null
+         */
+        async fetchCloudflareIdentity(): Promise<ICloudflareZerotrustIdentity> {
+            this.cloudflare_identity = await CloudflareZerotrust.fetchCloudflareZerotrustIdentity();
+            return this.cloudflare_identity;
+        },
 
         /**
          * アカウントを作成する

@@ -50,7 +50,7 @@
             <Icon class="watch-navigation__link-icon" icon="fluent:cloud-arrow-down-20-regular" width="26px" />
         </router-link>
         <v-spacer></v-spacer>
-        <a v-ripple class="watch-navigation__link" active-class="watch-navigation__link--active" v-if="settingsStore.settings.is_cloudflare_zerotrust"
+        <a v-ripple class="watch-navigation__link" active-class="watch-navigation__link--active" v-if="userStore.is_cloudflare_logged_in"
             v-ftooltip.right="'CFからログアウト'" href="/cdn-cgi/access/logout">
             <Icon class="watch-navigation__link-icon" icon="fluent:sign-out-20-regular" width="26px" />
         </a>   
@@ -68,7 +68,7 @@ import { defineComponent } from 'vue';
 
 import OfflineDownloadBadge from '@/components/OfflineDownloadBadge.vue';
 import usePlayerStore from '@/stores/PlayerStore';
-import useSettingsStore from '@/stores/SettingsStore';
+import useUserStore from '@/stores/UserStore';
 
 export default defineComponent({
     name: 'Watch-Navigation',
@@ -77,7 +77,7 @@ export default defineComponent({
     },
     computed: {
         ...mapStores(usePlayerStore),
-        ...mapStores(useSettingsStore),
+        ...mapStores(useUserStore),
     }
 });
 

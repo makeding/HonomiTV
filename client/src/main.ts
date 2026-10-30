@@ -21,6 +21,7 @@ import useSettingsStore, {
     hashClientSettings,
     setLocalStorageSettings,
 } from '@/stores/SettingsStore';
+import useUserStore from '@/stores/UserStore';
 import Utils from '@/utils';
 
 
@@ -42,6 +43,9 @@ const app = createApp(App);
 // Pinia を使う
 // ref: https://pinia.vuejs.org/cookbook/options-api.html
 app.use(createPinia());
+
+// Access のログイン状態は起動ごとに現在のサイトで確認し、取得完了後に対応する操作を表示する
+void useUserStore().fetchCloudflareIdentity();
 
 // Iconify (アイコン) のグローバルコンポーネントを登録
 app.component('Icon', Icon);

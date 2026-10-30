@@ -7,7 +7,6 @@
 import axios, { AxiosError, AxiosRequestConfig, AxiosResponse, AxiosResponseHeaders, RawAxiosResponseHeaders } from 'axios';
 
 import Message from '@/message';
-import useCFZTStore from '@/stores/CloudflareZerotrustStone';
 import useUserStore from '@/stores/UserStore';
 import Utils from '@/utils';
 
@@ -269,10 +268,9 @@ class APIClient {
                         Message.error(`${template}\n予期しないネットワークエラーが発生しました。(${error_response.error.message})`);
                         if (!error_response.error.config?.url?.startsWith('/cdn-cgi/')){
                             (async ()=>{
-                                const CFZTStore = useCFZTStore();
-                                await CFZTStore.fetchCFZTIdentity();
+                                const cloudflare_identity = await user_store.fetchCloudflareIdentity();
                                 const u = new URL(location.href);
-                                if (u.searchParams.get('pwa') !== 'false' && !u.searchParams.get('__cf_access_message') && CFZTStore.is_CFZT && !CFZTStore.is_login) {
+                                if (u.searchParams.get('pwa') !== 'false' && !u.searchParams.get('__cf_access_message') && cloudflare_identity === false) {
                                     console.log('Cloudflare ZeroTrust Login need!!');
                                     u.searchParams.set('pwa','false');
                                     location.href = u.href;

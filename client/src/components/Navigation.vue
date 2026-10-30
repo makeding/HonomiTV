@@ -89,7 +89,7 @@
                         <span v-if="!iconOnly" class="navigation__link-text">視聴履歴</span>
                     </router-link>
                     <v-spacer></v-spacer>
-                    <a v-if="settingsStore.settings.is_cloudflare_zerotrust" v-ripple class="navigation__link"
+                    <a v-if="userStore.is_cloudflare_logged_in" v-ripple class="navigation__link"
                         active-class="navigation__link--active" href="/cdn-cgi/access/logout">
                         <Icon class="navigation__link-icon" icon="fluent:sign-out-20-regular" width="26px" />
                         <span v-if="!iconOnly" class="navigation__link-text">CFからログアウト</span>
@@ -129,7 +129,7 @@ import { defineComponent } from 'vue';
 
 import BottomNavigation from '@/components/BottomNavigation.vue';
 import OfflineDownloadBadge from '@/components/OfflineDownloadBadge.vue';
-import useSettingsStore from '@/stores/SettingsStore';
+import useUserStore from '@/stores/UserStore';
 import useVersionStore from '@/stores/VersionStore';
 
 export default defineComponent({
@@ -148,7 +148,7 @@ export default defineComponent({
     },
     computed: {
         ...mapStores(useVersionStore),
-        ...mapStores(useSettingsStore),
+        ...mapStores(useUserStore),
     },
     async created() {
         // オフライン保存ページは通信なしでも開くため、明らかなオフライン状態でバージョン API のエラーを表示しない

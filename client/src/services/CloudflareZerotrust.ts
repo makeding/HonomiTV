@@ -27,38 +27,43 @@ interface CloudflareZerotrustIdentity {
 }
 
 
-// interface ErrorCloudflareZerotrustIdentity {
-//     err: string;
-// }
-
-export type ICloudflareZerotrustIdentity = CloudflareZerotrustIdentity | boolean | null ; 
+export type ICloudflareZerotrustIdentity = CloudflareZerotrustIdentity | false | null;
 
 
 class CloudflareZerotrust {
 
     /**
      * Cloudflare Zerotrust ユーザー情報を取得する
-     * @param suppress_error エラーメッセージを表示しない場合は true
-     * @returns バージョン情報 or バージョン情報の取得に失敗した場合は null
+     * @returns 有効なユーザー情報、Access の未ログイン応答なら false、それ以外は null
      */
     static async fetchCloudflareZerotrustIdentity(): Promise<ICloudflareZerotrustIdentity> {
-        if (location.hostname.endsWith('local.konomi.tv')){
+        if (location.hostname.endsWith('local.konomi.tv')) {
             return null;
         }
         // API リクエストを実行
-        const response = await APIClient.get('/cdn-cgi/access/get-identity', {
-            baseURL: ''
+        const response = await APIClient.get<unknown>('/cdn-cgi/access/get-identity', {
+            baseURL: '',
         });
 
-        // not cf
-        if (typeof response.data === 'string' && response.data?.includes('<!DOCTYPE html>')) {
+        // 通常のサーバーが返す HTML・空応答を、Access のユーザー情報から区別する
+        const data = response.data;
+        if (data === null || typeof data !== 'object' || Array.isArray(data)) {
             return null;
-        // not login
-        // "err": "no app token set"
-        } else if ('err' in response.data) {
+        }
+
+        // Access が明示した未ログイン状態は、既存の再認証処理へ渡す
+        if ('err' in data && data.err === 'no app token set') {
             return false;
         }
-        return response.data;
+
+        // 成功した Access の組織・ユーザー識別子を持つ応答だけを、ログイン済みとして扱う
+        // 404 や通信失敗の detail オブジェクトも、この境界で通常の応答として区別する
+        if (response.type !== 'success' ||
+            !('account_id' in data) || typeof data.account_id !== 'string' || data.account_id.length === 0 ||
+            !('user_uuid' in data) || typeof data.user_uuid !== 'string' || data.user_uuid.length === 0) {
+            return null;
+        }
+        return data as CloudflareZerotrustIdentity;
     }
 }
 
