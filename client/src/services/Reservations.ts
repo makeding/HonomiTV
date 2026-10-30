@@ -1,7 +1,7 @@
 
 import APIClient from '@/services/APIClient';
 import { IChannel } from '@/services/Channels';
-import { IProgram } from '@/services/Programs';
+import { IGGuideCollectionAsset, IProgram } from '@/services/Programs';
 import useServerSettingsStore from '@/stores/ServerSettingsStore';
 
 
@@ -42,6 +42,7 @@ export interface IReservation {
     id: number;
     channel: IChannel;
     program: IProgram;
+    gguide_image?: IGGuideCollectionAsset | null;
     is_recording_in_progress: boolean;
     recording_availability: 'Full' | 'Partial' | 'Unavailable';
     comment: string;

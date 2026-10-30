@@ -1,5 +1,19 @@
 # Selective upstream integration
 
+## Series compact navigation and grid (2026-10-30)
+
+- `/series/` and its inline series details use the existing icon-only navigation, matching On Air. Desktop navigation occupies 68px; smartphone portrait keeps the bottom navigation.
+- Desktop cards use a 260px minimum column width with 12px gaps and share the remaining width, fitting five columns at a 1536px viewport. Empty columns remain reserved when there are fewer cards. Tablet and smartphone layouts retain two columns, and inline episode details span the entire row.
+- Loading uses 15 skeleton cards in the same grid and aspect ratio as loaded cards (16:9, or 4:3 on smartphone portrait). Loading completion preserves column widths and row spacing. Verify desktop/narrow layouts, empty results, expansion, collapse and keyboard focus.
+
+## Reservation GGuide images (2026-10-30)
+
+- Reservation list, detail and update responses include optional `gguide_image` metadata from the existing Mirakurun GGuide asset API. Match network ID, service ID, event ID and start time in milliseconds; reused event IDs, unmatched assets and banner images (aspect ratio >= 3) are excluded. No title inference or database migration is involved. EPGStation uses the same Mirakurun program source.
+- Matched reservation rows and their detail drawer show the same image without cropping. Image loading, failure and retry retain the image bounds and do not toggle the reservation or open the drawer. Rows without an image retain their normal text layout. Missing, unsupported or unavailable GGuide data does not prevent reservation access.
+- The controls column has the same width with a switch, recording indicator or no available action, on desktop and narrow layouts. Manual EPGStation reservations retain their existing actions while their program information aligns with automatic reservations.
+- Acceptance: exact association and mismatches through reservation HTTP responses, list/detail propagation, image failure/retry, and desktop/narrow alignment with mixed manual, automatic and recording rows. Automated checks do not establish deployed broadcast-image availability.
+- Local verification: six EPGStation common API tests passed through ASGI (list/detail/update included), with client ESLint/TypeScript and server Ruff/Pyright passing. Browser acceptance remains open: the browser access host is unavailable, no local API process is running, and the configured Akebi executable is absent. No server was started or restarted for this verification.
+
 ## Full upstream merge (2026-10-30)
 
 - Merge upstream/master at `9a48e789` into h-dev, preserving the fork playback, Hybridcast, device integration and device-local time display.

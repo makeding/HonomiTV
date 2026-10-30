@@ -13,6 +13,7 @@ from app.constants import JST
 from app.routers.ProgramsRouter import router as programs_router
 from app.routers.ReservationConditionsRouter import router as conditions_router
 from app.routers.ReservationsRouter import router as reservations_router
+from app.utils.GGuide import GGuideAsset, GGuideAssets
 
 
 class EPGStationCommonAPITest(unittest.IsolatedAsyncioTestCase):
@@ -82,6 +83,7 @@ class EPGStationCommonAPITest(unittest.IsolatedAsyncioTestCase):
             patch('app.utils.EPGStationRecording.Program.filter', return_value=SimpleNamespace(get_or_none=AsyncMock(return_value=self.program))),
             patch('app.utils.EPGStationRecording.Channel.get_or_none', new=AsyncMock(return_value=self.channel)),
             patch('app.routers.ReservationsRouter.CtrlCmdUtil', side_effect=AssertionError('EPGStation must not construct an EDCB client')),
+            patch('app.utils.GGuide.GetGGuideAssets', new=AsyncMock(return_value=GGuideAssets(status='Unsupported', assets=()))),
         ]
         for replacement in self.patches:
             replacement.start()
@@ -160,6 +162,51 @@ class EPGStationCommonAPITest(unittest.IsolatedAsyncioTestCase):
         delete = await self.request('DELETE', '/api/recording/reservations/31')
         self.assertEqual(delete.status_code, 204, delete.text)
         self.assertFalse(any('/recorded/' in str(request.url) for request in self.requests))
+
+    async def test_reservation_images_match_the_exact_broadcast(self) -> None:
+        """一覧・詳細・更新が同じ放送回の画像を返し、別の回やバナーを除外する。"""
+
+        start_at = int(self.program.start_time.timestamp() * 1000)
+        association = {'networkId': 4, 'serviceId': 101, 'eventId': 55, 'startAt': start_at}
+        asset_data = {
+            'id': 'b' * 64, 'width': 640, 'height': 360, 'displayable': True,
+            'lastReceivedAt': start_at, 'programs': [association], 'advertisements': [{'text': '番組の紹介'}],
+        }
+        mismatches = [
+            {'eventId': 56}, {'startAt': start_at + 86400000}, {'networkId': 5}, {'serviceId': 102},
+            {'eventId': None},
+        ]
+        assets = [GGuideAsset.model_validate(asset_data)]
+        for index, mismatch in enumerate(mismatches):
+            assets.append(GGuideAsset.model_validate({
+                **asset_data, 'id': f'{index:064x}', 'programs': [{**association, **mismatch}],
+            }))
+        assets.append(GGuideAsset.model_validate({**asset_data, 'id': 'a' * 64, 'width': 1200, 'height': 100}))
+        assets.append(GGuideAsset.model_validate({**asset_data, 'id': 'c' * 64, 'displayable': False}))
+
+        with patch('app.utils.GGuide.GetGGuideAssets', new=AsyncMock(return_value=GGuideAssets(status='Available', assets=tuple(assets)))) as fetch:
+            listing = await self.request('GET', '/api/recording/reservations')
+            self.assertEqual(listing.status_code, 200, listing.text)
+            item = listing.json()['reservations'][0]
+            self.assertEqual(item['gguide_image'], {
+                'id': 'b' * 64, 'width': 640, 'height': 360,
+                'programs': [{'network_id': 4, 'service_id': 101, 'event_id': 55, 'start_at': start_at}],
+                'advertisements': [{'text': '番組の紹介'}],
+            })
+            self.assertEqual(item['program'], self.program.model_dump(mode='json'))
+            self.assertEqual(fetch.await_count, 1)
+            detail = await self.request('GET', '/api/recording/reservations/31')
+            self.assertEqual(detail.status_code, 200, detail.text)
+            self.assertEqual(detail.json(), item)
+            update = await self.request('PUT', '/api/recording/reservations/31', json={'record_settings': item['record_settings']})
+            self.assertEqual(update.status_code, 200, update.text)
+            self.assertEqual(update.json()['gguide_image'], item['gguide_image'])
+
+        # 任意の素材サービスが停止しても、既存予約の全情報を返す。
+        with patch('app.utils.GGuide.GetGGuideAssets', new=AsyncMock(return_value=GGuideAssets(status='Unavailable', assets=()))):
+            unavailable = await self.request('GET', '/api/recording/reservations')
+            self.assertEqual(unavailable.status_code, 200, unavailable.text)
+            self.assertIsNone(unavailable.json()['reservations'][0]['gguide_image'])
 
     async def test_existing_rule_crud_preserves_native_options(self) -> None:
         """共通条件のキーワード変更は既存ルールの他の検索・保存・符号化情報を保持する。"""

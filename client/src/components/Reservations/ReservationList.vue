@@ -91,6 +91,7 @@
         <ReservationDetailDrawer
             v-model="drawerOpen"
             :reservation="selectedReservation"
+            :gguide-image="selectedReservation?.gguide_image ?? null"
             :is-past-program="selectedReservation !== null ? isPastReservation(selectedReservation) : false"
             @added="handleDrawerReservationAdded"
             @deleted="handleReservationDeleted"

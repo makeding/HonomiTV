@@ -26,6 +26,7 @@ from app.utils.edcb import (
 from app.utils.edcb.CtrlCmdUtil import CtrlCmdUtil
 from app.utils.edcb.EDCBUtil import EDCBUtil
 from app.utils.EPGStationRecording import EPGStationRecording
+from app.utils.GGuide import AttachGGuideReservationImages
 from app.utils.TSInformation import TSInformation
 
 
@@ -996,7 +997,9 @@ async def ReservationsAPI(
 
     # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
     if edcb is None:
-        return await EPGStationRecording.getReservations()
+        result = await EPGStationRecording.getReservations()
+        await AttachGGuideReservationImages(result.reservations)
+        return result
 
 
     # EDCB から現在のすべての録画予約の情報を取得
@@ -1039,6 +1042,9 @@ async def ReservationsAPI(
 
     # 録画予約番組の番組開始時刻でソート
     reserves.sort(key=lambda reserve: reserve.program.start_time)
+
+    # 一覧に必要な画像を一括で関連付け、予約ごとの上流問い合わせをまとめる。
+    await AttachGGuideReservationImages(reserves)
 
     return schemas.Reservations(total=len(reserve_data_list), reservations=reserves)
 
@@ -1353,15 +1359,19 @@ async def ReservationAPI(
 
     # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
     if edcb is None:
-        return await EPGStationRecording.getReservation(reservation_id)
+        reservation = await EPGStationRecording.getReservation(reservation_id)
+        await AttachGGuideReservationImages([reservation])
+        return reservation
 
     reserve_data = await GetReserveData(reservation_id, edcb)
 
     # EDCB の ReserveData オブジェクトを schemas.Reservation オブジェクトに変換して返す
-    return await DecodeEDCBReserveData(
+    reservation = await DecodeEDCBReserveData(
         reserve_data,
         is_recording_in_progress = await GetIsRecordingInProgress(reserve_data, edcb),
     )
+    await AttachGGuideReservationImages([reservation])
+    return reservation
 
 
 @router.put(
@@ -1381,7 +1391,9 @@ async def UpdateReservationAPI(
 
     # EPGStation も同じ予約 API とレスポンスを使い、既存の画面へ渡す。
     if edcb is None:
-        return await EPGStationRecording.updateReservation(reservation_id, reserve_update_request.record_settings)
+        reservation = await EPGStationRecording.updateReservation(reservation_id, reserve_update_request.record_settings)
+        await AttachGGuideReservationImages([reservation])
+        return reservation
 
     reserve_data = await GetReserveData(reservation_id, edcb)
 
@@ -1401,10 +1413,12 @@ async def UpdateReservationAPI(
 
     # 更新された録画予約の情報を schemas.Reservation オブジェクトに変換して返す
     updated_reserve_data = await GetReserveData(reserve_data['reserve_id'], edcb)
-    return await DecodeEDCBReserveData(
+    reservation = await DecodeEDCBReserveData(
         updated_reserve_data,
         is_recording_in_progress = await GetIsRecordingInProgress(updated_reserve_data, edcb),
     )
+    await AttachGGuideReservationImages([reservation])
+    return reservation
 
 
 @router.delete(

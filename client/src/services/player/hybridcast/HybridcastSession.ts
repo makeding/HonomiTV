@@ -62,7 +62,6 @@ export default class HybridcastSession {
         });
         this.iframe.title = 'Hybridcast';
         // この宿主はライブ BML の AIT 要求からのみ起動する。VFS の先行フックへ実際の入力源を渡す。
-        this.iframe.dataset.aribSource = 'onair';
         this.iframe.tabIndex = -1;
         // MSE 接続済みの映像は同じ文書内に保持し、SDK の既存 external media plane へ渡す。
         // BML の非表示な Shadow DOM 内に残すと、HTML5 の映像窓だけ黒くなる。
@@ -84,6 +83,7 @@ export default class HybridcastSession {
             // 外部 URL を保持した fetch / XHR を、runtime で取得前に遮断しない。
             allowExternalNetwork: true, getDeviceIdentifier: () => null,
             userAgent: 'Hybridcast/1.0',
+            getInputSource: () => 'onair',
             onLaunchDataBroadcastingBrowser: () => this.onExit(),
             onProgramGuideUnavailable: () => onError('HYBRIDCAST_EPG_UNAVAILABLE'),
             onLifecycle: event => {

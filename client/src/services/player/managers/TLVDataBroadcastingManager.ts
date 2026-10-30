@@ -10,6 +10,7 @@ import type {
     AribMediaPlaneAdapter,
     AribMediaPlaneUnmountReason,
     ProgramInfo,
+    ReceiverMedia,
     RuntimeWindow,
 } from 'libaribhtml5';
 
@@ -305,7 +306,6 @@ class TLVDataBroadcastingManager implements PlayerManager {
         this.iframe.className = 'dplayer-tlv-data-broadcast';
         this.iframe.setAttribute('aria-hidden', 'true');
         this.iframe.tabIndex = -1;
-        this.iframe.dataset.aribSource = this.playback_mode === 'Live' ? 'onair' : 'recorded';
         Object.assign(this.iframe.style, {
             position: 'absolute',
             inset: '0',
@@ -338,6 +338,11 @@ class TLVDataBroadcastingManager implements PlayerManager {
         this.iframe.addEventListener('load', this.runtime_iframe_load_handler);
 
         const receiver_info = this.readReceiverInfo();
+        const source = this.playback_mode === 'Live' ?
+            useChannelsStore().channel.current : usePlayerStore().recorded_program;
+        const supported_media: ReceiverMedia[] = [];
+        if (source.network_id === 11) supported_media.push('6');
+        if (source.network_id === 12) supported_media.push('7');
         this.media_plane_adapter = new DPlayerMediaPlaneAdapter(this.player);
         const receiver_options: ConstructorParameters<typeof AribReceiverHost>[0] & {
             onViewerParticipation?: () => void;
@@ -347,6 +352,8 @@ class TLVDataBroadcastingManager implements PlayerManager {
             broadcastBaseUrl: '/data-broadcast/',
             // BS4K 通信アプリが PC 用ページへ戻らず、MMT 受信機向け分岐を選ぶための識別子。
             userAgent: 'A-PAB/1.0',
+            supportedMedia: supported_media,
+            getInputSource: () => this.playback_mode === 'Live' ? 'onair' : 'recorded',
             allowExternalNetwork: useSettingsStore().settings.enable_internet_access_from_data_broadcasting,
             systemInformation: {
                 zipcode: receiver_info.zipcode,

@@ -5,7 +5,6 @@ type BroadcastWindow = Window & typeof globalThis & {
     __HONOMI_ARIB_BOOTSTRAP__?: boolean;
     navigator: Navigator & {receiverDevice?: {
         confirmIPNetwork?: () => boolean;
-        streamEvent?: {sourceIs?: (source: string) => boolean};
     }};
     nhksh?: {lu: (url: string, ...args: unknown[]) => unknown};
     nhkship?: {redirectIfPc: (checkOnly?: boolean) => boolean | undefined};
@@ -51,16 +50,6 @@ function installDocumentNavigation(): void {
     });
 }
 
-/** SDK に未実装の入力源判定を、宿主が宣言した実際の入力源へ接続する。 */
-function installSourceCheck(): void {
-    const streamEvent = target.navigator.receiverDevice?.streamEvent;
-    // SDK 側で提供されている場合は、その実装と権限判定を優先する。
-    if (streamEvent === undefined || typeof streamEvent.sourceIs === 'function') return;
-    const source = target.frameElement?.getAttribute('data-arib-source');
-    // 通信ページの URL や局名から放送中と推測しない。未宣言の宿主では一致しない。
-    streamEvent.sourceIs = value => source !== null && source !== undefined && value === source;
-}
-
 // 放送スクリプトの評価後に、実際の遷移操作だけを同一 origin の VFS に向ける。
 // メニューや番組 JSON は原文のままなので、new URL(linkIP) や URL 比較を壊さない。
 function installNavigation(): void {
@@ -99,7 +88,6 @@ function install(attempt: number): void {
         const installer = (target.parent as BroadcastWindow).__ARIB_HTML5_INSTALL__;
         if (typeof installer === 'function') {
             installer(target);
-            installSourceCheck();
             scheduleNavigation();
             return;
         }
@@ -126,7 +114,6 @@ if (target.__HONOMI_ARIB_BOOTSTRAP__ !== true) {
         },
     });
     if (document.currentScript?.hasAttribute('data-runtime-installed')) {
-        installSourceCheck();
         scheduleNavigation();
     }
     else install(0);

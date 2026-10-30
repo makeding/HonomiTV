@@ -788,6 +788,8 @@ class Reservation(BaseModel):
     channel: Channel
     # 録画予約番組の情報
     program: Program
+    # Mirakurun が放送回を照合した通常比率の Gガイド画像
+    gguide_image: GGuideCollectionAsset | None = None
     # 録画予約が現在進行中かどうか
     is_recording_in_progress: bool
     # 実際に録画可能かどうか: 全編録画可能 / チューナー不足のため部分的にのみ録画可能 (一部録画できない) / チューナー不足のため全編録画不可能

@@ -40,6 +40,23 @@
                 </div>
             </div>
 
+            <!-- 放送回に対応する画像の読み込み状態は、同じ大きさの枠内で表示する。 -->
+            <v-img v-if="reservation.gguide_image" class="reservation__image"
+                :key="`${reservation.gguide_image.id}-${imageRetry}`"
+                :src="`${Utils.api_base_url}/programs/gguide/images/${reservation.gguide_image.id}`"
+                alt="番組画像">
+                <template #placeholder>
+                    <div class="reservation__image-state"><v-progress-circular indeterminate size="20" /></div>
+                </template>
+                <template #error>
+                    <div class="reservation__image-state" role="status">
+                        <span>番組画像を取得できませんでした。</span>
+                        <small>[GGUIDE_IMAGE_UNAVAILABLE]</small>
+                        <v-btn size="x-small" variant="tonal" @click.stop="imageRetry++">再読み込み</v-btn>
+                    </div>
+                </template>
+            </v-img>
+
             <!-- 中央：番組情報 -->
             <div class="reservation__content">
                 <div class="reservation__content-header">
@@ -156,6 +173,7 @@ const emit = defineEmits<{
 
 // 有効・無効の状態を管理
 const isEnabled = ref(props.reservation.record_settings.is_enabled);
+const imageRetry = ref(0);
 const serverSettingsStore = useServerSettingsStore();
 const canToggleReservation = computed(() => serverSettingsStore.server_settings.general.backend !== 'EPGStation'
     || props.reservation.comment.includes('EPG自動予約'));
@@ -489,9 +507,43 @@ const handleSwitchClick = (event: Event) => {
         flex-direction: column;
         align-items: center;
         flex-shrink: 0;
+        // 操作がない手動予約にも、スイッチや録画中表示と同じ横幅を確保する。
+        width: 42px;
         margin-right: 16px;
         @include smartphone-vertical {
+            width: 39px;
             margin-right: 8px;
+        }
+    }
+
+    &__image {
+        flex: 0 0 144px;
+        width: 144px;
+        height: 96px;
+        margin-right: 16px;
+        border-radius: 6px;
+        background: rgb(var(--v-theme-background));
+        @include smartphone-vertical {
+            flex-basis: 88px;
+            width: 88px;
+            height: 112px;
+            margin-right: 8px;
+        }
+    }
+
+    &__image-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        height: 100%;
+        padding: 4px;
+        font-size: 10px;
+        text-align: center;
+        small {
+            font-size: 7px;
+            overflow-wrap: anywhere;
         }
     }
 

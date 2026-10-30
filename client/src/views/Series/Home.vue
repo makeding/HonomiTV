@@ -2,7 +2,7 @@
     <div class="route-container">
         <HeaderBar v-model:searchQuery="search_query" @search="updateSearchQuery" />
         <main>
-            <Navigation />
+            <Navigation :icon-only="true" />
             <div class="series-home-container-wrapper">
                 <SPHeaderBar v-model:searchQuery="search_query" @search="updateSearchQuery" />
                 <div class="series-home-container">
@@ -39,7 +39,7 @@
                     </div>
 
                     <div v-if="is_loading" class="series-grid">
-                        <v-skeleton-loader v-for="index in 12" :key="index"
+                        <v-skeleton-loader v-for="index in 15" :key="index"
                             type="image" class="series-card series-card--skeleton" />
                     </div>
                     <div v-else-if="series_list.length > 0" ref="series_grid_element" class="series-grid">
@@ -417,8 +417,9 @@ onBeforeUnmount(() => {
 
 .series-grid {
     display: grid;
-    // デスクトップではカード幅を一定範囲に保ち、件数が少ないときも余白に合わせて不自然に引き延ばさない
-    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 320px));
+    // デスクトップでは260pxを基準に列を増やし、余った幅を各列へ均等に配分する。
+    // auto-fill で空の列も確保し、件数が少ないときも同じカード幅を保つ。
+    grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
     justify-content: start;
     gap: 12px;
 
@@ -478,7 +479,10 @@ onBeforeUnmount(() => {
 
     &--skeleton {
         width: 100%;
+        // Vuetify の既定の画像高さをカードの比率に揃え、読み込み前後の行の高さを保つ。
         :deep(.v-skeleton-loader__image) {
+            position: absolute;
+            inset: 0;
             height: 100%;
         }
     }

@@ -820,18 +820,31 @@ async def TimeTableAPI(
 
     elif Config().general.backend == 'EPGStation':
         # EPGStation の予約も既存の番組表の予約アイコン・詳細ドロワーへ反映する。
-        epgstation_reservations = await EPGStationRecording.getReservations()
-        for reservation in epgstation_reservations.reservations:
-            epgstation_status: Literal['Reserved', 'Recording', 'Disabled'] = 'Reserved'
-            if reservation.is_recording_in_progress:
-                epgstation_status = 'Recording'
-            elif reservation.record_settings.is_enabled is False:
-                epgstation_status = 'Disabled'
-            reservations_by_program_id[reservation.program.id] = schemas.TimeTableProgramReservation(
-                id = reservation.id,
-                status = epgstation_status,
-                recording_availability = reservation.recording_availability,
-            ).model_dump()
+        ## 予約情報の取得に失敗しても番組表自体は返す (EDCB 分岐と同じ扱い)
+        try:
+            epgstation_reservations = await EPGStationRecording.getReservations()
+            for reservation in epgstation_reservations.reservations:
+                epgstation_status: Literal['Reserved', 'Recording', 'Disabled'] = 'Reserved'
+                if reservation.is_recording_in_progress:
+                    epgstation_status = 'Recording'
+                elif reservation.record_settings.is_enabled is False:
+                    epgstation_status = 'Disabled'
+                reservation_data = schemas.TimeTableProgramReservation(
+                    id = reservation.id,
+                    status = epgstation_status,
+                    recording_availability = reservation.recording_availability,
+                ).model_dump()
+                # EPGStation 由来の番組 ID は DB の番組 ID と一致しないため、時間帯による紐付けの fallback にも登録する。
+                reservations_by_program_id[reservation.program.id] = reservation_data
+                channel_reservations = reservations_by_channel_time.setdefault(reservation.program.channel_id, [])
+                channel_reservations.append({
+                    'start_time': reservation.program.start_time,
+                    'end_time': reservation.program.end_time,
+                    'reservation': reservation_data,
+                })
+        except Exception as ex:
+            # 予約情報の取得に失敗しても番組表自体は返す
+            logging.warning('[ProgramsRouter][TimeTableAPI] Failed to get EPGStation reservations:', exc_info=ex)
 
     # チャンネルごとに番組をグループ化
     programs_by_channel: dict[str, list[dict[str, Any]]] = {c['id']: [] for c in channels_result}
