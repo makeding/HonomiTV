@@ -1,5 +1,13 @@
 # Selective upstream integration
 
+## Full upstream merge (2026-10-31)
+
+- Merge upstream/master at `1319cf39` into h-dev, preserving fork playback, BS4K, Hybridcast, remote-device integration, capture thumbnail selection, loading-failure recovery and device-local time display.
+- Adopt upstream capture filters, keyboard selection and navigation, lightbox transitions, tag filtering, IME handling, network-storage deletion fixes and database-vacuum controls. No database migration or dependency change is included.
+- Pass the explicit shared process-pool context to the fork's CM analysis as well as upstream workers, retaining existing worker priority and asynchronous submission/cancellation behavior.
+- Preserve tracked `client/dist` byte-for-byte from pre-merge `331fb954`; release artifact generation remains owned by CI. No frontend build, service restart, user-database write or deployment is part of this merge.
+- Client ESLint/TypeScript and 27 selected regression checks passed. Server Ruff/Pyright passed with eight existing FastAPI deprecation warnings; 18 selected checks and four snapshots passed, including capture filters/sections, database-vacuum authorization/data preservation, concurrent program updates and CM cancellation/responsiveness. HTTP checks use the test application and test database. No local user-managed API is running; live-service HTTP, browser interaction and real broadcast acceptance remain unverified.
+
 ## Series compact navigation and grid (2026-10-30)
 
 - `/series/` and its inline series details use the existing icon-only navigation, matching On Air. Desktop navigation occupies 68px; smartphone portrait keeps the bottom navigation.

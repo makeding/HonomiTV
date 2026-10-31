@@ -20,7 +20,7 @@ from numpy.typing import NDArray
 
 from app import logging, schemas
 from app.config import Config, LoadConfig
-from app.constants import CM_DETECT_MODES, LIBRARY_PATH, LOGS_DIR
+from app.constants import CM_DETECT_MODES, LIBRARY_PATH, LOGS_DIR, PROCESS_POOL_CONTEXT
 from app.metadata.CMAnalyzer import (
     CMAnalyzerRequest,
     CMContainerFormat,
@@ -258,7 +258,7 @@ class CMSectionsDetector:
 
         # リクエスト切断時に ProcessPoolExecutor.__exit__() が同期的に子プロセス終了を待つとイベントループが止まるため、
         ## コンテキストマネージャーは使わず、キャンセル時だけ待機なしで終了処理に入る
-        executor = concurrent.futures.ProcessPoolExecutor(max_workers=1)
+        executor = concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=PROCESS_POOL_CONTEXT)
         should_wait_executor = True
         try:
             return await SubmitToProcessPoolExecutor(executor, self._detectWithOpenCV)

@@ -69,6 +69,11 @@ async def test_upload_list_and_delete_capture(client: httpx.AsyncClient, admin_h
     assert [item['id'] for item in captures['captures']] == [capture['id']]
     assert [program['title'] for program in captures['programs']] == ['Oha！4 ▽中野ブロードウェイ時計店で窃盗 被害総額2億円相当']
 
+    # この放送局は偽の Mirakurun が返すチャンネルに含まれず、ほかの局は選択肢に混ざらない
+    response = await client.get('/api/captures/channels')
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+
     # 詳細には保存先フォルダに置かれたファイルが1つだけある
     response = await client.get(f'/api/captures/{capture["id"]}')
     assert response.status_code == 200, response.text
@@ -77,6 +82,55 @@ async def test_upload_list_and_delete_capture(client: httpx.AsyncClient, admin_h
     saved_path = Path(files[0]['file_path'])
     assert saved_path.parent == capture_folder
     assert saved_path.read_bytes() == data
+
+    # 複数のタグは AND 条件となり、期間の条件は一覧と日付ごとの件数に同じように適用される
+    tag_ids: list[int] = []
+    for name in ['朝の番組', 'ニュース']:
+        response = await client.post('/api/captures/tags', json={'name': name}, headers=admin_headers)
+        assert response.status_code == 201, response.text
+        tag_ids.append(response.json()['id'])
+    response = await client.post(
+        f'/api/captures/tags/{tag_ids[0]}/items',
+        json = {'capture_ids': [capture['id']]},
+        headers = admin_headers,
+    )
+    assert response.status_code == 204, response.text
+    filters = {
+        'tag_ids': tag_ids,
+        'start_date': '2026-08-26',
+        'end_date': '2026-08-26',
+        'day_start_hour': 4,
+    }
+    response = await client.get('/api/captures', params=filters)
+    assert response.status_code == 401, response.text
+    response = await client.get('/api/captures', params=filters, headers=admin_headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {'captures': [], 'programs': [], 'next_cursor': None}
+    response = await client.post(
+        f'/api/captures/tags/{tag_ids[1]}/items',
+        json = {'capture_ids': [capture['id']]},
+        headers = admin_headers,
+    )
+    assert response.status_code == 204, response.text
+    response = await client.get('/api/captures', params=filters, headers=admin_headers)
+    assert response.status_code == 200, response.text
+    filtered = response.json()
+    assert filtered['captures'] == [{**capture, 'is_favorite': False, 'tag_ids': tag_ids}]
+    assert filtered['programs'] == captures['programs']
+    assert filtered['next_cursor'] is None
+    response = await client.get('/api/captures/sections', params=filters, headers=admin_headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {'sections': [{'date': '2026-08-26', 'count': 1}], 'total': 1}
+
+    # 開始日の境目が撮影時刻より後になる場合と、別チャンネルの場合は一覧と集計の両方から外れる
+    for excluded in [{'day_start_hour': 5}, {'channel_ids': ['NID4-SID101', 'NID4-SID260']}]:
+        params = {**filters, **excluded}
+        response = await client.get('/api/captures', params=params, headers=admin_headers)
+        assert response.status_code == 200, response.text
+        assert response.json() == {'captures': [], 'programs': [], 'next_cursor': None}
+        response = await client.get('/api/captures/sections', params=params, headers=admin_headers)
+        assert response.status_code == 200, response.text
+        assert response.json() == {'sections': [], 'total': 0}
 
     # 画像の API はアップロードした内容をそのまま返す
     response = await client.get(f'/api/captures/{capture["id"]}/image', params={'hash': file_hash})

@@ -30,6 +30,7 @@ import { onMounted, ref, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 
 import RemoteDeviceActivator from '@/components/RemoteDeviceActivator.vue';
+import Utils from '@/utils';
 
 const props = defineProps<{
     searchQuery?: string;
@@ -113,7 +114,7 @@ const getSearchPath = () => {
 };
 
 const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Enter' && !event.isComposing) {
+    if (event.key === 'Enter' && !Utils.isIMEComposing(event)) {
         doSearch();
     }
 };

@@ -139,7 +139,12 @@ const reset = () => {
     void loadMore();
 };
 
-const applyQuery = () => {
+// event は入力欄で Enter キーを押したときだけ渡される
+const applyQuery = (event?: KeyboardEvent) => {
+    // IME で入力中の文字を確定する Enter キーでは絞り込まない
+    if (event !== undefined && Utils.isIMEComposing(event)) {
+        return;
+    }
     const query = { ...route.query, query: queryInput.value?.trim() || undefined };
     void router.replace({ query });
 };
@@ -206,7 +211,7 @@ const onLogoError = (event: Event) => {
 <style lang="scss" scoped>
 
 .capture-programs {
-    // 検索欄と選択欄の高さは、タグ作成のフォーム (Tags.vue) と同じ標準の高さのままにし、文字だけを録画番組の一覧の並べ替えの選択欄にそろえて小さくする
+    // 検索欄と選択欄の高さは、タグの画面の検索欄 (Tags.vue) と同じ標準の高さのままにし、文字だけを録画番組の一覧の並べ替えの選択欄にそろえて小さくする
     &__toolbar {
         display: flex;
         gap: 10px;

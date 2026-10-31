@@ -1,8 +1,9 @@
 <template>
     <CapturePage :crumbs="crumbs" :with-scrubber="true">
         <CaptureHeader :title="title" :total="total" :active-tab="activeTab" :show-timeline-controls="true" :show-back-button="mode === 'Tag'"
-            :show-query-targets="mode === 'Search'" :axis="axis" :filter="typeFilter" :query-targets="queryTargets"
-            @update:axis="updateAxis" @update:filter="updateTypeFilter" @update:query-targets="updateQueryTargets" @uploaded="timelineRef?.reload()" @scanned="timelineRef?.reload()" />
+            :show-query-targets="mode === 'Search'" :axis="axis" :filter="viewFilter" :query-targets="queryTargets"
+            :lock-favorite="mode === 'Favorites'" :excluded-tag-id="tagId"
+            @update:axis="updateAxis" @update:filter="updateViewFilter" @update:query-targets="updateQueryTargets" @uploaded="timelineRef?.reload()" @scanned="timelineRef?.reload()" />
 
         <!-- お気に入りとタグはログインが必要 -->
         <div v-if="needsLogin" class="capture-empty">
@@ -28,7 +29,7 @@
                 <div class="capture-empty__message" v-html="emptyMessage"></div>
                 <div class="capture-empty__sub" v-html="emptySubMessage"></div>
                 <!-- 条件で0件になったときは、その場で条件を外せるようにする -->
-                <v-btn v-if="hasTypeFilter" class="mt-6 px-4" color="secondary" variant="flat" height="40" @click="clearTypeFilter">
+                <v-btn v-if="hasViewFilter" class="mt-6 px-4" color="secondary" variant="flat" height="40" @click="clearViewFilter">
                     <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
                     <span class="ml-1">絞り込みをすべて解除</span>
                 </v-btn>
@@ -41,14 +42,14 @@
                 :selection="selection" @open="openCapture" @reloading="onReloading" @loaded="onLoaded" @updated="onUpdated([$event])" />
         </template>
 
-        <CaptureSelectionBar :selection="selection" @updated="onUpdated" @deleted="onDeleted" />
-        <CaptureLightbox :capture="openedCapture" :program-hint="openedProgram" :navigate="navigate"
-            @update:capture="openedCapture = $event" @updated="onUpdated([$event])" @deleted="onDeleted" />
+        <CaptureSelectionBar ref="selectionBarRef" :selection="selection" @updated="onUpdated" @deleted="onDeleted" />
+        <CaptureLightbox :capture="openedCapture" :program-hint="openedProgram" :navigate="navigate" :reveal="reveal"
+            @update:capture="onLightboxCaptureChange" @updated="onUpdated([$event])" @deleted="onDeleted" />
     </CapturePage>
 </template>
 <script lang="ts" setup>
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import CaptureHeader from '@/components/Captures/CaptureHeader.vue';
@@ -57,6 +58,7 @@ import CapturePage from '@/components/Captures/CapturePage.vue';
 import { useCaptureSelection } from '@/components/Captures/CaptureSelection';
 import CaptureSelectionBar from '@/components/Captures/CaptureSelectionBar.vue';
 import CaptureTimeline from '@/components/Captures/CaptureTimeline.vue';
+import { findTileImage, openWithTransition } from '@/components/Captures/CaptureTransition';
 import Captures, { CaptureQueryTarget, CaptureTimelineAxis, ICapture, ICaptureFilter } from '@/services/Captures';
 import useSettingsStore from '@/stores/SettingsStore';
 import useUserStore from '@/stores/UserStore';
@@ -95,22 +97,40 @@ const isLoggedIn = ref(userStore.is_logged_in);
 // 日付の境目は、28時間表記の設定に合わせる (深夜アニメのキャプチャが前の日にまとまるように)
 const dayStartHour = computed(() => settingsStore.settings.use_28hour_clock ? 4 : 0);
 
-// 時間の軸とキャプチャの種類の絞り込みは、URL のクエリに持たせて戻る操作でも保つ
+// 時間の軸と絞り込みは、URL のクエリに持たせて戻る操作でも保つ
 const axis = computed<CaptureTimelineAxis>(() => route.query.axis === 'BroadcastAt' ? 'BroadcastAt' : 'CapturedAt');
 const parseBool = (value: unknown) => value === 'true' ? true : value === 'false' ? false : null;
-const typeFilter = computed<ICaptureFilter>(() => ({
+const parseList = (value: unknown) => {
+    const values = Array.isArray(value) ? value : [value];
+    return values.filter((item): item is string => typeof item === 'string' && item !== '');
+};
+const parseDate = (value: unknown) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+// ヘッダーの「並べ替えと絞り込み」で変更できる絞り込み
+// お気に入りとタグの画面の前提の条件 (お気に入りであること・そのタグ) は含めず、その上に重ねる条件だけを持つ
+const viewFilter = computed<ICaptureFilter>(() => ({
+    is_favorite: mode.value !== 'Favorites' && route.query.is_favorite === 'true' ? true : null,
+    tag_ids: parseList(route.query.tag_ids).map(Number).filter(id => Number.isInteger(id) && id !== tagId.value),
+    channel_ids: parseList(route.query.channel_ids),
+    start_date: parseDate(route.query.start_date),
+    end_date: parseDate(route.query.end_date),
     is_caption_composited: parseBool(route.query.is_caption_composited),
     is_comment_composited: parseBool(route.query.is_comment_composited),
     has_caption_text: parseBool(route.query.has_caption_text),
     has_metadata: parseBool(route.query.has_metadata),
 }));
-const filter = computed<ICaptureFilter>(() => ({
-    ...typeFilter.value,
-    is_favorite: mode.value === 'Favorites' ? true : null,
-    tag_id: tagId.value,
-    query: searchQuery.value || null,
-    query_targets: queryTargets.value,
-}));
+const filter = computed<ICaptureFilter>(() => {
+    const tagIds = [...(viewFilter.value.tag_ids ?? [])];
+    if (tagId.value !== null) {
+        tagIds.unshift(tagId.value);
+    }
+    return {
+        ...viewFilter.value,
+        is_favorite: mode.value === 'Favorites' ? true : viewFilter.value.is_favorite,
+        tag_ids: tagIds,
+        query: searchQuery.value || null,
+        query_targets: queryTargets.value,
+    };
+});
 
 const updateQuery = (patch: Record<string, string | string[] | null>) => {
     const query = { ...route.query, ...patch };
@@ -123,12 +143,20 @@ const updateQuery = (patch: Record<string, string | string[] | null>) => {
 };
 const updateAxis = (value: CaptureTimelineAxis) => updateQuery({ axis: value === 'BroadcastAt' ? 'BroadcastAt' : null });
 const updateQueryTargets = (value: CaptureQueryTarget[]) => updateQuery({ query_targets: value.length > 0 ? value : null });
-const updateTypeFilter = (value: ICaptureFilter) => {
+const toQueryValue = (value: boolean | string | null | undefined) => value === null || value === undefined || value === '' ? null : String(value);
+const updateViewFilter = (value: ICaptureFilter) => {
+    const tagIds = (value.tag_ids ?? []).map(String);
+    const channelIds = value.channel_ids ?? [];
     updateQuery({
-        is_caption_composited: value.is_caption_composited === null || value.is_caption_composited === undefined ? null : String(value.is_caption_composited),
-        is_comment_composited: value.is_comment_composited === null || value.is_comment_composited === undefined ? null : String(value.is_comment_composited),
-        has_caption_text: value.has_caption_text === null || value.has_caption_text === undefined ? null : String(value.has_caption_text),
-        has_metadata: value.has_metadata === null || value.has_metadata === undefined ? null : String(value.has_metadata),
+        is_favorite: value.is_favorite === true ? 'true' : null,
+        tag_ids: tagIds.length > 0 ? tagIds : null,
+        channel_ids: channelIds.length > 0 ? channelIds : null,
+        start_date: toQueryValue(value.start_date),
+        end_date: toQueryValue(value.end_date),
+        is_caption_composited: toQueryValue(value.is_caption_composited),
+        is_comment_composited: toQueryValue(value.is_comment_composited),
+        has_caption_text: toQueryValue(value.has_caption_text),
+        has_metadata: toQueryValue(value.has_metadata),
     });
 };
 
@@ -160,11 +188,18 @@ const crumbs = computed(() => {
     }
 });
 const emptyIcon = computed(() => mode.value === 'Favorites' ? 'fluent:heart-20-regular' : mode.value === 'Search' ? 'fluent:search-20-regular' : 'fluent:image-20-regular');
-// 画像の種類の絞り込みが1つでも掛かっているか (0件の理由が「まだ無い」のか「条件に合わない」のかを分けるため)
-const hasTypeFilter = computed(() => Object.values(typeFilter.value).some(value => value !== null && value !== undefined));
+// 絞り込みが1つでも掛かっているか (0件の理由が「まだ無い」のか「条件に合わない」のかを分けるため)
+const hasViewFilter = computed(() => {
+    for (const value of Object.values(viewFilter.value)) {
+        if (Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined) {
+            return true;
+        }
+    }
+    return false;
+});
 
 const emptyMessage = computed(() => {
-    if (hasTypeFilter.value) {
+    if (hasViewFilter.value) {
         return '条件に一致するキャプチャはありません。';
     }
     if (mode.value === 'Favorites') {
@@ -179,7 +214,7 @@ const emptyMessage = computed(() => {
     return 'キャプチャはまだありません。';
 });
 const emptySubMessage = computed(() => {
-    if (hasTypeFilter.value) {
+    if (hasViewFilter.value) {
         return '絞り込み条件を解除すると、<br class="d-sm-none">他のキャプチャも表示されます。';
     }
     if (mode.value === 'Favorites') {
@@ -197,8 +232,8 @@ const emptySubMessage = computed(() => {
     return '';
 });
 
-const clearTypeFilter = () => {
-    updateTypeFilter({ is_caption_composited: null, is_comment_composited: null, has_caption_text: null, has_metadata: null });
+const clearViewFilter = () => {
+    updateViewFilter({});
 };
 
 const isLoadFailed = ref(false);
@@ -220,8 +255,139 @@ const openCapture = (capture: ICapture) => {
     openedCapture.value = capture;
 };
 const navigate = async (capture: ICapture, delta: 1 | -1) => timelineRef.value?.getNeighbor(capture, delta) ?? null;
+const reveal = async (capture: ICapture) => timelineRef.value?.revealCapture(capture);
 
-// お気に入り・タグの変更は、表示中の一覧に反映する (お気に入りから外したものは、お気に入りの画面では一覧を取り直す)
+// 拡大表示で前後へ送ったときは、表示していた1枚だけを選んでいる状態なら、macOS のクイックルックと同じく選択も送った先へ移す
+// 閉じたあとに矢印キーで続けて移動するときの起点を、最後に見ていたキャプチャにするため
+// 表示していたキャプチャと別のキャプチャを選んでいるとき (拡大表示で削除して、選択に別の1枚だけが残ったときなど) は、選択を変更しない
+const onLightboxCaptureChange = (capture: ICapture | null) => {
+    const shown = openedCapture.value;
+    if (capture !== null && shown !== null && selection.count.value === 1 && selection.isSelected(shown)) {
+        selection.selectOnly(capture);
+    }
+    openedCapture.value = capture;
+};
+
+
+// ---------- キーボードでの操作 ----------
+
+// 何かを選んでいる間は、エクスプローラーや Finder のサムネイル表示と同じく、キーボードで選択を動かして操作できるようにする
+// 何も選んでいないときの矢印キーと Space は、ブラウザの既定の動作 (ページのスクロール) に任せる
+const selectionBarRef = ref<InstanceType<typeof CaptureSelectionBar> | null>(null);
+let isMovingByKeyboard = false;
+const moveByKeyboard = async (direction: 'Left' | 'Right' | 'Up' | 'Down', extend: boolean) => {
+    const cursor = selection.getCursor();
+    // 隣の日を読み込んでいる間にキーが押し続けられても、移動を重ねずに1つずつ進める
+    if (cursor === null || timelineRef.value === null || isMovingByKeyboard) {
+        return;
+    }
+    isMovingByKeyboard = true;
+    try {
+        const target = await timelineRef.value.getKeyboardTarget(cursor, direction);
+        // 隣の日を読み込んでいる間に選択が解除・変更されたときは、押した時点の移動先を反映せずに終える
+        if (target === null || target === undefined || selection.getCursor()?.id !== cursor.id || timelineRef.value === null) {
+            return;
+        }
+        // Shift キーを押しているときは、範囲選択の起点から移動先までを選び、押していないときは移動先の1枚だけを選ぶ
+        if (extend) {
+            selection.selectRange(target, timelineRef.value.orderedLoaded());
+        } else {
+            selection.selectOnly(target);
+        }
+        await timelineRef.value.revealCapture(target);
+    } finally {
+        isMovingByKeyboard = false;
+    }
+};
+const onKeyDown = (event: KeyboardEvent) => {
+    // 拡大表示の中のキーは拡大表示 (CaptureLightbox.vue) が扱い、入力欄やメニュー・ダイアログを開いている間は何もしない
+    if (openedCapture.value !== null || selection.isSelecting.value === false) {
+        return;
+    }
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+    }
+    if (document.querySelector('.v-overlay--active') !== null) {
+        return;
+    }
+    const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+    const cursor = selection.getCursor();
+    if (cursor === null) {
+        return;
+    }
+    switch (event.key) {
+        case 'ArrowLeft':
+        case 'ArrowRight':
+        case 'ArrowUp':
+        case 'ArrowDown': {
+            if (isCtrlOrCmd || event.altKey) {
+                return;
+            }
+            void moveByKeyboard(event.key.replace('Arrow', '') as 'Left' | 'Right' | 'Up' | 'Down', event.shiftKey);
+            break;
+        }
+        // macOS のクイックルックと同じく、Space で選んでいるキャプチャを開く (もう一度 Space を押すと閉じる)
+        case ' ':
+        case 'Enter': {
+            if (isCtrlOrCmd || event.altKey || event.shiftKey) {
+                return;
+            }
+            openWithTransition(findTileImage(cursor.id), () => openCapture(cursor));
+            break;
+        }
+        // Mac のキーボードには Delete キーがないため、Finder と同じく Command+Backspace でも削除できるようにする
+        case 'Delete': {
+            selectionBarRef.value?.requestDelete();
+            break;
+        }
+        case 'Backspace': {
+            if (event.metaKey === false) {
+                return;
+            }
+            selectionBarRef.value?.requestDelete();
+            break;
+        }
+        // 全選択は、選んでいるキャプチャがある日のキャプチャだけにする (日付の見出しのチェックと同じ範囲)
+        // 絞り込みなしで十数万枚をまとめて選び、そのまま削除してしまう事故を防ぐため
+        case 'a':
+        case 'A': {
+            if (isCtrlOrCmd === false) {
+                return;
+            }
+            selection.setMany(timelineRef.value?.getDayCaptures(cursor) ?? [], true);
+            break;
+        }
+        // 拡大表示と同じく、F キーで選んでいるキャプチャをお気に入りに追加・お気に入りから外し、T キーでタグを付ける
+        case 'f':
+        case 'F': {
+            if (isCtrlOrCmd || event.altKey) {
+                return;
+            }
+            void selectionBarRef.value?.toggleFavorite();
+            break;
+        }
+        case 't':
+        case 'T': {
+            if (isCtrlOrCmd || event.altKey) {
+                return;
+            }
+            selectionBarRef.value?.openTagDialog();
+            break;
+        }
+        case 'Escape': {
+            selection.clear();
+            break;
+        }
+        default:
+            return;
+    }
+    event.preventDefault();
+};
+onMounted(() => window.addEventListener('keydown', onKeyDown));
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown));
+
+// お気に入り・タグの変更は、表示中の一覧に反映する
+// お気に入りやタグで絞り込んでいる一覧から外れたキャプチャがあれば、一覧を取り直す
 const onUpdated = (captures: ICapture[]) => {
     for (const capture of captures) {
         timelineRef.value?.replaceCapture(capture);
@@ -229,12 +395,22 @@ const onUpdated = (captures: ICapture[]) => {
             openedCapture.value = capture;
         }
     }
-    if ((mode.value === 'Favorites' && captures.some(capture => capture.is_favorite === false)) ||
-        (mode.value === 'Tag' && captures.some(capture => !capture.tag_ids?.includes(tagId.value!)))) {
-        void timelineRef.value?.reload();
+    // 選択が持っている内容も、まだ選ばれているキャプチャの分だけ新しい状態に差し替える (Space で開き直したときに古い状態で開かないようにするため)
+    selection.setMany(captures.filter(capture => selection.isSelected(capture)), true);
+    const filterTagIds = filter.value.tag_ids ?? [];
+    for (const capture of captures) {
+        const isUnfavorited = filter.value.is_favorite === true && capture.is_favorite === false;
+        const isUntagged = filterTagIds.some(id => capture.tag_ids?.includes(id) !== true);
+        if (isUnfavorited || isUntagged) {
+            void timelineRef.value?.reload();
+            return;
+        }
     }
 };
-const onDeleted = () => {
+// 削除したキャプチャは選択からも外す (拡大表示で削除したときも、選択に残ったまま一括の操作に送らないようにするため)
+const onDeleted = (capture_ids: number[]) => {
+    const deletedIds = new Set(capture_ids);
+    selection.setMany([...selection.selected.value.values()].filter(capture => deletedIds.has(capture.id)), false);
     void timelineRef.value?.reload();
 };
 

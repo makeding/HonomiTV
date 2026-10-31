@@ -37,6 +37,7 @@ import { useRouter, useRoute } from 'vue-router';
 
 import OfflineDownloadBadge from '@/components/OfflineDownloadBadge.vue';
 import RemoteDeviceActivator from '@/components/RemoteDeviceActivator.vue';
+import Utils from '@/utils';
 
 // Props の定義
 const props = withDefaults(defineProps<{
@@ -155,7 +156,7 @@ const executeSearch = () => {
 
 // キーボードイベントの処理
 const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Enter' && event.isComposing === false) {
+    if (event.key === 'Enter' && Utils.isIMEComposing(event) === false) {
         executeSearch();
     } else if (event.key === 'Escape') {
         deactivateSearch();

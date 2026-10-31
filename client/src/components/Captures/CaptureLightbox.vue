@@ -34,7 +34,7 @@
                             <Icon :icon="isInfoOpen ? 'fluent:info-24-filled' : 'fluent:info-24-regular'" width="24px" />
                         </div>
                         <!-- その他の操作 (録画番組のメニューと同じく、取り消せない削除は区切り線の下に赤で置き、押し間違えにくくする) -->
-                        <v-menu v-if="canSetThumbnail || isAdmin" location="bottom end" :z-index="2400">
+                        <v-menu location="bottom end" :z-index="2400">
                             <template #activator="{ props: menuProps }">
                                 <div v-ripple class="capture-lightbox__button" v-bind="menuProps">
                                     <Icon icon="fluent:more-vertical-24-filled" width="24px" />
@@ -47,8 +47,8 @@
                                     </template>
                                     <v-list-item-title class="ml-3">録画番組のサムネイルにする</v-list-item-title>
                                 </v-list-item>
-                                <v-divider v-if="canSetThumbnail && isAdmin"></v-divider>
-                                <v-list-item v-if="isAdmin" class="capture-lightbox__menu-item--danger" @click="isDeleteConfirmOpen = true">
+                                <v-divider v-if="canSetThumbnail"></v-divider>
+                                <v-list-item class="capture-lightbox__menu-item--danger" @click="requestDelete">
                                     <template #prepend>
                                         <Icon icon="fluent:delete-20-regular" width="20px" height="20px" />
                                     </template>
@@ -102,7 +102,10 @@
                 </aside>
 
                 <CaptureTagDialog v-model:show="isTagDialogOpen" :captures="[capture]" @updated="onTagsUpdated" />
-                <v-dialog max-width="520" :model-value="isDeleteConfirmOpen" @update:model-value="isDeleteConfirmOpen = $event">
+                <!-- キーボードだけでも続けて削除できるよう、確認のダイアログを開いたら削除のボタンにフォーカスを当て、Enter キーで確定できるようにする -->
+                <!-- Tab キーでキャンセルのボタンへ移ってから Enter キーを押すと、キャンセルになる -->
+                <v-dialog max-width="520" :model-value="isDeleteConfirmOpen" @update:model-value="isDeleteConfirmOpen = $event"
+                    @after-enter="deleteButtonRef?.$el.focus()">
                     <v-card>
                         <v-card-title class="d-flex justify-center pt-6 font-weight-bold">このキャプチャを削除しますか？</v-card-title>
                         <v-card-text class="pt-2 pb-0">
@@ -117,7 +120,7 @@
                                 <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
                                 <span class="ml-1">キャンセル</span>
                             </v-btn>
-                            <v-btn color="error" variant="flat" height="40" class="px-3" @click="deleteCapture">
+                            <v-btn ref="deleteButtonRef" color="error" variant="flat" height="40" class="px-3" @click="deleteCapture">
                                 <Icon icon="fluent:delete-16-regular" width="18px" height="18px" />
                                 <span class="ml-1">キャプチャを削除</span>
                             </v-btn>
@@ -160,11 +163,12 @@ let isInfoOpenRemembered = true;
 </script>
 <script lang="ts" setup>
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { ComponentPublicInstance, computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import CaptureInfo from '@/components/Captures/CaptureInfo.vue';
 import CaptureTagDialog from '@/components/Captures/CaptureTagDialog.vue';
+import { findTileImage } from '@/components/Captures/CaptureTransition';
 import Message from '@/message';
 import Captures, { ICapture, ICaptureDetail, ICaptureProgram, ICaptureTag } from '@/services/Captures';
 import Videos, { IRecordedProgram } from '@/services/Videos';
@@ -180,6 +184,8 @@ const props = defineProps<{
     programHint?: ICaptureProgram | null;
     // 前後のキャプチャを返す関数 (一覧によって前後のたどり方が違うので、一覧側から渡す)
     navigate: (capture: ICapture, delta: 1 | -1) => Promise<ICapture | null | undefined>;
+    // 閉じる前に、一覧の中でそのキャプチャのタイルが見える位置までスクロールさせる関数 (一覧によってスクロールの仕方が違うので、一覧側から渡す)
+    reveal?: (capture: ICapture) => Promise<void>;
 }>();
 
 const emit = defineEmits<{
@@ -205,6 +211,8 @@ const isTagDialogOpen = ref(false);
 const isDeleteConfirmOpen = ref(false);
 // サムネイルへの変更の確認 (既存のサムネイルを上書きする取り消せない操作のため)
 const isSetThumbnailConfirmOpen = ref(false);
+// 確認のダイアログの削除のボタン (開いたときにフォーカスを当てるため)
+const deleteButtonRef = ref<ComponentPublicInstance | null>(null);
 const detail = ref<ICaptureDetail | null>(null);
 const tags = ref<ICaptureTag[]>([]);
 
@@ -346,14 +354,58 @@ const trackStyle = computed(() => ({
 }));
 const backdropOpacity = computed(() => Math.max(0, 1 - Math.abs(dismissY.value) / 500));
 
-const close = () => {
-    emit('update:capture', null);
+// 閉じるときは、開くときの逆に、1枚表示の画像が一覧のタイルの位置まで縮んでいくように見せる
+// 一覧のタイルを先に画面に見える位置までスクロールさせてから、View Transitions API で2つの画像の位置と大きさをつなぐ
+let isClosing = false;
+const close = async () => {
+    const current = props.capture;
+    if (current === null || isClosing) {
+        return;
+    }
+    // 対応していないブラウザと、動きを減らす設定のときは、そのまま閉じる
+    if (document.startViewTransition === undefined || window.matchMedia('(prefers-reduced-motion: reduce)').matches === true) {
+        emit('update:capture', null);
+        return;
+    }
+    isClosing = true;
+    await props.reveal?.(current);
+    let tileImage: HTMLImageElement | null = null;
+    const transition = document.startViewTransition(async () => {
+        // 閉じた後の画面では、フェードアウト中の1枚表示を隠し、名前を戻る先のタイルの画像へ渡す
+        document.documentElement.classList.add('capture-lightbox-closing');
+        emit('update:capture', null);
+        await nextTick();
+        tileImage = findTileImage(current.id);
+        tileImage?.style.setProperty('view-transition-name', 'capture-lightbox-image');
+    });
+    try {
+        await transition.finished;
+    } finally {
+        (tileImage as HTMLImageElement | null)?.style.removeProperty('view-transition-name');
+        document.documentElement.classList.remove('capture-lightbox-closing');
+        isClosing = false;
+    }
 };
 
 // 前後へ送る (矢印キー・矢印ボタン・スワイプで共通)
 // 隣の画像を今の位置まで滑らせてから、表示中のキャプチャを差し替える
-const move = async (delta: 1 | -1) => {
-    if (props.capture === null || isSliding.value) {
+// 送るアニメーションの途中でもう一度押されたら、途中の送りをすぐに完了させてから、続けて次へ送る
+// 連打されたときも押した回数だけ順に送れるよう、送り始めるまでの処理は1回ずつ順番に行う
+let moveQueue: Promise<void> = Promise.resolve();
+// 送るアニメーションの途中のときに、その送りをすぐに完了させる関数
+let finishSlide: (() => Promise<void>) | null = null;
+const move = (delta: 1 | -1) => {
+    moveQueue = moveQueue.then(() => startSlide(delta));
+    return moveQueue;
+};
+const startSlide = async (delta: 1 | -1) => {
+    if (props.capture === null) {
+        return;
+    }
+    if (finishSlide !== null) {
+        await finishSlide();
+    }
+    if (props.capture === null) {
         return;
     }
     // 送り始めたときのキャプチャ (待っている間に閉じたり別のキャプチャを開いたりしたら、送るのをやめるため)
@@ -380,21 +432,32 @@ const move = async (delta: 1 | -1) => {
     isFollowingFinger.value = false;
     const width = stageRef.value?.clientWidth ?? window.innerWidth;
     dragX.value = -delta * (width + SLIDE_GAP);
-    await new Promise(resolve => window.setTimeout(resolve, 300));
-    // 滑らせている間に閉じたり別のキャプチャを開いたりしたら、隣へ差し替えずに位置だけを戻して終える
-    if (props.capture?.id !== current.id) {
-        isSliding.value = false;
+
+    // アニメーションが終わったとき (途中でもう一度押されたときはその時点) に、表示中のキャプチャを隣へ差し替える
+    let isFinished = false;
+    const finish = async () => {
+        if (isFinished) {
+            return;
+        }
+        isFinished = true;
+        finishSlide = null;
+        // 滑らせている間に閉じたり別のキャプチャを開いたりしたら、隣へ差し替えずに位置だけを戻して終える
+        if (props.capture?.id !== current.id) {
+            isSliding.value = false;
+            dragX.value = 0;
+            return;
+        }
+        // 差し替えと同時に位置を戻す (隣の画像がそのまま中央の枠へ移るので、見た目は動かない)
+        isSnapping.value = true;
+        emit('update:capture', neighbor);
         dragX.value = 0;
-        return;
-    }
-    // 差し替えと同時に位置を戻す (隣の画像がそのまま中央の枠へ移るので、見た目は動かない)
-    isSnapping.value = true;
-    emit('update:capture', neighbor);
-    dragX.value = 0;
-    await nextTick();
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    isSnapping.value = false;
-    isSliding.value = false;
+        await nextTick();
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        isSnapping.value = false;
+        isSliding.value = false;
+    };
+    finishSlide = finish;
+    window.setTimeout(() => void finish(), 300);
 };
 
 
@@ -538,7 +601,7 @@ const onStageTouchEnd = (event: TouchEvent) => {
     } else if (track.verticalTarget === 'Dismiss') {
         // 十分に下へ引いたか、素早く払ったら閉じる
         if (dismissY.value > 120 || track.velocityY > 0.5) {
-            close();
+            void close();
         }
         dismissY.value = 0;
     }
@@ -621,7 +684,7 @@ const onStageClick = () => {
     if (Date.now() - lastTouchTime < 800) {
         return;
     }
-    close();
+    void close();
 };
 
 
@@ -694,6 +757,15 @@ const onTagsUpdated = async (captures: ICapture[]) => {
         emit('updated', updated);
     }
     tags.value = (await Captures.fetchTags()) ?? tags.value;
+};
+
+// 削除は管理者だけができるが、項目は誰にでも表示し、管理者でなければ押したときにログインし直す必要があることを伝える
+const requestDelete = () => {
+    if (!isAdmin.value) {
+        Message.warning('キャプチャを削除するには管理者権限が必要です。\n管理者アカウントでログインし直してください。');
+        return;
+    }
+    isDeleteConfirmOpen.value = true;
 };
 
 const deleteCapture = async () => {
@@ -803,23 +875,34 @@ onBeforeUnmount(() => window.removeEventListener('popstate', onPopState));
 // 番組のキャプチャの一覧から同じ番組を開いたときのように、移る先が今の画面と同じなら、普通に閉じて積んだ履歴を戻す
 const leaveTo = (path: string) => {
     if (router.resolve(path).fullPath === router.currentRoute.value.fullPath) {
-        close();
+        void close();
         return;
     }
+    // 別の画面へ移るときは、一覧のタイルへ戻るアニメーションをせずにすぐ閉じる
     hasHistoryEntry = false;
-    close();
+    emit('update:capture', null);
     void router.replace(path);
 };
 
 
 // ---------- キーボードとページのスクロール ----------
 
-// キーボードの操作 (左右で前後、Esc で閉じる、F でお気に入り、T でタグ、I で情報)
+// キーボードの操作 (左右で前後、Esc と Space で閉じる、F でお気に入り、T でタグ、I で情報、Delete で削除)
 const onKeyDown = (event: KeyboardEvent) => {
     if (props.capture === null || isTagDialogOpen.value || isDeleteConfirmOpen.value || isSetThumbnailConfirmOpen.value) {
         return;
     }
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+    }
+    // ショートカットの一覧など、上に重なったダイアログの中で押されたキーは、そのダイアログに任せる
+    if (event.target instanceof Element && event.target.closest('.v-overlay__content') !== null) {
+        return;
+    }
+    // Mac のキーボードには Delete キーがないため、Finder と同じく Command+Backspace でも削除できるようにする
+    if (event.key === 'Backspace' && event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        requestDelete();
         return;
     }
     // Ctrl・Command・Alt と一緒に押したキーは、ページ内検索 (Ctrl+F) などのブラウザのショートカットとしてブラウザに任せる
@@ -829,7 +912,10 @@ const onKeyDown = (event: KeyboardEvent) => {
     switch (event.key) {
         case 'ArrowLeft': void move(-1); break;
         case 'ArrowRight': void move(1); break;
-        case 'Escape': close(); break;
+        case 'Escape': void close(); break;
+        // macOS のクイックルックと同じく、一覧で Space を押して開いたら、もう一度 Space を押すと閉じる
+        case ' ': void close(); break;
+        case 'Delete': requestDelete(); break;
         case 'f': case 'F': void toggleFavorite(); break;
         case 't': case 'T': openTagDialog(); break;
         case 'i': case 'I': setInfoOpen(!isInfoOpen.value); break;
@@ -1108,6 +1194,10 @@ onBeforeUnmount(() => {
 // View Transitions API の疑似要素は文書の最上位にできるので、スコープなしのスタイルで指定する
 .capture-lightbox__image--current {
     view-transition-name: capture-lightbox-image;
+}
+// 一覧のタイルへ戻りながら閉じるときは、閉じた後の画面にフェードアウト中の1枚表示が写らないよう隠す (close() を参照)
+html.capture-lightbox-closing .capture-lightbox {
+    display: none;
 }
 ::view-transition-group(capture-lightbox-image) {
     animation-duration: 0.3s;

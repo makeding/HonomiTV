@@ -19,7 +19,7 @@ from tortoise.models import Model as TortoiseModel
 
 from app import logging
 from app.config import Config, LoadConfig
-from app.constants import DATABASE_CONFIG, HTTPX_CLIENT, JST
+from app.constants import DATABASE_CONFIG, HTTPX_CLIENT, JST, PROCESS_POOL_CONTEXT
 from app.models.Channel import Channel
 from app.schemas import Genre
 from app.utils import (
@@ -105,6 +105,7 @@ class Program(TortoiseModel):
             ## 番組情報更新中に API リクエストやバックグラウンドタスクがキャンセルされても、イベントループ全体を止めないように明示的に閉じる
             executor = concurrent.futures.ProcessPoolExecutor(
                 max_workers = 1,
+                mp_context = PROCESS_POOL_CONTEXT,
                 # 子プロセス側で CPU / ディスク I/O 優先度を下げ、ライブ視聴や録画の処理を妨げないようにする
                 initializer = LimitWorkerProcessResourcePriority,
             )

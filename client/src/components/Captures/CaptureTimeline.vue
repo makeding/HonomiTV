@@ -9,8 +9,11 @@
                     <Icon :icon="isDaySelected(section) ? 'fluent:checkmark-circle-24-filled' : 'fluent:circle-24-regular'"
                         width="22px" height="22px" />
                 </div>
-                <span class="capture-timeline__header-date">{{ formatDate(section.date) }}</span>
-                <span class="capture-timeline__header-count">{{ section.count.toLocaleString() }}枚</span>
+                <!-- 日付と枚数は文字の大きさが違うので、中央ではなく文字のベースラインでそろえる -->
+                <span class="capture-timeline__header-label">
+                    <span class="capture-timeline__header-date">{{ formatDate(section.date) }}</span>
+                    <span class="capture-timeline__header-count">{{ section.count.toLocaleString() }}枚</span>
+                </span>
                 <!-- 日単位の読み込みが失敗したときは、プレースホルダーの灰色と同じにせず、失敗したことを示して読み直せるようにする -->
                 <span v-if="isDayFailed(section)" class="capture-timeline__header-failed">
                     読み込めませんでした
@@ -40,7 +43,7 @@
 </template>
 <script lang="ts" setup>
 
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 
 import CaptureScrubber, { IScrubberMark } from '@/components/Captures/CaptureScrubber.vue';
 import { CaptureSelection } from '@/components/Captures/CaptureSelection';
@@ -77,6 +80,10 @@ const emit = defineEmits<{
 // 見出しの高さ・タイルの間隔・タイルの最小の幅 (px)
 const HEADER_HEIGHT = 48;
 const SECTION_GAP = 14;
+// 画面の上端から、固定のヘッダーに隠れずに見え始める位置までの高さ (px)
+const REVEAL_TOP_MARGIN = 72;
+// 画面の下端から、複数選択中の下部のバーに隠れずに見える位置までの高さ (px)
+const REVEAL_BOTTOM_MARGIN = 96;
 // ブラウザが扱える要素の高さには上限 (Chrome では約 3,355 万 px) があり、百万枚規模ではそれを超える
 // そのため要素の高さはこの値までにとどめ、要素の上端に当たるタイムラインの位置 (baseOffset) をずらしながら、その範囲だけを描画する
 const MAX_DOM_HEIGHT = 8_000_000;
@@ -462,7 +469,7 @@ const scrollToContentY = (y: number) => {
     // 移る先が要素の範囲の真ん中に来るよう、先に要素の上端に当たる位置をずらしてから、ページをスクロールする
     baseOffset.value = centerBaseOffset(y);
     // 固定ヘッダーの下に日の見出しが来るよう、少しだけ手前に合わせる
-    window.scrollTo({ top: Math.max(0, rootTop + y - baseOffset.value - 72) });
+    window.scrollTo({ top: Math.max(0, rootTop + y - baseOffset.value - REVEAL_TOP_MARGIN) });
     // ずらしたあとのページのスクロール位置が前と同じでもスクロールのイベントは届かないので、描画する範囲を取り直す
     onScroll();
 };
@@ -501,6 +508,39 @@ const formatDate = (date: string) => {
 };
 
 /**
+ * 日の読み込みを始め、読み終わったその日のキャプチャを返す
+ * 読み込みに時間がかかっても終わるまで待ち、読み込み中を0件と取り違えて端に着いたと判定するのを防ぐ
+ * @param date 日付 (YYYY-MM-DD)
+ * @returns その日のキャプチャ (読み込めなかったときは undefined)
+ */
+const waitForDay = async (date: string) => {
+    // 順番待ちになった日は、画面に見えていないと読み込まずに外されるので、空きができ次第この日の読み込みを始めるよう呼び直す
+    let result = await loadDay(date);
+    while (result === 'Queued') {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        result = await loadDay(date);
+    }
+    // 読み込めなかった日は、端に着いたのではなく分からないだけなので、次に送るときに読み直せるよう undefined を返す
+    if (result === 'Failed') {
+        return undefined;
+    }
+    return loadedDays.value.get(date) ?? [];
+};
+
+/**
+ * キャプチャが並んでいる日を、タイムラインの日付の軸の日時から求める
+ * @param capture キャプチャ
+ * @returns 日付 (YYYY-MM-DD 、日時がないときは null)
+ */
+const dateOf = (capture: ICapture) => {
+    const time = props.axis === 'CapturedAt' ? capture.captured_at : capture.broadcast_at;
+    if (time === null) {
+        return null;
+    }
+    return dayjs(time).subtract(props.dayStartHour, 'hour').format('YYYY-MM-DD');
+};
+
+/**
  * 拡大表示の前後の移動に使う、隣のキャプチャを返す
  * 日の境目では隣の日を読み込んでから返すので、拡大表示のまま日をまたいで送れる
  * 削除やお気に入りから外したことで一覧から外れたキャプチャからも、並びの上で隣にあるキャプチャへ送れる
@@ -509,22 +549,6 @@ const formatDate = (date: string) => {
  * @returns 隣のキャプチャ (端なら null、隣の日を読み込めず分からないときは undefined)
  */
 const getNeighbor = async (capture: ICapture, delta: 1 | -1): Promise<ICapture | null | undefined> => {
-
-    // 日の読み込みを始め、読み終わったその日のキャプチャを返す
-    // 読み込みに時間がかかっても終わるまで待ち、読み込み中を0件と取り違えて端に着いたと判定するのを防ぐ
-    const waitForDay = async (date: string) => {
-        // 順番待ちになった日は、画面に見えていないと読み込まずに外されるので、空きができ次第この日の読み込みを始めるよう呼び直す
-        let result = await loadDay(date);
-        while (result === 'Queued') {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            result = await loadDay(date);
-        }
-        // 読み込めなかった日は、端に着いたのではなく分からないだけなので、次に送るときに読み直せるよう undefined を返す
-        if (result === 'Failed') {
-            return undefined;
-        }
-        return loadedDays.value.get(date) ?? [];
-    };
 
     // 隣の日の、送る向きの端のキャプチャを返す
     const getEdgeOfDay = async (section: ITimelineSection | undefined) => {
@@ -546,10 +570,10 @@ const getNeighbor = async (capture: ICapture, delta: 1 | -1): Promise<ICapture |
     // 今のキャプチャがある日を、タイムラインの日付の軸の日時から求める
     const timeOf = (item: ICapture) => props.axis === 'CapturedAt' ? item.captured_at : item.broadcast_at;
     const time = timeOf(capture);
-    if (time === null) {
+    const date = dateOf(capture);
+    if (time === null || date === null) {
         return null;
     }
-    const date = dayjs(time).subtract(props.dayStartHour, 'hour').format('YYYY-MM-DD');
 
     // その日ごと一覧から外れたときは、送る向きにある一番近い日の端から返す (日は新しい順に並ぶ)
     const index = sections.value.findIndex(section => section.date === date);
@@ -591,6 +615,119 @@ const getNeighbor = async (capture: ICapture, delta: 1 | -1): Promise<ICapture |
 };
 
 /**
+ * 矢印キーで移動する先のキャプチャを返す (エクスプローラーや Finder のサムネイル表示と同じ動き)
+ * 左右は並びの前後へ、上下は同じ列の上下の行へ移り、日の境目では隣の日の同じ列へ移る
+ * @param capture 今のキャプチャ
+ * @param direction 矢印キーの向き
+ * @returns 移動先のキャプチャ (端なら null、隣の日を読み込めず分からないときは undefined)
+ */
+const getKeyboardTarget = async (capture: ICapture, direction: 'Left' | 'Right' | 'Up' | 'Down'): Promise<ICapture | null | undefined> => {
+
+    // 左右は、拡大表示の前後の移動と同じく並びの前後へ移る
+    if (direction === 'Left' || direction === 'Right') {
+        return getNeighbor(capture, direction === 'Right' ? 1 : -1);
+    }
+
+    // 今のキャプチャがある日と、その日の中での位置を求める
+    const date = dateOf(capture);
+    const index = sections.value.findIndex(section => section.date === date);
+    if (date === null || index === -1) {
+        return null;
+    }
+    const captures = await waitForDay(date);
+    if (captures === undefined) {
+        return undefined;
+    }
+    const position = captures.findIndex(item => item.id === capture.id);
+    if (position === -1) {
+        return null;
+    }
+    const { columns } = grid.value;
+    const column = position % columns;
+    const lastRowStart = Math.floor((captures.length - 1) / columns) * columns;
+
+    // 下へは同じ列の次の行へ移り、次の行がその列まで届いていなければその行の最後へ移る
+    // 最後の行からは、次の日の最初の行の同じ列へ移る
+    if (direction === 'Down') {
+        if (position < lastRowStart) {
+            return captures[Math.min(position + columns, captures.length - 1)];
+        }
+        const nextSection = sections.value[index + 1];
+        if (nextSection === undefined) {
+            return null;
+        }
+        const nextCaptures = await waitForDay(nextSection.date);
+        if (nextCaptures === undefined) {
+            return undefined;
+        }
+        return nextCaptures[Math.min(column, nextCaptures.length - 1)] ?? null;
+    }
+
+    // 上へは同じ列の前の行へ移り、最初の行からは前の日の最後の行の同じ列 (届いていなければその行の最後) へ移る
+    if (position >= columns) {
+        return captures[position - columns];
+    }
+    const previousSection = sections.value[index - 1];
+    if (previousSection === undefined) {
+        return null;
+    }
+    const previousCaptures = await waitForDay(previousSection.date);
+    if (previousCaptures === undefined) {
+        return undefined;
+    }
+    const previousLastRowStart = Math.floor((previousCaptures.length - 1) / columns) * columns;
+    return previousCaptures[Math.min(previousLastRowStart + column, previousCaptures.length - 1)] ?? null;
+};
+
+/**
+ * キャプチャのタイルが画面に見えるところまでスクロールする (矢印キーでの移動や、拡大表示を閉じたとき)
+ * すでに見えているときはスクロールしない
+ * @param capture キャプチャ
+ */
+const revealCapture = async (capture: ICapture) => {
+    if (rootRef.value === null) {
+        return;
+    }
+
+    // タイルのタイムラインの先頭からの位置を求める
+    const date = dateOf(capture);
+    const section = sections.value.find(item => item.date === date);
+    const position = date === null ? -1 : (loadedDays.value.get(date)?.findIndex(item => item.id === capture.id) ?? -1);
+    if (section === undefined || position === -1) {
+        return;
+    }
+    const { columns, rowHeight, tileHeight } = grid.value;
+    const tileTop = section.top + HEADER_HEIGHT + Math.floor(position / columns) * rowHeight;
+
+    // 画面の上端 (固定のヘッダーの下) と下端に収まっていれば、そのままにする
+    const rootTop = rootRef.value.getBoundingClientRect().top + window.scrollY;
+    const pageTop = rootTop + tileTop - baseOffset.value;
+    const visibleTop = window.scrollY + REVEAL_TOP_MARGIN;
+    const visibleBottom = window.scrollY + window.innerHeight - REVEAL_BOTTOM_MARGIN;
+    if (pageTop >= visibleTop && pageTop + tileHeight <= visibleBottom) {
+        return;
+    }
+
+    // 上にはみ出していれば日の見出しごと上端に、下にはみ出していれば下端に合わせる
+    if (pageTop < visibleTop) {
+        scrollToContentY(tileTop - HEADER_HEIGHT);
+    } else {
+        scrollToContentY(tileTop + tileHeight - (window.innerHeight - REVEAL_TOP_MARGIN - REVEAL_BOTTOM_MARGIN));
+    }
+    await nextTick();
+};
+
+/**
+ * キャプチャが並んでいる日の、読み込み済みのキャプチャを返す (Ctrl+A でその日をすべて選ぶとき)
+ * @param capture キャプチャ
+ * @returns その日のキャプチャ
+ */
+const getDayCaptures = (capture: ICapture) => {
+    const date = dateOf(capture);
+    return date === null ? [] : (loadedDays.value.get(date) ?? []);
+};
+
+/**
  * 読み込み済みのキャプチャを差し替える (お気に入りやタグを変えたとき)
  * @param updated 更新後のキャプチャ
  */
@@ -609,7 +746,7 @@ const replaceCapture = (updated: ICapture) => {
 
 const getProgram = (capture_program_id: number | null) => capture_program_id === null ? null : programs.get(capture_program_id) ?? null;
 
-defineExpose({ reload, getNeighbor, replaceCapture, getProgram });
+defineExpose({ reload, getNeighbor, getKeyboardTarget, revealCapture, getDayCaptures, orderedLoaded, replaceCapture, getProgram });
 
 </script>
 <style lang="scss" scoped>
@@ -651,6 +788,10 @@ defineExpose({ reload, getNeighbor, replaceCapture, getProgram });
             opacity: 1;
         }
 
+        &-label {
+            display: flex;
+            align-items: baseline;
+        }
         &-date {
             font-size: 15.5px;
             font-weight: 700;

@@ -24,7 +24,13 @@ from tortoise import Tortoise, connections
 
 from app import logging, schemas
 from app.config import Config, LoadConfig
-from app.constants import DATABASE_CONFIG, LIBRARY_PATH, STATIC_DIR, THUMBNAILS_DIR
+from app.constants import (
+    DATABASE_CONFIG,
+    LIBRARY_PATH,
+    PROCESS_POOL_CONTEXT,
+    STATIC_DIR,
+    THUMBNAILS_DIR,
+)
 from app.models.RecordedVideo import RecordedVideo
 from app.utils import (
     LimitWorkerProcessResourcePriority,
@@ -385,6 +391,7 @@ class ThumbnailGenerator:
         ## コンテキストマネージャーは使わず、キャンセル時だけ待機なしで終了処理に入る
         executor = concurrent.futures.ProcessPoolExecutor(
             max_workers=1,
+            mp_context=PROCESS_POOL_CONTEXT,
             # 子プロセス側で CPU / ディスク I/O 優先度を下げ、ライブ視聴や録画の処理を妨げないようにする
             initializer=LimitWorkerProcessResourcePriority,
         )
@@ -1650,6 +1657,7 @@ class ThumbnailGenerator:
         ## キャンセル時に同期的な終了待機へ入るとイベントループ全体が止まるため、Executor は明示的に閉じる
         executor = concurrent.futures.ProcessPoolExecutor(
             max_workers = 1,
+            mp_context = PROCESS_POOL_CONTEXT,
             # 子プロセス側で CPU / ディスク I/O 優先度を下げ、ライブ視聴や録画の処理を妨げないようにする
             initializer = LimitWorkerProcessResourcePriority,
         )
