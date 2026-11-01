@@ -7,6 +7,8 @@ from unittest.mock import patch
 import anyio
 import numpy as np
 
+from app import config
+from app.config import ServerSettings
 from app.metadata.CMSectionsDetector import CMSectionsDetector
 
 
@@ -86,6 +88,46 @@ class CMSectionsDetectorPolicyTest(unittest.TestCase):
         ))
 
         self.assertEqual(detector._CMSectionsDetector__findLogoAbsentIntervals(presence), [])
+
+
+    def test_opencv_worker_loads_settings_before_logo_debug_log(self) -> None:
+        """新しい子プロセスでもロゴ学習後のログを通過し、検出結果を返す。"""
+
+        detector = CMSectionsDetector(
+            file_path=anyio.Path('recorded.ts'),
+            duration_sec=120.0,
+            container_format='MPEG-TS',
+            cm_detect_mode='OpenCV',
+        )
+        settings = ServerSettings()
+
+        def LoadWorkerConfig(*, bypass_validation: bool) -> ServerSettings:
+            """子プロセスと同じ初期状態から設定を読み込む。"""
+
+            self.assertTrue(bypass_validation)
+            config._CONFIG = settings
+            return settings
+
+        # forkserver / spawn では親の設定を引き継がず、fork では読み込み済みの場合がある。
+        ## 実際のデバッグログを通し、両方で解析結果まで到達することを確認する。
+        for initial_settings in (None, settings):
+            with (
+                self.subTest(initialized=initial_settings is not None),
+                patch('app.config._CONFIG', initial_settings),
+                patch('app.metadata.CMSectionsDetector.LoadConfig', side_effect=LoadWorkerConfig) as load_config,
+                patch.object(
+                    CMSectionsDetector,
+                    '_CMSectionsDetector__learnLogoModel',
+                    return_value=((0, 1, 0, 1), np.ones(1, dtype=np.float32)),
+                ),
+                patch.object(
+                    CMSectionsDetector,
+                    '_CMSectionsDetector__computeLogoPresence',
+                    return_value=np.ones(240, dtype=np.float32),
+                ),
+            ):
+                self.assertEqual(detector._detectWithOpenCV(), [])
+                self.assertEqual(load_config.call_count, int(initial_settings is None))
 
 
 class CMSectionsDetectorConcurrencyTest(unittest.IsolatedAsyncioTestCase):

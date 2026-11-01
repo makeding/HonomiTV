@@ -281,6 +281,13 @@ class CMSectionsDetector:
             list[schemas.CMSection] | None: 解析できた場合は CM 区間のリスト (0件なら [])、解析不能時は None
         """
 
+        # forkserver / spawn の子プロセスでは、サーバー設定を子プロセス自身で読み込む。
+        ## ロゴ学習後のデバッグログも設定を参照するため、解析を始める前に初期化する。
+        try:
+            Config()
+        except AssertionError:
+            LoadConfig(bypass_validation=True)
+
         try:
             start_time = time.time()
 
