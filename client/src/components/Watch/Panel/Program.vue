@@ -253,6 +253,13 @@ export default defineComponent({
             if (program === null || program.source !== 'Broadcast') {
                 return;
             }
+            // 放送時間未定の番組は duration が Infinity で、end_time には便宜上 start_time と同じ時刻が入っているため、キャプチャの EXIF に書き込むとき (CaptureManager.ts) と同じく、どちらも null にする
+            let endTime: string | null = program.end_time;
+            let duration: number | null = program.duration;
+            if (Number.isFinite(program.duration) === false) {
+                endTime = null;
+                duration = null;
+            }
             this.$router.push({
                 path: '/captures/broadcast',
                 query: {
@@ -268,8 +275,8 @@ export default defineComponent({
                         service_id: program.service_id,
                         event_id: program.event_id,
                         start_time: program.start_time,
-                        end_time: program.end_time,
-                        duration: program.duration,
+                        end_time: endTime,
+                        duration: duration,
                         title: program.title,
                         description: program.description,
                         channel: { id: channel.id, display_channel_id: channel.display_channel_id, name: channel.name, type: channel.type },

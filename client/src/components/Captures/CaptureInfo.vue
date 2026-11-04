@@ -16,6 +16,7 @@
                 </v-btn>
             </div>
         </section>
+        <!-- 番組情報がないときも、番組名と番組概要の見た目で理由を表示する (局ロゴ・局名・放送時間とボタンは出さない) -->
         <section v-else class="capture-info__program">
             <h1 class="capture-info__title">番組情報がありません</h1>
             <div class="capture-info__description">撮影時の番組情報が、この画像には記録されていません。</div>
@@ -130,6 +131,17 @@ const formatPosition = (seconds: number) => {
         @include smartphone-vertical {
             font-size: 17px;
         }
+    }
+
+    // 番組情報がないときの理由 (番組概要 (CaptureProgramInfo.vue) と同じ見た目にする)
+    &__description {
+        margin-top: 12px;
+        color: rgb(var(--v-theme-text-darken-1));
+        font-size: 12.5px;
+        line-height: 168%;
+        overflow-wrap: break-word;
+        font-feature-settings: "palt" 1;  // 文字詰め
+        letter-spacing: 0.08em;  // 字間を少し空ける
     }
 
     &__actions {

@@ -80,7 +80,7 @@ const is_loading = ref(true);
 const current_page = ref(1);
 
 // 並び順
-const sort_order = ref<'desc' | 'asc'>('desc');
+const sort_order = ref<SortOrder>('desc');
 
 // シリーズ情報を取得
 const fetchSeries = async () => {
@@ -119,7 +119,7 @@ const updatePage = async (page: number) => {
 };
 
 // 並び順を更新
-const updateSortOrder = async (order: 'desc' | 'asc') => {
+const updateSortOrder = async (order: SortOrder) => {
     sort_order.value = order;
     current_page.value = 1;  // ページを1に戻す
     is_loading.value = true;
@@ -140,7 +140,7 @@ watch(() => route.query, async (newQuery) => {
     }
     // ソート順を同期
     if (newQuery.order) {
-        sort_order.value = newQuery.order as 'desc' | 'asc';
+        sort_order.value = newQuery.order as SortOrder;
     }
     await fetchPrograms();
 }, { deep: true });
@@ -156,7 +156,7 @@ onMounted(async () => {
         current_page.value = parseInt(route.query.page as string, 10);
     }
     if (route.query.order) {
-        sort_order.value = route.query.order as 'desc' | 'asc';
+        sort_order.value = route.query.order as SortOrder;
     }
 
     // シリーズ情報と録画番組を取得

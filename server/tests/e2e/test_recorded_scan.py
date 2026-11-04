@@ -130,6 +130,7 @@ async def IsRecordedProgramGone(client: httpx.AsyncClient, file_path: Path) -> b
 # POST /api/maintenance/batch-scan/run (BatchScanAPI) - 正常系
 # -------------------------------------------------------------------------------------
 
+
 async def test_manual_batch_scan__can_run_again_after_startup_scan(client: httpx.AsyncClient) -> None:
     """
     起動時の一括スキャンの実行中に手動の一括スキャンを実行すると 429 を返し、
@@ -214,8 +215,8 @@ async def test_manual_batch_scan__recording_is_registered_analyzed_and_hidden_wh
 
 
 # -------------------------------------------------------------------------------------
-# 録画ファイルの移動・名前の変更・コピーで、同じ録画番組のレコードを使い続けるフロー
-# (録画フォルダの監視 → GET /api/videos → DELETE /api/videos/{id}) - 正常系
+# 録画ファイルやフォルダの名前を変えると、同じ録画番組のまま新しいパスに付け替わるフロー
+# (録画フォルダの監視 → GET /api/videos → GET /api/videos/{id}) - 正常系
 # -------------------------------------------------------------------------------------
 
 
@@ -266,6 +267,12 @@ async def test_recorded_folder_renamed__keeps_same_record(client: httpx.AsyncCli
 
     renamed_path.unlink()
     await WaitUntil(lambda: IsRecordedProgramGone(client, renamed_path))
+
+
+# -------------------------------------------------------------------------------------
+# 同じ中身の録画ファイルを別の場所へ写すと、元のファイルが消えるまで付け替えを保留し、消えたら同じ録画番組のまま付け替わるフロー
+# (録画フォルダの監視 → POST /api/maintenance/batch-scan/run → GET /api/videos → DELETE /api/videos/{id}) - 正常系
+# -------------------------------------------------------------------------------------
 
 
 async def test_recorded_file_copied__waits_for_original_to_be_removed(client: httpx.AsyncClient, recorded_folder: Path) -> None:
@@ -421,6 +428,12 @@ async def test_recorded_file_copied__original_deleted_by_api(
     await WaitUntil(lambda: IsRecordedProgramGone(client, copied_path))
 
 
+# -------------------------------------------------------------------------------------
+# 録画ファイルを別のファイルシステムや別のドライブへ移しても、同じ録画番組のまま付け替わるフロー
+# (録画フォルダの監視 → GET /api/videos) - 正常系
+# -------------------------------------------------------------------------------------
+
+
 async def test_recorded_file_moved_to_coarser_filesystem__keeps_same_record(client: httpx.AsyncClient, recorded_folder: Path) -> None:
     """
     移動先のファイルシステムの精度に丸められて更新日時が少しずれても (exFAT・NTFS・SMB へ移したときなど)、
@@ -480,6 +493,12 @@ async def test_recorded_folder_setting_changed__relinks_from_old_drive(
     original_path.unlink()
     copied_path.unlink()
     await WaitUntil(lambda: IsRecordedProgramGone(client, copied_path))
+
+
+# -------------------------------------------------------------------------------------
+# 録画ファイルの入ったフォルダごと録画フォルダの外へ移すと、中の録画番組が一覧から隠れるフロー
+# (録画フォルダの監視 → GET /api/videos) - 正常系
+# -------------------------------------------------------------------------------------
 
 
 async def test_recorded_folder_moved_outside__hides_records(client: httpx.AsyncClient, recorded_folder: Path) -> None:

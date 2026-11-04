@@ -157,6 +157,44 @@ def ValidateVideoCopyQuality(recorded_program: RecordedProgram, stream_quality: 
         )
 
 
+async def ConfigureSourceTimeline(
+    video_stream: VideoStream,
+    recorded_program: RecordedProgram,
+    stream_quality: StreamQualityWithOptions,
+) -> None:
+    """
+    複数の中断録画から成る MMT/TLV 番組の仮想時間軸を視聴セッションへ設定する。
+
+    Args:
+        video_stream (VideoStream): 時間軸を設定する視聴セッション
+        recorded_program (RecordedProgram): 配信対象の録画番組
+        stream_quality (StreamQualityWithOptions): リクエストされた品質とエンコード設定
+
+    Returns:
+        なし
+    """
+
+    # 再エンコードなしの MMT/TLV 配信では、中断した入力ファイルを別々の領域として扱う。
+    ## プレイリスト要求からの初回作成と、セグメント要求からのセッション復元で同じ時間軸を設定する。
+    if (
+        stream_quality.quality != 'copy' or
+        recorded_program.recorded_video.container_format != 'MMT/TLV'
+    ):
+        return
+
+    source_recorded_programs = [
+        source_recorded_program
+        for source_recorded_program in await VideoSourceTimelineResolver.findCandidates(recorded_program)
+        if source_recorded_program.recorded_video.container_format == 'MMT/TLV'
+    ]
+    if recorded_program.is_partially_recorded is True or len(source_recorded_programs) > 1:
+        source_timeline = VideoSourceTimelineResolver.buildFromRecordedPrograms(
+            recorded_program,
+            source_recorded_programs,
+        )
+        video_stream.configureSourceTimeline(source_timeline, source_recorded_programs)
+
+
 @router.get(
     '/{video_id}/raw-mmts/mpegts',
     summary = '録画番組 Raw MMTS ストリーム API',
@@ -249,27 +287,11 @@ async def VideoHLSPlaylistAPI(
         recorded_program,
         stream_quality.quality,
         stream_quality.encoding_options,
-        is_new_session_allowed = True,
     )
 
-    # 中断した MMT/TLV 録画をそのまま連結すると libaribtlv の demux 状態が壊れるため、
-    ## HLS（オリジナル）の各入力区間を別々に再多重化する仮想時間軸を構成する。
+    # 中断した MMT/TLV 録画をそのまま連結すると libaribtlv の demux 状態が壊れるため、HLS 用の仮想時間軸を構成する。
     ## 原始 TLV のダウンロード API はこの経路を通らず、従来どおり単一ファイルだけを返す。
-    if (
-        stream_quality.quality == 'copy' and
-        recorded_program.recorded_video.container_format == 'MMT/TLV'
-    ):
-        source_recorded_programs = [
-            source_recorded_program
-            for source_recorded_program in await VideoSourceTimelineResolver.findCandidates(recorded_program)
-            if source_recorded_program.recorded_video.container_format == 'MMT/TLV'
-        ]
-        if recorded_program.is_partially_recorded is True or len(source_recorded_programs) > 1:
-            source_timeline = VideoSourceTimelineResolver.buildFromRecordedPrograms(
-                recorded_program,
-                source_recorded_programs,
-            )
-            video_stream.configureSourceTimeline(source_timeline, source_recorded_programs)
+    await ConfigureSourceTimeline(video_stream, recorded_program, stream_quality)
 
     # master playlist はエンコード済み TS に常に主/副音声を含める経路だけに公開する。
     # copy 品質も同じ TS 出力を経由し、tsreadex または FFmpeg の無音 AAC 入力で副音声を必ず補完する。
@@ -337,7 +359,15 @@ async def VideoHLSSegmentAPI(
 
     # 品質とオプション指定に対応する録画視聴セッションを取得
     assert stream_quality.quality != 'original'
-    video_stream = VideoStream(session_id, recorded_program, stream_quality.quality, stream_quality.encoding_options)
+    video_stream = VideoStream(
+        session_id,
+        recorded_program,
+        stream_quality.quality,
+        stream_quality.encoding_options,
+    )
+
+    # playlist を経由せずセグメントから復元したセッションにも、元の複数ファイル時間軸を設定する。
+    await ConfigureSourceTimeline(video_stream, recorded_program, stream_quality)
 
     # セグメントを取得（キャッシュキーはブラウザキャッシュ避けのための ID なので特に使わない）
     try:
@@ -416,7 +446,12 @@ async def VideoHLSBufferAPI(
 
     # 品質とオプション指定に対応する録画視聴セッションを取得
     assert stream_quality.quality != 'original'
-    video_stream = VideoStream(session_id, recorded_program, stream_quality.quality, stream_quality.encoding_options)
+    video_stream = VideoStream(
+        session_id,
+        recorded_program,
+        stream_quality.quality,
+        stream_quality.encoding_options,
+    )
 
     # バッファ範囲の変更を監視し、変更があればバッファ範囲をイベントストリームとして出力する
     async def generator():
@@ -481,7 +516,12 @@ async def VideoHLSKeepAliveAPI(
 
     # 品質とオプション指定に対応する録画視聴セッションを取得
     assert stream_quality.quality != 'original'
-    video_stream = VideoStream(session_id, recorded_program, stream_quality.quality, stream_quality.encoding_options)
+    video_stream = VideoStream(
+        session_id,
+        recorded_program,
+        stream_quality.quality,
+        stream_quality.encoding_options,
+    )
 
     # セッションのアクティブ状態を維持する
     video_stream.keepAlive()
@@ -534,7 +574,6 @@ async def VideoOfflineStreamAPI(
             recorded_program,
             stream_quality.quality,
             stream_quality.encoding_options,
-            is_new_session_allowed = True,
         )
         await video_stream.getVirtualPlaylist()
 

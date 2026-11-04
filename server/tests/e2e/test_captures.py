@@ -15,8 +15,37 @@ from tests.conftest import FIXTURES_DIR
 # =====================================================================================
 
 # -------------------------------------------------------------------------------------
+# POST /api/captures (CaptureUploadAPI) - 正常系
+# -------------------------------------------------------------------------------------
+
+
+async def test_upload_capture__saves_with_invalid_access_token(client: httpx.AsyncClient, admin_headers: dict[str, str], capture_folder: Path) -> None:
+    """
+    視聴中にアクセストークンが期限切れなどで無効になっても、撮影したキャプチャはログインしていない場合と同じく保存する
+    """
+
+    file_name = 'Capture_20260826-044039.jpg'
+    data = (FIXTURES_DIR / 'captures' / file_name).read_bytes()
+    response = await client.post(
+        '/api/captures',
+        files = {'image': (file_name, data, 'image/jpeg')},
+        headers = {'Authorization': 'Bearer invalid-access-token'},
+    )
+    assert response.status_code == 201, response.text
+    capture = response.json()
+    assert capture['file_hash'] == hashlib.sha256(data).hexdigest()
+    assert len(list(capture_folder.iterdir())) == 1
+
+    # 後に続くテストのために、保存したキャプチャを削除して保存先を空に戻す
+    response = await client.request('DELETE', '/api/captures', json={'capture_ids': [capture['id']]}, headers=admin_headers)
+    assert response.status_code == 200, response.text
+    assert list(capture_folder.iterdir()) == []
+
+
+# -------------------------------------------------------------------------------------
 # POST /api/captures (CaptureUploadAPI) - 異常系
 # -------------------------------------------------------------------------------------
+
 
 async def test_upload_capture__rejects_non_image_file(client: httpx.AsyncClient, capture_folder: Path) -> None:
     """
@@ -154,6 +183,7 @@ async def test_upload_list_and_delete_capture(client: httpx.AsyncClient, admin_h
 # -------------------------------------------------------------------------------------
 # 放送時間未定の放送回の補完フロー (POST /api/captures → GET /api/captures/{capture_id} → DELETE /api/captures) - 正常系
 # -------------------------------------------------------------------------------------
+
 
 async def test_upload_capture_of_program_with_undecided_duration_then_fill_in(client: httpx.AsyncClient, admin_headers: dict[str, str]) -> None:
     """

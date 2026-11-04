@@ -1,5 +1,6 @@
 <template>
     <Teleport to="body">
+        <!-- 暗幕・ボタン・情報欄はフェードで開閉し、画像だけはタイルとの間を拡大・縮小していく (CaptureTransition.ts を参照) -->
         <transition name="capture-lightbox-fade">
             <div v-if="capture !== null" ref="rootRef" class="capture-lightbox" tabindex="-1"
                 :class="{
@@ -24,17 +25,20 @@
                         <div v-ripple class="capture-lightbox__button" v-ftooltip.bottom="'タグを付ける (T)'" @click="openTagDialog">
                             <Icon icon="fluent:tag-24-regular" width="24px" />
                         </div>
-                        <a v-ripple class="capture-lightbox__button" v-ftooltip.bottom="'ダウンロード'"
-                            :href="Captures.getImageURL(capture)" :download="downloadName" @click.stop>
+                        <div v-ripple class="capture-lightbox__button" v-ftooltip.bottom="'ダウンロード (D)'" @click="download">
                             <Icon icon="fluent:arrow-download-24-regular" width="24px" />
-                        </a>
+                        </div>
+                        <!-- 拡大 (拡大している間にもう一度押すと元の大きさに戻す) -->
+                        <div v-ripple class="capture-lightbox__button" v-ftooltip.bottom="isZoomed ? '元の大きさに戻す' : '拡大'" @click="toggleZoom">
+                            <Icon :icon="isZoomed ? 'fluent:zoom-out-24-regular' : 'fluent:zoom-in-24-regular'" width="24px" />
+                        </div>
                         <!-- 情報 (横画面では右のパネル、縦画面では下のシート) の開閉 (開いている間はアイコンを塗りつぶしにする) -->
                         <div v-ripple class="capture-lightbox__button" v-ftooltip.bottom="isInfoOpen ? '情報を閉じる (I)' : '情報を開く (I)'"
                             @click="setInfoOpen(!isInfoOpen)">
                             <Icon :icon="isInfoOpen ? 'fluent:info-24-filled' : 'fluent:info-24-regular'" width="24px" />
                         </div>
                         <!-- その他の操作 (録画番組のメニューと同じく、取り消せない削除は区切り線の下に赤で置き、押し間違えにくくする) -->
-                        <v-menu location="bottom end" :z-index="2400">
+                        <v-menu v-if="canSetThumbnail" v-model="isMenuOpen" location="bottom end" :z-index="2400">
                             <template #activator="{ props: menuProps }">
                                 <div v-ripple class="capture-lightbox__button" v-bind="menuProps">
                                     <Icon icon="fluent:more-vertical-24-filled" width="24px" />
@@ -47,7 +51,7 @@
                                     </template>
                                     <v-list-item-title class="ml-3">録画番組のサムネイルにする</v-list-item-title>
                                 </v-list-item>
-                                <v-divider v-if="canSetThumbnail"></v-divider>
+                                <v-divider></v-divider>
                                 <v-list-item class="capture-lightbox__menu-item--danger" @click="requestDelete">
                                     <template #prepend>
                                         <Icon icon="fluent:delete-20-regular" width="20px" height="20px" />
@@ -56,20 +60,30 @@
                                 </v-list-item>
                             </v-list>
                         </v-menu>
+                        <!-- 録画のないキャプチャでは削除のほかに項目がないので、選択中のバーと同じく、確認のダイアログを開く削除のボタンを右端に赤で置く -->
+                        <div v-else v-ripple class="capture-lightbox__button capture-lightbox__button--danger" v-ftooltip.bottom="'キャプチャを削除 (Delete)'"
+                            @click="requestDelete">
+                            <Icon icon="fluent:delete-24-regular" width="24px" />
+                        </div>
                     </div>
 
                     <!-- 画像: 前・今・次の3枚を横に並べ、指の動きに合わせて全体をずらす -->
                     <div ref="stageRef" class="capture-lightbox__stage" :style="stageStyle"
                         @click.self="onStageClick"
                         @touchstart="onStageTouchStart" @touchmove="onStageTouchMove"
-                        @touchend="onStageTouchEnd" @touchcancel="onStageTouchEnd">
+                        @touchend="onStageTouchEnd" @touchcancel="onStageTouchEnd"
+                        @wheel="onStageWheel" @gesturestart="onStageGestureStart" @gesturechange="onStageGestureChange"
+                        @gestureend="onStageGestureEnd">
                         <div class="capture-lightbox__track" :style="trackStyle" @click.self="onStageClick">
                             <div v-for="slide in slides" :key="slide.key" class="capture-lightbox__slide"
                                 :style="{ left: `calc(${slide.offset * 100}% + ${slide.offset * SLIDE_GAP}px)` }"
                                 @click.self="onStageClick">
                                 <img v-if="slide.capture !== null" class="capture-lightbox__image" :src="Captures.getImageURL(slide.capture)"
-                                    :class="{'capture-lightbox__image--current': slide.offset === 0}"
-                                    :alt="slide.capture.caption_text ?? ''" draggable="false">
+                                    :class="{'capture-lightbox__image--current': slide.offset === 0}" decoding="async"
+                                    :style="[getImageSizeStyle(slide.capture), slide.offset === 0 ? zoomStyle : {}]"
+                                    :alt="slide.capture.caption_text ?? ''" draggable="false"
+                                    @pointerdown="onImagePointerDown" @pointermove="onImagePointerMove"
+                                    @pointerup="onImagePointerUp" @pointercancel="onImagePointerUp">
                             </div>
                         </div>
                         <div v-ripple class="capture-lightbox__nav capture-lightbox__nav--prev"
@@ -79,6 +93,26 @@
                         <div v-ripple class="capture-lightbox__nav capture-lightbox__nav--next"
                             :class="{'capture-lightbox__nav--hidden': nextCapture === null}" @click.stop="move(1)">
                             <Icon icon="fluent:chevron-right-24-regular" width="32px" />
+                        </div>
+                    </div>
+
+                    <!-- 拡大している間は、画像のどこを表示しているかを示す縮小図と、拡大率のスライダーを出す (マウスを動かしている間だけ出す) -->
+                    <div v-if="isZoomed" class="capture-lightbox__zoom">
+                        <div class="capture-lightbox__zoom-map"
+                            @pointerdown="onZoomMapPointerDown" @pointermove="onZoomMapPointerMove"
+                            @pointerup="onZoomMapPointerUp" @pointercancel="onZoomMapPointerUp">
+                            <img class="capture-lightbox__zoom-image" :src="Captures.getImageURL(capture)" alt="" draggable="false">
+                            <div class="capture-lightbox__zoom-view" :style="zoomViewStyle"></div>
+                        </div>
+                        <div class="capture-lightbox__zoom-slider">
+                            <div v-ripple class="capture-lightbox__zoom-step" @click="setZoom(zoom - ZOOM_STEP)">
+                                <Icon icon="fluent:subtract-16-filled" width="18px" />
+                            </div>
+                            <v-slider :model-value="zoom" :min="MIN_ZOOM" :max="MAX_ZOOM" :step="0.1" color="primary" track-color="text-darken-2"
+                                thumb-size="14" hide-details class="mx-1" @update:model-value="setZoom" />
+                            <div v-ripple class="capture-lightbox__zoom-step" @click="setZoom(zoom + ZOOM_STEP)">
+                                <Icon icon="fluent:add-16-filled" width="18px" />
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -120,7 +154,7 @@
                                 <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
                                 <span class="ml-1">キャンセル</span>
                             </v-btn>
-                            <v-btn ref="deleteButtonRef" color="error" variant="flat" height="40" class="px-3" @click="deleteCapture">
+                            <v-btn ref="deleteButtonRef" color="error" variant="flat" height="40" class="px-3" :loading="isDeleting" @click="deleteCapture">
                                 <Icon icon="fluent:delete-16-regular" width="18px" height="18px" />
                                 <span class="ml-1">キャプチャを削除</span>
                             </v-btn>
@@ -168,7 +202,7 @@ import { useRouter } from 'vue-router';
 
 import CaptureInfo from '@/components/Captures/CaptureInfo.vue';
 import CaptureTagDialog from '@/components/Captures/CaptureTagDialog.vue';
-import { findTileImage } from '@/components/Captures/CaptureTransition';
+import { canAnimateCaptureImage, findTileImage, flyCaptureImage } from '@/components/Captures/CaptureTransition';
 import Message from '@/message';
 import Captures, { ICapture, ICaptureDetail, ICaptureProgram, ICaptureTag } from '@/services/Captures';
 import Videos, { IRecordedProgram } from '@/services/Videos';
@@ -211,6 +245,9 @@ const isTagDialogOpen = ref(false);
 const isDeleteConfirmOpen = ref(false);
 // サムネイルへの変更の確認 (既存のサムネイルを上書きする取り消せない操作のため)
 const isSetThumbnailConfirmOpen = ref(false);
+const isDeleting = ref(false);
+// ︙ のメニューを開いているか (戻る操作でメニューだけを閉じるため)
+const isMenuOpen = ref(false);
 // 確認のダイアログの削除のボタン (開いたときにフォーカスを当てるため)
 const deleteButtonRef = ref<ComponentPublicInstance | null>(null);
 const detail = ref<ICaptureDetail | null>(null);
@@ -227,7 +264,6 @@ const tagNames = computed(() => {
     const ids = new Set(props.capture?.tag_ids ?? []);
     return tags.value.filter(tag => ids.has(tag.id)).map(tag => tag.name);
 });
-const downloadName = computed(() => detail.value?.files[0]?.file_name ?? `capture-${props.capture?.id}.jpg`);
 
 // 縦画面 (スマホとタブレットの縦持ち) では情報を下のシートに、それ以外では右のパネルに出す
 // 区切りは視聴画面でパネルが下に回る条件と同じにする
@@ -337,6 +373,14 @@ const slides = computed(() => {
 });
 
 
+// 画像の表示の大きさは、読み込みを待たずにキャプチャの縦横の大きさから決める
+// 読み込む前の画像は大きさを持たず、開くときにタイルの画像が拡大していく先の位置と大きさを決められないため
+const getImageSizeStyle = (capture: ICapture) => ({
+    width: `min(100cqw, calc(100cqh * ${capture.image_width} / ${capture.image_height}))`,
+    aspectRatio: `${capture.image_width} / ${capture.image_height}`,
+});
+
+
 // ---------- 送りと閉じるの動き ----------
 
 // 横のずれ (指で引いている量か、送るアニメーションの行き先)
@@ -355,36 +399,47 @@ const trackStyle = computed(() => ({
 const backdropOpacity = computed(() => Math.max(0, 1 - Math.abs(dismissY.value) / 500));
 
 // 閉じるときは、開くときの逆に、1枚表示の画像が一覧のタイルの位置まで縮んでいくように見せる
-// 一覧のタイルを先に画面に見える位置までスクロールさせてから、View Transitions API で2つの画像の位置と大きさをつなぐ
+// 一覧のタイルを先に画面に見える位置までスクロールさせてから、画像の複製を1枚だけタイルの位置まで動かし、暗幕・ボタン・情報欄は同時にフェードアウトさせる
 let isClosing = false;
 const close = async () => {
     const current = props.capture;
     if (current === null || isClosing) {
         return;
     }
-    // 対応していないブラウザと、動きを減らす設定のときは、そのまま閉じる
-    if (document.startViewTransition === undefined || window.matchMedia('(prefers-reduced-motion: reduce)').matches === true) {
+    // 動きを減らす設定のときは、フェードだけで閉じる
+    if (canAnimateCaptureImage() === false) {
         emit('update:capture', null);
         return;
     }
     isClosing = true;
-    await props.reveal?.(current);
-    let tileImage: HTMLImageElement | null = null;
-    const transition = document.startViewTransition(async () => {
-        // 閉じた後の画面では、フェードアウト中の1枚表示を隠し、名前を戻る先のタイルの画像へ渡す
-        document.documentElement.classList.add('capture-lightbox-closing');
-        emit('update:capture', null);
+    // 拡大したまま閉じると、拡大した画像からタイルへ縮んでいくように見えるので、先に元の大きさへ戻す
+    if (isZoomed.value) {
+        resetZoom(true);
         await nextTick();
-        tileImage = findTileImage(current.id);
-        tileImage?.style.setProperty('view-transition-name', 'capture-lightbox-image');
-    });
-    try {
-        await transition.finished;
-    } finally {
-        (tileImage as HTMLImageElement | null)?.style.removeProperty('view-transition-name');
-        document.documentElement.classList.remove('capture-lightbox-closing');
-        isClosing = false;
     }
+    await props.reveal?.(current);
+
+    // 戻る先のタイルが画面に見えているときだけ、画像をタイルの位置まで縮めていく (見えていなければフェードだけで閉じる)
+    const image = rootRef.value?.querySelector<HTMLImageElement>('.capture-lightbox__image--current') ?? null;
+    const tileImage = findTileImage(current.id);
+    const tileRect = tileImage?.getBoundingClientRect();
+    let flight: ReturnType<typeof flyCaptureImage> | null = null;
+    if (image !== null && tileImage !== null && tileRect !== undefined && tileRect.bottom > 0 && tileRect.top < window.innerHeight) {
+        flight = flyCaptureImage(image.currentSrc || image.src, image.getBoundingClientRect(), tileRect);
+        // 縮んでいく間は、フェードアウトしていく拡大表示の画像とタイルの画像を隠し、複製の1枚だけを見せる
+        // 選択の枠・チェック・アイコンは画像の上に重なるので、縮み終わってから表示する (CaptureTile.vue の capture-tile--landing)
+        image.style.visibility = 'hidden';
+        tileImage.style.visibility = 'hidden';
+        tileImage.closest('.capture-tile')?.classList.add('capture-tile--landing');
+    }
+    emit('update:capture', null);
+    if (flight !== null && tileImage !== null) {
+        await flight.finished;
+        tileImage.style.removeProperty('visibility');
+        tileImage.closest('.capture-tile')?.classList.remove('capture-tile--landing');
+        flight.element.remove();
+    }
+    isClosing = false;
 };
 
 // 前後へ送る (矢印キー・矢印ボタン・スワイプで共通)
@@ -525,6 +580,9 @@ interface ITouchTrack {
     axis: 'X' | 'Y' | null;
     // 縦に動かしたとき、何を動かすか
     verticalTarget: 'Sheet' | 'Dismiss' | 'Scroll' | null;
+    // 拡大している間に触り始めたときの、表示する場所のずれ (拡大していないときは null)
+    // 拡大している間の指の動きは、隣へ送るスワイプではなく表示する場所の移動として扱う
+    pan: { x: number; y: number } | null;
 }
 let touch: ITouchTrack | null = null;
 // 指で触った直後のクリックで閉じないよう、タッチの操作中であることを覚える
@@ -539,8 +597,43 @@ const beginTouch = (event: TouchEvent): ITouchTrack => {
         startX: point.clientX, startY: point.clientY, lastY: point.clientY,
         lastTime: event.timeStamp, velocityY: 0, startTime: event.timeStamp,
         axis: null, verticalTarget: null,
+        pan: isZoomed.value ? { x: panX.value, y: panY.value } : null,
     };
 };
+
+// 2本の指でのピンチの記録 (前回の指の間の距離と、2本の指の中点)
+// 写真アプリと同じく、2本の指の間隔に合わせて拡大・縮小し、中点の動きに合わせて表示する場所をずらす
+interface IPinchTrack {
+    distance: number;
+    centerX: number;
+    centerY: number;
+}
+let pinch: IPinchTrack | null = null;
+// 画像を表示する領域に触れている指の数 (指で触れている間のピンチを、Safari のジェスチャーのイベントではなく Touch イベントで扱うため)
+let stageTouchCount = 0;
+const measurePinch = (event: TouchEvent): IPinchTrack => {
+    const [first, second] = [event.touches[0], event.touches[1]];
+    return {
+        distance: Math.max(Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY), 1),
+        centerX: (first.clientX + second.clientX) / 2,
+        centerY: (first.clientY + second.clientY) / 2,
+    };
+};
+
+// 2本目の指が置かれたときに、1本指で始めた操作 (横の送り・縦のシート・下へ引いて閉じる・拡大中の移動) をやめて、画像とシートを元の位置へ戻す
+const cancelOneFingerDrag = () => {
+    touch = null;
+    isFollowingFinger.value = false;
+    isZoomFollowing.value = false;
+    dragX.value = 0;
+    dismissY.value = 0;
+    sheetDragProgress.value = null;
+};
+
+// 直前のタップの時刻と位置 (写真アプリと同じく、同じ場所を素早く2回タップしたら拡大・縮小する)
+let lastTap: { time: number; x: number; y: number } | null = null;
+const DOUBLE_TAP_INTERVAL = 300;
+const DOUBLE_TAP_DISTANCE = 30;
 const trackVelocity = (track: ITouchTrack, event: TouchEvent) => {
     const y = event.touches[0].clientY;
     const elapsed = Math.max(event.timeStamp - track.lastTime, 1);
@@ -550,14 +643,47 @@ const trackVelocity = (track: ITouchTrack, event: TouchEvent) => {
 };
 
 const onStageTouchStart = (event: TouchEvent) => {
+    stageTouchCount = event.touches.length;
+    // 2本目の指が置かれたら、1本指の操作をやめて元の位置へ戻し、ピンチでの拡大・縮小を始める
+    // 隣へ送っている途中は、送った後に拡大率が元に戻るので、ピンチを始めない
+    if (event.touches.length >= 2) {
+        cancelOneFingerDrag();
+        lastTap = null;
+        if (event.touches.length === 2 && !isSliding.value) {
+            pinch = measurePinch(event);
+            // 指の動きに合わせて細かく拡大率が変わるので、ピンチしている間はアニメーションを止める
+            isZoomFollowing.value = true;
+            lastTouchTime = Date.now();
+        } else {
+            pinch = null;
+            isZoomFollowing.value = false;
+        }
+        return;
+    }
     if (event.touches.length !== 1 || isSliding.value) {
         touch = null;
         return;
     }
     touch = beginTouch(event);
+    // 拡大している間は、指に合わせて表示する場所をずらすので、アニメーションを止める
+    if (touch.pan !== null) {
+        isZoomFollowing.value = true;
+    }
     showControl();
 };
 const onStageTouchMove = (event: TouchEvent) => {
+    // ピンチしている間は、2本の指の間隔の変化に合わせて、中点を中心に拡大・縮小し、中点の動きに合わせて表示する場所をずらす
+    if (pinch !== null) {
+        if (event.touches.length !== 2) {
+            return;
+        }
+        event.preventDefault();
+        const next = measurePinch(event);
+        setZoom(zoom.value * next.distance / pinch.distance, { clientX: next.centerX, clientY: next.centerY });
+        setPan(panX.value + next.centerX - pinch.centerX, panY.value + next.centerY - pinch.centerY);
+        pinch = next;
+        return;
+    }
     if (touch === null || event.touches.length !== 1) {
         return;
     }
@@ -569,13 +695,19 @@ const onStageTouchMove = (event: TouchEvent) => {
             return;
         }
         touch.axis = Math.abs(dx) > Math.abs(dy) ? 'X' : 'Y';
-        if (touch.axis === 'Y') {
+        if (touch.axis === 'Y' && touch.pan === null) {
             // 縦画面では上下でシートを開閉し、シートを閉じているときに下へ引いたら1枚表示を閉じる (写真アプリと同じ)
             const isOpeningOrClosingSheet = isPortrait.value && (isInfoOpen.value || dy < 0);
             touch.verticalTarget = isOpeningOrClosingSheet ? 'Sheet' : 'Dismiss';
         }
     }
     event.preventDefault();
+    // 拡大している間は、送りやシートの操作ではなく、拡大した画像の表示する場所を指に合わせてずらす
+    if (touch.pan !== null) {
+        setPan(touch.pan.x + dx, touch.pan.y + dy);
+        showControl();
+        return;
+    }
     isFollowingFinger.value = true;
     if (touch.axis === 'X') {
         followHorizontal(dx);
@@ -587,6 +719,22 @@ const onStageTouchMove = (event: TouchEvent) => {
     }
 };
 const onStageTouchEnd = (event: TouchEvent) => {
+    stageTouchCount = event.touches.length;
+    // ピンチの途中で指を離したときは、ピンチを終える
+    // 拡大したまま1本の指が残っていれば、写真アプリと同じく、残った指でそのまま表示する場所をずらせるようにする
+    if (pinch !== null) {
+        if (event.touches.length >= 2) {
+            return;
+        }
+        pinch = null;
+        lastTouchTime = Date.now();
+        isZoomFollowing.value = false;
+        if (event.touches.length === 1 && isZoomed.value) {
+            touch = beginTouch(event);
+            isZoomFollowing.value = true;
+        }
+        return;
+    }
     if (touch === null) {
         return;
     }
@@ -594,7 +742,9 @@ const onStageTouchEnd = (event: TouchEvent) => {
     touch = null;
     lastTouchTime = Date.now();
     isFollowingFinger.value = false;
-    if (track.axis === 'X') {
+    if (track.pan !== null) {
+        isZoomFollowing.value = false;
+    } else if (track.axis === 'X') {
         finishHorizontal(event, track);
     } else if (track.verticalTarget === 'Sheet') {
         settleSheet(track.velocityY);
@@ -604,6 +754,32 @@ const onStageTouchEnd = (event: TouchEvent) => {
             void close();
         }
         dismissY.value = 0;
+    }
+
+    // 動かさずに離したタッチ (タップ) が、直前のタップと同じ場所で素早く続いたら、ダブルタップとして拡大・縮小する
+    // 長く押してから離したときは、タップとして扱わない
+    const isTap = track.axis === null && event.timeStamp - track.startTime < DOUBLE_TAP_INTERVAL;
+    if (isTap === false) {
+        lastTap = null;
+        return;
+    }
+    const point = event.changedTouches[0];
+    let isDoubleTap = false;
+    if (lastTap !== null) {
+        const isQuick = event.timeStamp - lastTap.time < DOUBLE_TAP_INTERVAL;
+        const isNear = Math.hypot(point.clientX - lastTap.x, point.clientY - lastTap.y) < DOUBLE_TAP_DISTANCE;
+        isDoubleTap = isQuick && isNear;
+    }
+    if (isDoubleTap === false) {
+        lastTap = { time: event.timeStamp, x: point.clientX, y: point.clientY };
+        return;
+    }
+    // 拡大していれば元の大きさに戻し、拡大していなければタップした場所を中心に拡大する
+    lastTap = null;
+    if (isZoomed.value) {
+        resetZoom();
+    } else {
+        setZoom(DEFAULT_ZOOM, point);
     }
 };
 
@@ -629,6 +805,11 @@ const finishHorizontal = (event: TouchEvent, track: ITouchTrack) => {
 // シートの上でのタッチ (写真アプリと同じく、シートの上でも横に引けば前後へ送る)
 // 縦に引いたときは中身をスクロールし、中身が一番上までスクロールされているときに下へ引くとシートを閉じる
 const onSheetTouchStart = (event: TouchEvent) => {
+    // 画像の上で1本指の操作をしている途中に、2本目の指がシートに置かれたときも、1本指の操作をやめて元の位置へ戻す
+    if (event.touches.length >= 2) {
+        cancelOneFingerDrag();
+        return;
+    }
     if (!isPortrait.value || event.touches.length !== 1 || isSliding.value) {
         touch = null;
         return;
@@ -688,6 +869,224 @@ const onStageClick = () => {
 };
 
 
+// ---------- 拡大 ----------
+
+// 拡大率は、拡大していないときの表示の大きさを 1 とした倍率で持つ (拡大のボタンを押すと 2 倍にする)
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+const DEFAULT_ZOOM = 2;
+const ZOOM_STEP = 0.5;
+const zoom = ref(MIN_ZOOM);
+// 拡大した画像の中心を、表示する領域の中心からずらしている量 (px)
+const panX = ref(0);
+const panY = ref(0);
+// ドラッグに追従している間と、閉じる前に元の大きさへ戻す瞬間は、アニメーションを止める
+const isZoomFollowing = ref(false);
+const isZoomed = computed(() => zoom.value > MIN_ZOOM);
+
+// 拡大していないときの画像の表示の大きさと、画像を表示する領域の大きさ (拡大率を変えたときと、ずらしたときに取り直す)
+const zoomBox = ref({ imageWidth: 0, imageHeight: 0, stageWidth: 0, stageHeight: 0 });
+const measureZoomBox = () => {
+    const image = stageRef.value?.querySelector<HTMLImageElement>('.capture-lightbox__image--current');
+    if (image === undefined || image === null || stageRef.value === null) {
+        return;
+    }
+    // offsetWidth と offsetHeight は transform の拡大を含まない、元の表示の大きさを返す
+    zoomBox.value = {
+        imageWidth: image.offsetWidth,
+        imageHeight: image.offsetHeight,
+        stageWidth: stageRef.value.clientWidth,
+        stageHeight: stageRef.value.clientHeight,
+    };
+};
+
+// 拡大した画像の端が、表示する領域の内側に入り込まないところまでだけずらせるようにする
+const setPan = (x: number, y: number) => {
+    const box = zoomBox.value;
+    const maxX = Math.max(0, (box.imageWidth * zoom.value - box.stageWidth) / 2);
+    const maxY = Math.max(0, (box.imageHeight * zoom.value - box.stageHeight) / 2);
+    panX.value = Math.min(Math.max(x, -maxX), maxX);
+    panY.value = Math.min(Math.max(y, -maxY), maxY);
+};
+
+// 拡大率を変えても、表示している場所の中心が変わらないようにする
+// トラックパッドのピンチでは、指の間にある場所 (マウスカーソルの位置) が動かないように拡大する
+const setZoom = (value: number, focus: { clientX: number; clientY: number } | null = null) => {
+    measureZoomBox();
+    const next = Math.min(Math.max(value, MIN_ZOOM), MAX_ZOOM);
+    const ratio = next / zoom.value;
+    // 拡大の中心にする位置の、表示する領域の中心からのずれ (指定がなければ領域の中心)
+    let focusX = 0;
+    let focusY = 0;
+    if (focus !== null && stageRef.value !== null) {
+        const rect = stageRef.value.getBoundingClientRect();
+        focusX = focus.clientX - (rect.left + rect.width / 2);
+        focusY = focus.clientY - (rect.top + rect.height / 2);
+    }
+    zoom.value = next;
+    setPan(focusX - (focusX - panX.value) * ratio, focusY - (focusY - panY.value) * ratio);
+    showControl();
+};
+const resetZoom = (instant = false) => {
+    isZoomFollowing.value = instant;
+    zoom.value = MIN_ZOOM;
+    panX.value = 0;
+    panY.value = 0;
+    // アニメーションなしで戻したときは、戻した位置が描画されてから、次に拡大するときのアニメーションを戻す
+    if (instant) {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+            isZoomFollowing.value = false;
+        }));
+    }
+};
+const toggleZoom = () => {
+    if (isZoomed.value) {
+        resetZoom();
+    } else {
+        setZoom(DEFAULT_ZOOM);
+    }
+};
+
+// 隣のキャプチャへ送ったら、元の大きさに戻す
+watch(() => props.capture?.id, () => resetZoom(true));
+
+const zoomStyle = computed(() => ({
+    transform: `translate3d(${panX.value}px, ${panY.value}px, 0) scale(${zoom.value})`,
+    transition: isZoomFollowing.value ? 'none' : `transform 0.2s ${EASING}`,
+    cursor: isZoomed.value ? (isZoomFollowing.value ? 'grabbing' : 'grab') : undefined,
+}));
+
+// 縮小図の中で、いま表示している範囲を示す枠の位置と大きさ (縮小図の大きさに対する割合)
+const zoomViewStyle = computed(() => {
+    const box = zoomBox.value;
+    const scaledWidth = box.imageWidth * zoom.value;
+    const scaledHeight = box.imageHeight * zoom.value;
+    if (scaledWidth === 0 || scaledHeight === 0) {
+        return {};
+    }
+    const width = Math.min(1, box.stageWidth / scaledWidth);
+    const height = Math.min(1, box.stageHeight / scaledHeight);
+    const centerX = 0.5 - panX.value / scaledWidth;
+    const centerY = 0.5 - panY.value / scaledHeight;
+    return {
+        left: `${(centerX - width / 2) * 100}%`,
+        top: `${(centerY - height / 2) * 100}%`,
+        width: `${width * 100}%`,
+        height: `${height * 100}%`,
+    };
+});
+
+// 拡大している間は、画像をマウスでドラッグして表示する場所をずらす
+// 指での操作は、ピンチやダブルタップと一緒に Touch イベントで扱う (上のタッチの操作を参照)
+let panStart: { pointerId: number; x: number; y: number; panX: number; panY: number } | null = null;
+const onImagePointerDown = (event: PointerEvent) => {
+    if (!isZoomed.value || event.pointerType === 'touch') {
+        return;
+    }
+    event.preventDefault();
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    measureZoomBox();
+    panStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, panX: panX.value, panY: panY.value };
+    isZoomFollowing.value = true;
+};
+const onImagePointerMove = (event: PointerEvent) => {
+    if (panStart === null || panStart.pointerId !== event.pointerId) {
+        return;
+    }
+    setPan(panStart.panX + event.clientX - panStart.x, panStart.panY + event.clientY - panStart.y);
+    showControl();
+};
+const onImagePointerUp = (event: PointerEvent) => {
+    if (panStart === null || panStart.pointerId !== event.pointerId) {
+        return;
+    }
+    panStart = null;
+    isZoomFollowing.value = false;
+};
+
+// トラックパッドのピンチと Ctrl キーを押しながらのホイールで拡大・縮小する
+// Chrome・Edge・Firefox はピンチを Ctrl キー付きのホイールとして、Safari は独自のジェスチャーのイベントとして送ってくる
+// どちらも既定ではページ全体を拡大してしまうので、拡大表示の中では止めて画像の拡大に使う
+let zoomGestureTimer: number | null = null;
+const followZoomGesture = () => {
+    // 指の動きに合わせて細かく拡大率が変わるので、動かしている間はアニメーションを止める
+    isZoomFollowing.value = true;
+    if (zoomGestureTimer !== null) {
+        window.clearTimeout(zoomGestureTimer);
+    }
+    zoomGestureTimer = window.setTimeout(() => {
+        isZoomFollowing.value = false;
+    }, 150);
+};
+const onStageWheel = (event: WheelEvent) => {
+    if (!event.ctrlKey) {
+        return;
+    }
+    // Safari のジェスチャーのイベントで拡大している間に、同じピンチが Ctrl キー付きのホイールとしても届いたときは、二重に拡大しないよう無視する
+    if (isGesturing) {
+        event.preventDefault();
+        return;
+    }
+    event.preventDefault();
+    followZoomGesture();
+    // ピンチは小さな量が続けて届き、マウスのホイールは1回で大きな量が届くので、1回あたりの変化に上限を設ける
+    const delta = Math.min(Math.max(event.deltaY, -50), 50);
+    setZoom(zoom.value * Math.exp(-delta * 0.01), event);
+};
+// Safari のジェスチャーのイベントは、ピンチを始めたときからの拡大率 (scale) を送ってくる
+let gestureStartZoom = MIN_ZOOM;
+let isGesturing = false;
+// iPhone や iPad の画面を指でピンチしたときは、同じピンチが Touch イベントでも届くので、指で触れている間は Touch イベントだけで拡大・縮小し、ジェスチャーのイベントは Mac のトラックパッドのピンチに使う
+// ジェスチャーのイベントは2本目の指の Touch イベントより先に届くので、1本目の指が触れた時点からの指の数で判定する
+const onStageGestureStart = (event: Event) => {
+    event.preventDefault();
+    if (stageTouchCount > 0) {
+        return;
+    }
+    isGesturing = true;
+    gestureStartZoom = zoom.value;
+};
+const onStageGestureEnd = (event: Event) => {
+    event.preventDefault();
+    isGesturing = false;
+};
+const onStageGestureChange = (event: Event) => {
+    event.preventDefault();
+    if (isGesturing === false) {
+        return;
+    }
+    followZoomGesture();
+    const gesture = event as Event & { scale: number; clientX: number; clientY: number };
+    setZoom(gestureStartZoom * gesture.scale, gesture);
+};
+
+// 縮小図を押したりドラッグしたりした位置が、表示する領域の中心に来るようにずらす
+let isZoomMapDragging = false;
+const moveToZoomMapPoint = (event: PointerEvent) => {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    setPan((0.5 - x) * zoomBox.value.imageWidth * zoom.value, (0.5 - y) * zoomBox.value.imageHeight * zoom.value);
+};
+const onZoomMapPointerDown = (event: PointerEvent) => {
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    isZoomMapDragging = true;
+    isZoomFollowing.value = true;
+    measureZoomBox();
+    moveToZoomMapPoint(event);
+};
+const onZoomMapPointerMove = (event: PointerEvent) => {
+    if (isZoomMapDragging) {
+        moveToZoomMapPoint(event);
+        showControl();
+    }
+};
+const onZoomMapPointerUp = () => {
+    isZoomMapDragging = false;
+    isZoomFollowing.value = false;
+};
+
+
 // ---------- 操作ボタンの表示 ----------
 
 // 矢印とパネルの開閉ボタンは、視聴画面と同じくマウスを動かしている間だけ出す
@@ -721,8 +1120,20 @@ const requireLogin = () => {
     return true;
 };
 
+// 隣へ送るアニメーションの途中は、表示中のキャプチャが送る前のキャプチャのままなので、そのまま操作すると見ていないキャプチャに効いてしまう
+// 送っている途中に押された操作は、送りをすぐに完了させてから、送り先のキャプチャ (画面に見えているキャプチャ) を対象にする
+const finishSlideBeforeAction = async () => {
+    if (finishSlide !== null) {
+        await finishSlide();
+    }
+};
+
 const toggleFavorite = async () => {
     if (props.capture === null || !requireLogin()) {
+        return;
+    }
+    await finishSlideBeforeAction();
+    if (props.capture === null) {
         return;
     }
     // 応答を待つ間に隣のキャプチャへ送られても、お気に入りのボタンを押したキャプチャに結果を反映する
@@ -740,9 +1151,17 @@ const toggleFavorite = async () => {
     }
 };
 
-const openTagDialog = () => {
+const openTagDialog = async () => {
     if (requireLogin()) {
+        await finishSlideBeforeAction();
         isTagDialogOpen.value = true;
+    }
+};
+// 表示しているキャプチャを、保存先にあるファイル名でブラウザのダウンロードフォルダへ保存する
+const download = async () => {
+    await finishSlideBeforeAction();
+    if (props.capture !== null) {
+        await Captures.downloadImages([props.capture]);
     }
 };
 const onTagsUpdated = async (captures: ICapture[]) => {
@@ -769,12 +1188,16 @@ const requestDelete = () => {
 };
 
 const deleteCapture = async () => {
-    if (props.capture === null) {
+    // 削除の途中で Enter キーが続けて押されたときは、最初の削除だけを送る
+    if (props.capture === null || isDeleting.value) {
         return;
     }
-    isDeleteConfirmOpen.value = false;
+    // 選択中のバーと同じく、応答が返るまでは確認のダイアログを開いたまま削除のボタンを読み込み中にする
+    isDeleting.value = true;
     const current = props.capture;
     const result = await Captures.deleteCaptures([current.id]);
+    isDeleting.value = false;
+    isDeleteConfirmOpen.value = false;
     if (result === null) {
         return;
     }
@@ -856,11 +1279,22 @@ const playRecording = async () => {
 let hasHistoryEntry = false;
 const onPopState = () => {
     if (hasHistoryEntry) {
-        // タグや削除の確認のダイアログが上に重なっているときは、写真アプリと同じく一番上のダイアログだけを閉じ、1枚表示の履歴を積み直す
-        if (isTagDialogOpen.value || isDeleteConfirmOpen.value || isSetThumbnailConfirmOpen.value) {
+        // ︙ のメニューや、確認ダイアログが上に重なっているときは一番上のものだけを閉じ、1枚表示の履歴を積み直す
+        if (isTagDialogOpen.value || isDeleteConfirmOpen.value || isSetThumbnailConfirmOpen.value || isMenuOpen.value) {
             isTagDialogOpen.value = false;
             isDeleteConfirmOpen.value = false;
             isSetThumbnailConfirmOpen.value = false;
+            isMenuOpen.value = false;
+            window.history.pushState({ ...window.history.state }, '');
+            return;
+        }
+        // 拡大表示の外の部品が開いたダイアログも、戻る操作では手前のダイアログだけを閉じる
+        // ショートカットの一覧のように、拡大表示の外の部品が開いたダイアログが重なっているときも、そのダイアログだけを閉じる
+        // 開閉の状態は拡大表示から変えられないので、Vuetify のダイアログが Esc キーで閉じる処理を、ダイアログの中で Esc キーを押したときと同じイベントで呼び出す
+        // ダイアログの中で押されたキーは、拡大表示と一覧のキーの処理がどちらも見送るので、閉じるのはダイアログだけになる
+        const overlayContent = document.querySelector('.v-dialog.v-overlay--active > .v-overlay__content');
+        if (overlayContent !== null) {
+            overlayContent.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
             window.history.pushState({ ...window.history.state }, '');
             return;
         }
@@ -902,11 +1336,17 @@ const onKeyDown = (event: KeyboardEvent) => {
     // Mac のキーボードには Delete キーがないため、Finder と同じく Command+Backspace でも削除できるようにする
     if (event.key === 'Backspace' && event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
+        event.stopImmediatePropagation();
         requestDelete();
         return;
     }
     // Ctrl・Command・Alt と一緒に押したキーは、ページ内検索 (Ctrl+F) などのブラウザのショートカットとしてブラウザに任せる
     if (event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+    }
+    // 拡大率のスライダーを操作した後の左右の矢印キーは、スライダーで拡大率を変える操作としてスライダーに任せる
+    const isArrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
+    if (isArrowKey && event.target instanceof Element && event.target.closest('.v-slider') !== null) {
         return;
     }
     switch (event.key) {
@@ -917,14 +1357,19 @@ const onKeyDown = (event: KeyboardEvent) => {
         case ' ': void close(); break;
         case 'Delete': requestDelete(); break;
         case 'f': case 'F': void toggleFavorite(); break;
-        case 't': case 'T': openTagDialog(); break;
+        case 't': case 'T': void openTagDialog(); break;
+        case 'd': case 'D': void download(); break;
         case 'i': case 'I': setInfoOpen(!isInfoOpen.value); break;
         default: return;
     }
     event.preventDefault();
+    // 動きを減らす設定のときは、Space や Esc で拡大表示がすぐに閉じるため、同じキーを一覧のキーの処理 (CaptureKeyboard.ts) が受け取ると、開き直したり選択を解除したりしてしまう
+    // 拡大表示が扱ったキーは、ここで伝わるのを止めて、拡大表示の操作だけで終える
+    event.stopImmediatePropagation();
 };
-onMounted(() => window.addEventListener('keydown', onKeyDown));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown));
+// 一覧のキーの処理も window で受け取るので、それより先に必ず受け取れるよう、キャプチャフェーズで受け取る
+onMounted(() => window.addEventListener('keydown', onKeyDown, { capture: true }));
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown, { capture: true }));
 
 // 開いている間はページのスクロールを止める
 // App.vue の html の overflow-y の指定より優先されるよう、Vuetify のダイアログと同じクラスを付ける
@@ -953,6 +1398,7 @@ watch(() => props.capture !== null, (isOpen) => {
         isTagDialogOpen.value = false;
         isDeleteConfirmOpen.value = false;
         isSetThumbnailConfirmOpen.value = false;
+        isMenuOpen.value = false;
     }
 }, { immediate: true });
 onBeforeUnmount(() => {
@@ -1015,6 +1461,10 @@ onBeforeUnmount(() => {
                 background: transparent;
             }
         }
+        // 取り消せない削除は、ほかの操作と見分けられるよう赤で表示する (CaptureSelectionBar.vue と同じ色)
+        &--danger {
+            color: rgb(var(--v-theme-error-lighten-1));
+        }
     }
 
     &__stage {
@@ -1034,6 +1484,8 @@ onBeforeUnmount(() => {
         top: 0;
         bottom: 0;
         width: 100%;
+        // 画像の大きさを、スライドの大きさに対する割合 (cqw・cqh) で決めるため
+        container-type: size;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -1078,8 +1530,63 @@ onBeforeUnmount(() => {
         }
     }
 
+    // 拡大している間の縮小図と拡大率のスライダー (矢印と同じく、マウスを動かしている間だけ出す)
+    &__zoom {
+        position: absolute;
+        top: 60px;
+        right: 16px;
+        width: 260px;
+        padding: 10px;
+        border-radius: 12px;
+        background: rgb(var(--v-theme-background-lighten-1), 0.92);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.3s, visibility 0.3s;
+        z-index: 3;
+        user-select: none;
+        &-map {
+            position: relative;
+            overflow: hidden;
+            border-radius: 6px;
+            cursor: pointer;
+            touch-action: none;
+        }
+        &-image {
+            display: block;
+            width: 100%;
+            -webkit-user-drag: none;
+        }
+        &-view {
+            position: absolute;
+            border: 2px solid rgb(var(--v-theme-text));
+            border-radius: 3px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+            pointer-events: none;
+        }
+        &-slider {
+            display: flex;
+            align-items: center;
+            margin-top: 6px;
+        }
+        &-step {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            color: rgb(var(--v-theme-text));
+            cursor: pointer;
+        }
+        @media (hover: none) {
+            display: none;
+        }
+    }
+
     &--control {
-        .capture-lightbox__nav {
+        .capture-lightbox__nav, .capture-lightbox__zoom {
             opacity: 1;
             visibility: visible;
         }
@@ -1190,24 +1697,26 @@ onBeforeUnmount(() => {
 </style>
 <style lang="scss">
 
-// 一覧のタイルから開いたときに、タイルの画像から拡大していく表示中の画像 (CaptureTile.vue の openWithTransition() を参照)
-// View Transitions API の疑似要素は文書の最上位にできるので、スコープなしのスタイルで指定する
-.capture-lightbox__image--current {
-    view-transition-name: capture-lightbox-image;
-}
-// 一覧のタイルへ戻りながら閉じるときは、閉じた後の画面にフェードアウト中の1枚表示が写らないよう隠す (close() を参照)
-html.capture-lightbox-closing .capture-lightbox {
-    display: none;
-}
-::view-transition-group(capture-lightbox-image) {
-    animation-duration: 0.3s;
-    animation-timing-function: cubic-bezier(0.26, 0.68, 0.55, 0.99);
-}
-::view-transition-old(capture-lightbox-image),
-::view-transition-new(capture-lightbox-image) {
-    // タイルは画像を切り抜いて並べているので、縦横比の違いで画像が伸び縮みしないよう、切り抜いたまま重ねる
-    height: 100%;
-    object-fit: cover;
+// 拡大表示の開閉で、タイルと1枚表示の間を拡大・縮小していく画像の複製 (CaptureTransition.ts の flyCaptureImage() を参照)
+// body の直下に置くので、スコープなしのスタイルで指定する
+// 拡大表示 (2300) より前、拡大表示の中で開くダイアログ (2400) より後ろに重ねる
+.capture-flying-image {
+    position: fixed;
+    z-index: 2350;
+    margin: 0;
+    // 外枠の伸び縮みは左上を基準にし、はみ出した画像を切り抜く
+    overflow: hidden;
+    transform-origin: 0 0;
+    pointer-events: none;
+    will-change: transform;
+    // 中の画像は外枠の中央を基準に拡大し、外枠と同じ大きさで画像の全体を表示する
+    &__image {
+        display: block;
+        width: 100%;
+        height: 100%;
+        transform-origin: 50% 50%;
+        will-change: transform;
+    }
 }
 
 </style>

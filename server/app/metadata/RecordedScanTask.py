@@ -630,9 +630,12 @@ class RecordedScanTask:
 
             # 新しく見つからなくなったファイルの割合を録画フォルダごとに判定するため、Missing でないレコードの件数を録画フォルダごとに数える
             ## 録画フォルダ自体がシンボリックリンクの場合もあるので、実体のパスでも照合する
-            recorded_folder_pairs: list[tuple[anyio.Path, anyio.Path]] = []
+            ## 録画の件数 × 録画フォルダの数だけ判定するため、Path の比較ではなく、os.path.normcase() でそろえた文字列の前方一致で判定する
+            ## (Path の比較はパスの要素ごとに大文字と小文字をそろえ直すため、数万回の判定でイベントループを数秒占有する)
+            recorded_folder_keys: list[tuple[anyio.Path, list[str]]] = []
             for folder in self.recorded_folders:
-                recorded_folder_pairs.append((folder, await self.resolveRecordedPath(folder)))
+                canonical_folder = await self.resolveRecordedPath(folder)
+                recorded_folder_keys.append((folder, [os.path.normcase(str(canonical_folder)), os.path.normcase(str(folder))]))
 
             def FindRecordedFolder(file_path: anyio.Path) -> anyio.Path | None:
                 """
@@ -644,9 +647,13 @@ class RecordedScanTask:
                 Returns:
                     anyio.Path | None: 録画フォルダ (どの録画フォルダにも含まれない場合は None)
                 """
-                for folder, canonical_folder in recorded_folder_pairs:
-                    if file_path.is_relative_to(canonical_folder) or file_path.is_relative_to(folder):
-                        return folder
+                file_path_key = os.path.normcase(str(file_path))
+                for folder, folder_keys in recorded_folder_keys:
+                    for folder_key in folder_keys:
+                        # 録画フォルダそのものか、録画フォルダの区切りの後に続くパスなら、その録画フォルダに含まれる
+                        ## 区切りまで含めて比較し、E:\TV と E:\TV-Record のように名前の先頭だけが同じフォルダを区別する
+                        if file_path_key == folder_key or file_path_key.startswith(os.path.join(folder_key, '')):
+                            return folder
                 return None
 
             ## すでに Missing のレコードを除いて数えるので、利用者が自分で大量に消した場合も、次の走査からは割合が下がる

@@ -97,7 +97,7 @@
                         <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
                         <span class="ml-1">キャンセル</span>
                     </v-btn>
-                    <v-btn color="secondary" variant="flat" height="40" class="px-3" :disabled="newTagName.trim() === ''" @click="createTag()">
+                    <v-btn color="secondary" variant="flat" height="40" class="px-3" :disabled="newTagName.trim() === ''" :loading="isCreating" @click="createTag()">
                         <Icon icon="fluent:add-16-filled" width="18px" height="18px" />
                         <span class="ml-1">タグを作成</span>
                     </v-btn>
@@ -117,7 +117,7 @@
                         <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
                         <span class="ml-1">キャンセル</span>
                     </v-btn>
-                    <v-btn color="secondary" variant="flat" height="40" class="px-3" :disabled="renameInput.trim() === ''" @click="renameTag()">
+                    <v-btn color="secondary" variant="flat" height="40" class="px-3" :disabled="renameInput.trim() === ''" :loading="isRenaming" @click="renameTag()">
                         <Icon icon="fluent:rename-16-regular" width="18px" height="18px" />
                         <span class="ml-1">名前を変更</span>
                     </v-btn>
@@ -137,7 +137,7 @@
                         <Icon icon="fluent:dismiss-16-filled" width="18px" height="18px" />
                         <span class="ml-1">キャンセル</span>
                     </v-btn>
-                    <v-btn color="error" variant="flat" height="40" class="px-3" @click="deleteTag">
+                    <v-btn color="error" variant="flat" height="40" class="px-3" :loading="isDeleting" @click="deleteTag">
                         <Icon icon="fluent:delete-16-regular" width="18px" height="18px" />
                         <span class="ml-1">タグを削除</span>
                     </v-btn>
@@ -176,6 +176,10 @@ const filteredTags = computed(() => {
 
 const isCreateOpen = ref(false);
 const newTagName = ref('');
+// タグの作成・名前の変更・削除の応答を待っている間か (待つ間はボタンを押せないようにする)
+const isCreating = ref(false);
+const isRenaming = ref(false);
+const isDeleting = ref(false);
 const startCreate = () => {
     newTagName.value = '';
     isCreateOpen.value = true;
@@ -197,11 +201,14 @@ const createTag = async (event?: KeyboardEvent) => {
         return;
     }
     const name = newTagName.value.trim();
-    if (name === '') {
+    // 応答を待つ間にボタンや Enter キーが続けて押されたときは、最初の作成だけを送る
+    if (name === '' || isCreating.value) {
         return;
     }
     // 作成できなかったとき (同じ名前のタグがあるときなど) は、入力した名前を直せるよう、ダイアログを開いたままにする
+    isCreating.value = true;
     const tag = await Captures.createTag(name);
+    isCreating.value = false;
     if (tag !== null) {
         isCreateOpen.value = false;
         newTagName.value = '';
@@ -220,12 +227,15 @@ const renameTag = async (event?: KeyboardEvent) => {
     if (event !== undefined && Utils.isIMEComposing(event)) {
         return;
     }
-    if (renamingTag.value === null || renameInput.value.trim() === '') {
+    // 応答を待つ間にボタンや Enter キーが続けて押されたときは、最初の変更だけを送る
+    if (renamingTag.value === null || renameInput.value.trim() === '' || isRenaming.value) {
         return;
     }
     // 名前を変えられなかったとき (同じ名前のタグがあるときなど) は、入力した名前を直せるよう、ダイアログを開いたままにする
     const target = renamingTag.value;
+    isRenaming.value = true;
     const tag = await Captures.renameTag(target.id, renameInput.value.trim());
+    isRenaming.value = false;
     if (tag === null) {
         return;
     }
@@ -235,11 +245,14 @@ const renameTag = async (event?: KeyboardEvent) => {
     await load();
 };
 const deleteTag = async () => {
-    if (deletingTag.value === null) {
+    // 応答を待つ間にボタンが続けて押されたときは、最初の削除だけを送る
+    if (deletingTag.value === null || isDeleting.value) {
         return;
     }
     const name = deletingTag.value.name;
+    isDeleting.value = true;
     const success = await Captures.deleteTag(deletingTag.value.id);
+    isDeleting.value = false;
     deletingTag.value = null;
     if (success) {
         Message.success(`タグ「${name}」を削除しました。`);

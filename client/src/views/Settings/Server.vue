@@ -782,9 +782,16 @@ let task_status_timer: number | null = null;
 let is_unmounted = false;
 // 前回の進捗の取得に失敗したか (失敗が続く間は、エラーの通知を最初の1回にとどめて取り直すため)
 let is_task_status_failed = false;
+// 進捗を取得している途中か
+// 取得の途中は task_status_timer が null になるので、その間にタスクの完了後の取り直しが呼ばれても、取得中の結果から次の取得を予約し、進捗の取得を常に1本の連鎖にする
+let is_task_status_updating = false;
 
 // 進捗を取得し、どれかが実行中なら1秒後にもう一度取得する
 async function updateTaskStatuses() {
+    if (is_task_status_updating === true) {
+        return;
+    }
+    is_task_status_updating = true;
     task_status_timer = null;
     const show_error = is_task_status_failed === false;
     const [batch_scan, background_analysis, capture_scan, database_vacuum] = await Promise.all([
@@ -793,6 +800,7 @@ async function updateTaskStatuses() {
         Maintenance.fetchCaptureScanStatus(show_error),
         Maintenance.fetchDatabaseVacuumStatus(show_error),
     ]);
+    is_task_status_updating = false;
     if (is_unmounted === true) {
         return;
     }

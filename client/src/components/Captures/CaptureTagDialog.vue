@@ -25,14 +25,17 @@
                     <div v-else-if="tags.length === 0" class="capture-tag-dialog__empty">
                         タグはまだありません。<br>下の入力欄から、新しいタグを追加できます。
                     </div>
-                    <div v-for="tag in tags" :key="tag.id" v-ripple class="capture-tag-dialog__item" @click="toggleTag(tag)">
-                        <Icon class="capture-tag-dialog__item-check"
-                            :icon="stateOf(tag) === 'All' ? 'fluent:checkbox-checked-24-filled' : stateOf(tag) === 'Some' ? 'fluent:checkbox-indeterminate-24-filled' : 'fluent:checkbox-unchecked-24-regular'"
-                            :class="{'capture-tag-dialog__item-check--on': stateOf(tag) !== 'None'}"
-                            width="22px" height="22px" />
-                        <span class="capture-tag-dialog__item-name">{{ tag.name }}</span>
-                        <span class="capture-tag-dialog__item-count">{{ tag.capture_count.toLocaleString() }}枚</span>
-                    </div>
+                    <!-- タグの一覧は、読み込みが終わってタグが1つ以上あるときだけ出す (開き直した直後は、前に開いたときの一覧に代わって読み込み中の文言を出す) -->
+                    <template v-else>
+                        <div v-for="tag in tags" :key="tag.id" v-ripple class="capture-tag-dialog__item" @click="toggleTag(tag)">
+                            <Icon class="capture-tag-dialog__item-check"
+                                :icon="stateOf(tag) === 'All' ? 'fluent:checkbox-checked-24-filled' : stateOf(tag) === 'Some' ? 'fluent:checkbox-indeterminate-24-filled' : 'fluent:checkbox-unchecked-24-regular'"
+                                :class="{'capture-tag-dialog__item-check--on': stateOf(tag) !== 'None'}"
+                                width="22px" height="22px" />
+                            <span class="capture-tag-dialog__item-name">{{ tag.name }}</span>
+                            <span class="capture-tag-dialog__item-count">{{ tag.capture_count.toLocaleString() }}枚</span>
+                        </div>
+                    </template>
                 </div>
 
                 <!-- 新しいタグを追加する (追加したタグは、開いているキャプチャにそのまま付く) -->

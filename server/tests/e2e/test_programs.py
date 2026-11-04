@@ -127,6 +127,7 @@ async def backend(
 # 番組情報の更新 (Program.updateFromMirakurun / Program.updateFromEDCB) - 正常系
 # -------------------------------------------------------------------------------------
 
+
 async def test_update_programs(backend: Literal['Mirakurun', 'EDCB'], monkeypatch: pytest.MonkeyPatch, snapshot_json: SnapshotAssertion) -> None:
     """
     実際の番組情報から番組を追加し、再度更新すると DB と番組表の差異を番組表に合わせて修正し、
@@ -163,6 +164,13 @@ async def test_update_programs(backend: Literal['Mirakurun', 'EDCB'], monkeypatc
         if programs.get(program_id) != program:
             changed_programs.append(program)
     assert {'deleted': deleted_program_ids, 'changed': changed_programs} == snapshot_json(name='six_hours_later')
+
+
+# -------------------------------------------------------------------------------------
+# 別プロセスで番組情報を更新している間に、メインプロセスが DB へ書き込むフロー
+# (Program.update(multiprocess=True) → メインプロセスの書き込み) - 正常系
+# -------------------------------------------------------------------------------------
+
 
 async def test_update_programs__in_another_process_while_main_process_writes(backend: Literal['Mirakurun', 'EDCB'], monkeypatch: pytest.MonkeyPatch) -> None:
     """

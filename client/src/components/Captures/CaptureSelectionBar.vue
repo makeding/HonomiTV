@@ -14,6 +14,9 @@
             <div v-ripple class="capture-selection-bar__button" v-ftooltip.top="'タグを付ける'" @click="openTagDialog">
                 <Icon icon="fluent:tag-24-regular" width="22px" />
             </div>
+            <div v-ripple class="capture-selection-bar__button" v-ftooltip.top="'ダウンロード'" @click="downloadSelected">
+                <Icon icon="fluent:arrow-download-24-regular" width="22px" />
+            </div>
             <!-- 削除は右端に置き、誤って押したときは確認のダイアログでキャンセルできるようにする -->
             <div v-ripple class="capture-selection-bar__button capture-selection-bar__button--danger" v-ftooltip.top="'キャプチャを削除'"
                 @click="requestDelete">
@@ -118,6 +121,26 @@ const onTagsUpdated = (captures: ICapture[]) => {
     emit('updated', captures);
 };
 
+// 選んだキャプチャを、ブラウザのダウンロードフォルダへ1枚ずつ保存する
+// 1枚ずつ保存させるため、数百枚をまとめて選んだままダウンロードするとブラウザが固まるので、一度に保存できる枚数を制限する
+const MAX_DOWNLOAD_COUNT = 50;
+let isDownloading = false;
+const downloadSelected = async () => {
+    if (selectedList.value.length === 0 || isDownloading) {
+        return;
+    }
+    if (selectedList.value.length > MAX_DOWNLOAD_COUNT) {
+        Message.warning(`一度にダウンロードできるのは${MAX_DOWNLOAD_COUNT}枚までです。\n選択を${MAX_DOWNLOAD_COUNT}枚以下にしてからダウンロードしてください。`);
+        return;
+    }
+    isDownloading = true;
+    try {
+        await Captures.downloadImages(selectedList.value);
+    } finally {
+        isDownloading = false;
+    }
+};
+
 // 削除は管理者だけができるが、ボタンは誰にでも表示し、管理者でなければ押したときにログインし直す必要があることを伝える
 const requestDelete = () => {
     if (selectedList.value.length === 0) {
@@ -155,7 +178,7 @@ const deleteSelected = async () => {
 };
 
 // キーボードの F キー・T キー・Delete キーからも、ボタンを押したときと同じ操作ができるようにする
-defineExpose({ toggleFavorite, openTagDialog, requestDelete });
+defineExpose({ toggleFavorite, openTagDialog, downloadSelected, requestDelete });
 
 </script>
 <style lang="scss" scoped>

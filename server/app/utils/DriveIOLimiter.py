@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from typing import ClassVar
+import time
+from typing import Any, ClassVar
 
 import anyio
 import psutil
@@ -23,6 +24,16 @@ class DriveIOLimiter:
     # key: ドライブ識別子と同時実行数の組
     # value: その HDD 用の Semaphore
     _drive_semaphores: ClassVar[dict[tuple[str, int], asyncio.Semaphore]] = {}
+
+    # Linux のマウントの一覧と、取得した時刻 (time.monotonic() の値)
+    ## キャプチャの一括スキャンはファイルごとにドライブを判定するため、毎回取得すると百万枚で合計数分イベントループを占有する
+    ## マウントの追加や解除を反映できるよう、一定の時間がたったら取得し直す
+    ## psutil は型の情報を同梱していないため、要素の型は Any にする
+    _partitions: ClassVar[list[Any]] = []
+    _partitions_fetched_at: ClassVar[float | None] = None
+
+    # マウントの一覧を取得し直すまでの秒数
+    PARTITIONS_CACHE_SECONDS: ClassVar[float] = 60.0
 
 
     @classmethod
@@ -49,8 +60,12 @@ class DriveIOLimiter:
                 # Windows の場合はドライブレターを返す
                 return target_path_str[0].upper() + ':', False
             else:
-                # Linux の場合はマウントポイントを取得
-                partitions = psutil.disk_partitions(all=True)
+                # Linux の場合はマウントポイントを取得 (一定の時間は前回取得した一覧を使う)
+                now = time.monotonic()
+                if cls._partitions_fetched_at is None or now - cls._partitions_fetched_at >= cls.PARTITIONS_CACHE_SECONDS:
+                    cls._partitions = psutil.disk_partitions(all=True)
+                    cls._partitions_fetched_at = now
+                partitions = cls._partitions
                 matched_partition = None
                 target_parts = target_path.parts
 

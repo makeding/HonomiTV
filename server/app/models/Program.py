@@ -253,9 +253,13 @@ class Program(TortoiseModel):
                 raise ex
 
             # この変数から更新or更新不要な番組情報を削除していき、残った古い番組情報を最後にまとめて削除する
-            duplicate_programs = {temp.id:temp for temp in await Program.all()}
+            ## 変更の有無の判定に使う列だけを取得する (全列を ORM のオブジェクトにすると、2万件前後の番組で数十 MB を使うため)
+            duplicate_programs: dict[str, dict[str, Any]] = {}
+            for row in await Program.all().values('id', 'title', 'description', 'detail', 'start_time', 'end_time'):
+                duplicate_programs[row['id']] = row
 
-            # 追加・更新する番組情報 (最後に一括で DB に書き込む)
+            # 追加する番組情報と、更新する番組情報 (最後に一括で DB に書き込む)
+            added_programs: list[Program] = []
             updated_programs: list[Program] = []
 
             # チャンネル情報を取得
@@ -329,24 +333,21 @@ class Program(TortoiseModel):
 
                 # 重複する番組情報があり、かつタイトル・番組概要・番組詳細・番組開始時刻・番組終了時刻が全て同じ
                 if (duplicate_program is not None and
-                    duplicate_program.title == title and
-                    duplicate_program.description == description and
-                    len(duplicate_program.detail) == len(detail) and
-                    duplicate_program.start_time == start_time and
-                    duplicate_program.end_time == end_time):
+                    duplicate_program['title'] == title and
+                    duplicate_program['description'] == description and
+                    len(duplicate_program['detail']) == len(detail) and
+                    duplicate_program['start_time'] == start_time and
+                    duplicate_program['end_time'] == end_time):
 
                     # 更新不要なのでスキップ
                     del duplicate_programs[program_id]
                     continue
 
-                # 重複する番組情報が存在しない（追加）
-                if duplicate_program is None:
-                    program = Program()
-
-                # 重複する番組情報が存在する（更新）
-                else:
-                    del duplicate_programs[program_id]  # 参照を削除
-                    program = duplicate_program
+                # 重複する番組情報が存在する（更新）場合は、残った古い番組情報として削除されないよう参照を削除する
+                ## 追加・更新のどちらも、すべての列の値を新しく設定した番組情報を作って書き込む
+                if duplicate_program is not None:
+                    del duplicate_programs[program_id]
+                program = Program()
 
                 # 取得してきた値を設定
                 program.id = program_id
@@ -368,10 +369,10 @@ class Program(TortoiseModel):
                 ## 基本的には EIT[p/f] 由来の「終了時間未定」が降ってくる前に EIT[schedule] 由来の番組時間を取得しているはず
                 ## 「終了時間未定」だと番組表の整合性が壊れるので、実態と一致しないとしても EIT[schedule] 由来の番組時間を優先したい
                 if program_info['duration'] == 1:
-                    if program.duration is None:  # 番組情報をまだ取得していない
+                    if duplicate_program is None:  # 番組情報をまだ取得していない
                         program.end_time = start_time + timedelta(minutes=5)
                     else:  # すでに番組情報を取得しているので以前取得した値をそのまま使う
-                        pass
+                        program.end_time = duplicate_program['end_time']
                 else:
                     program.end_time = end_time
                 program.duration = (program.end_time - program.start_time).total_seconds()
@@ -469,18 +470,18 @@ class Program(TortoiseModel):
                 # 番組情報を、最後に一括で DB に書き込むリストに追加する
                 if duplicate_program is None:
                     logging.debug(f'Add Program: {program.id}')
+                    added_programs.append(program)
                 else:
                     logging.debug(f'Update Program: {program.id}')
-
-                updated_programs.append(program)
+                    updated_programs.append(program)
 
             # この時点で残存している番組情報は放送が終わって EPG から削除された番組なので、まとめて削除する
             # ここで削除しないと終了した番組の情報が幽霊のように残り続ける事になり、結果 DB が肥大化して遅くなってしまう
-            for duplicate_program in duplicate_programs.values():
-                logging.debug(f'Delete Program: {duplicate_program.id}')
+            for program_id in duplicate_programs.keys():
+                logging.debug(f'Delete Program: {program_id}')
 
             # 追加・更新する番組情報と、削除する番組情報を DB に書き込む
-            await cls.writePrograms(updated_programs, list(duplicate_programs.values()))
+            await cls.writePrograms(added_programs, updated_programs, list(duplicate_programs.keys()))
 
 
         # マルチプロセス実行時は、明示的に例外を拾わないとなぜかメインプロセスも含め全体がフリーズしてしまう
@@ -524,9 +525,13 @@ class Program(TortoiseModel):
                 raise Exception('Failed to get programs from EDCB.')
 
             # この変数から更新or更新不要な番組情報を削除していき、残った古い番組情報を最後にまとめて削除する
-            duplicate_programs = {temp.id:temp for temp in await Program.all()}
+            ## 変更の有無の判定に使う列だけを取得する (全列を ORM のオブジェクトにすると、2万件前後の番組で数十 MB を使うため)
+            duplicate_programs: dict[str, dict[str, Any]] = {}
+            for row in await Program.all().values('id', 'title', 'description', 'detail', 'start_time', 'end_time'):
+                duplicate_programs[row['id']] = row
 
-            # 追加・更新する番組情報 (最後に一括で DB に書き込む)
+            # 追加する番組情報と、更新する番組情報 (最後に一括で DB に書き込む)
+            added_programs: list[Program] = []
             updated_programs: list[Program] = []
 
             # チャンネルごとに
@@ -615,24 +620,21 @@ class Program(TortoiseModel):
 
                     # 重複する番組情報があり、かつタイトル・番組概要・番組詳細・番組開始時刻・番組終了時刻が全て同じ
                     if (duplicate_program is not None and
-                        duplicate_program.title == title and
-                        duplicate_program.description == description and
-                        len(duplicate_program.detail) == len(detail) and
-                        duplicate_program.start_time == start_time and
-                        duplicate_program.end_time == end_time):
+                        duplicate_program['title'] == title and
+                        duplicate_program['description'] == description and
+                        len(duplicate_program['detail']) == len(detail) and
+                        duplicate_program['start_time'] == start_time and
+                        duplicate_program['end_time'] == end_time):
 
                         # 更新不要なのでスキップ
                         del duplicate_programs[program_id]
                         continue
 
-                    # 重複する番組情報が存在しない（追加）
-                    if duplicate_program is None:
-                        program = Program()
-
-                    # 重複する番組情報が存在する（更新）
-                    else:
-                        del duplicate_programs[program_id]  # 参照を削除
-                        program = duplicate_program
+                    # 重複する番組情報が存在する（更新）場合は、残った古い番組情報として削除されないよう参照を削除する
+                    ## 追加・更新のどちらも、すべての列の値を新しく設定した番組情報を作って書き込む
+                    if duplicate_program is not None:
+                        del duplicate_programs[program_id]
+                    program = Program()
 
                     # 取得してきた値を設定
                     program.id = program_id
@@ -737,18 +739,18 @@ class Program(TortoiseModel):
                     # 番組情報を、最後に一括で DB に書き込むリストに追加する
                     if duplicate_program is None:
                         logging.debug(f'Add Program: {program.id}')
+                        added_programs.append(program)
                     else:
                         logging.debug(f'Update Program: {program.id}')
-
-                    updated_programs.append(program)
+                        updated_programs.append(program)
 
             # この時点で残存している番組情報は放送が終わって EPG から削除された番組なので、まとめて削除する
             # ここで削除しないと終了した番組の情報が幽霊のように残り続ける事になり、結果 DB が肥大化して遅くなってしまう
-            for duplicate_program in duplicate_programs.values():
-                logging.debug(f'Delete Program: {duplicate_program.id}')
+            for program_id in duplicate_programs.keys():
+                logging.debug(f'Delete Program: {program_id}')
 
             # 追加・更新する番組情報と、削除する番組情報を DB に書き込む
-            await cls.writePrograms(updated_programs, list(duplicate_programs.values()))
+            await cls.writePrograms(added_programs, updated_programs, list(duplicate_programs.keys()))
 
         # マルチプロセス実行時は、明示的に例外を拾わないとなぜかメインプロセスも含め全体がフリーズしてしまう
         except Exception as ex:
@@ -803,13 +805,14 @@ class Program(TortoiseModel):
 
 
     @classmethod
-    async def writePrograms(cls, updated_programs: list[Program], deleted_programs: list[Program]) -> None:
+    async def writePrograms(cls, added_programs: list[Program], updated_programs: list[Program], deleted_program_ids: list[str]) -> None:
         """
         番組情報の更新で追加・更新する番組情報と、削除する番組情報を DB に書き込む
 
         Args:
-            updated_programs (list[Program]): 追加・更新する番組情報
-            deleted_programs (list[Program]): 削除する番組情報
+            added_programs (list[Program]): 追加する番組情報
+            updated_programs (list[Program]): 更新する番組情報 (登録済みの番組の ID で、すべての列の値を設定したもの)
+            deleted_program_ids (list[str]): 削除する番組情報の ID
         """
 
         # 500件ごとに1つのトランザクションで書き込む
@@ -819,11 +822,16 @@ class Program(TortoiseModel):
         ## ロック待ちのタイムアウト (busy_timeout) を待たずに即座に SQLITE_BUSY エラーになる
         ## さらに、ほかの接続の書き込みが完了した後もトランザクションのスナップショットが古いままのため、何度再試行しても SQLITE_BUSY_SNAPSHOT エラーで失敗し続ける
         ## このため、トランザクション内では読み取りを行わずに最初の SQL 文から書き込み、ほかの接続の書き込みの完了を待ってから書き込むようにしている
+        for index in range(0, len(added_programs), 500):
+            async with transactions.in_transaction():
+                for program in added_programs[index:index + 500]:
+                    await program.save()
+
+        # 更新する番組情報は DB から読み込んだオブジェクトではないため、INSERT ではなく UPDATE で書き込むよう指定する
         for index in range(0, len(updated_programs), 500):
             async with transactions.in_transaction():
                 for program in updated_programs[index:index + 500]:
-                    await program.save()
-        for index in range(0, len(deleted_programs), 500):
+                    await program.save(force_update=True)
+        for index in range(0, len(deleted_program_ids), 500):
             async with transactions.in_transaction():
-                for program in deleted_programs[index:index + 500]:
-                    await program.delete()
+                await Program.filter(id__in=deleted_program_ids[index:index + 500]).delete()

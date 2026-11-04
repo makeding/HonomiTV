@@ -69,6 +69,14 @@
         <div ref="sentinelRef" class="capture-programs__sentinel" :class="{'capture-programs__sentinel--empty': programs.length === 0}">
             <!-- 2ページ目以降の読み込み中のみ、一覧の下端にスピナーを表示する -->
             <Icon v-if="isLoading && programs.length > 0" icon="line-md:loading-twotone-loop" width="28px" />
+            <!-- 2ページ目以降を読み込めなかったときは、一覧の下端に読み込めなかったことと再読み込みのボタンを表示する -->
+            <div v-else-if="isMoreLoadFailed" class="capture-programs__more-failed">
+                <div>続きの番組を読み込めませんでした。</div>
+                <v-btn class="mt-3 px-4" color="secondary" variant="flat" height="40" @click="retryLoadMore">
+                    <Icon icon="fluent:arrow-clockwise-16-filled" width="18px" height="18px" />
+                    <span class="ml-1">再読み込み</span>
+                </v-btn>
+            </div>
         </div>
     </CapturePage>
 </template>
@@ -93,6 +101,8 @@ const isEnd = ref(false);
 const queryInput = ref(String(route.query.query ?? ''));
 // 最初のページを読み込めなかったか (0件と区別して、読み込めなかったことを伝えるため)
 const isLoadFailed = ref(false);
+// 2ページ目以降を読み込めなかったか (最後まで読み込んだことと区別して、続きを読み直せるようにするため)
+const isMoreLoadFailed = ref(false);
 const recordedFilter = ref<boolean | null>(route.query.has_recorded_program === 'true' ? true : route.query.has_recorded_program === 'false' ? false : null);
 // 並び順は絞り込みと同じく URL のクエリパラメータに保持し、ブラウザバックしても維持されるようにする
 const order = ref<CaptureProgramSortOrder>(route.query.order === 'BroadcastAtAsc' ? 'BroadcastAtAsc' : 'BroadcastAtDesc');
@@ -103,7 +113,7 @@ let restoringScrollTop: number | null = window.history.state?.scroll?.top ?? nul
 
 // 次のページを読み込む (下端の目印が見えたら呼ばれる)
 const loadMore = async () => {
-    if (isLoading.value || isEnd.value) {
+    if (isLoading.value || isEnd.value || isLoadFailed.value || isMoreLoadFailed.value) {
         return;
     }
     isLoading.value = true;
@@ -118,9 +128,11 @@ const loadMore = async () => {
         return;
     }
     isLoading.value = false;
+    // 読み込めなかったときは、最後まで読み込んだ扱いにせず、読み込めなかったことを表示する
+    // 自動では読み直さず、最初のページならページの再読み込み、2ページ目以降なら一覧の下端の再読み込みのボタンから読み直す
     if (result === null) {
-        isEnd.value = true;
         isLoadFailed.value = programs.value.length === 0;
+        isMoreLoadFailed.value = programs.value.length > 0;
         return;
     }
     isLoadFailed.value = false;
@@ -136,6 +148,14 @@ const reset = () => {
     nextCursor.value = null;
     isEnd.value = false;
     isLoading.value = false;
+    isLoadFailed.value = false;
+    isMoreLoadFailed.value = false;
+    void loadMore();
+};
+
+// 2ページ目以降を読み込めなかったときに、一覧の下端の再読み込みのボタンから続きを読み直す
+const retryLoadMore = () => {
+    isMoreLoadFailed.value = false;
     void loadMore();
 };
 
@@ -215,7 +235,22 @@ const onLogoError = (event: Event) => {
     &__toolbar {
         display: flex;
         gap: 10px;
-        margin-bottom: 16px;
+        // 下までスクロールしてから検索や絞り込みを変えられるよう、ヘッダーの下に隠れる位置まで来たら画面の上端にくっつける
+        // くっついている間も後ろの番組のカードが透けないよう背景を塗り、上下の余白も背景に含める (止まっているときの見た目は変えない)
+        position: sticky;
+        top: 65px;
+        z-index: 5;
+        margin-top: -10px;
+        padding-top: 10px;
+        padding-bottom: 16px;
+        background: rgb(var(--v-theme-background));
+        // スマホの横画面では上部のヘッダーを表示せず、縦画面では上部のバーがページと一緒にスクロールするので、どちらも画面の最上端にくっつける
+        @include smartphone-horizontal {
+            top: 0;
+        }
+        @include smartphone-vertical {
+            top: 0;
+        }
         // 検索欄と2つの選択欄を1行に並べられない画面幅では、1段目に検索欄を全幅で、2段目に選択欄を並べる
         @include tablet-vertical {
             flex-direction: column;
@@ -299,6 +334,13 @@ const onLogoError = (event: Event) => {
             padding: 0;
         }
     }
+    &__more-failed {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        font-size: 14px;
+        text-align: center;
+    }
 }
 
 .capture-program-card {
@@ -319,7 +361,10 @@ const onLogoError = (event: Event) => {
         position: relative;
         aspect-ratio: 16 / 9;
         background: rgb(var(--v-theme-background-lighten-2));
+        // 画像は枠いっぱいに重ねて切り抜き、4:3 などのキャプチャでも画像の縦横比で枠が押し広げられず 16:9 のまま表示する
         img {
+            position: absolute;
+            inset: 0;
             display: block;
             width: 100%;
             height: 100%;

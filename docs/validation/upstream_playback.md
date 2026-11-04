@@ -1,5 +1,13 @@
 # Selective upstream integration
 
+## Full upstream merge (2026-11-04)
+
+- Merge `upstream/master` at `4223dff9` into `h-dev`, preserving fork playback, BS4K/Hybridcast, remote-device behavior, device-local time display and CM worker initialization.
+- Adopt upstream capture pagination/interaction and scanner fixes, filename sorting and escaping, video-session revival from segment requests, data-broadcasting proxy validation, and database-vacuum controls. Series recordings also support the filename sort options shown by the shared list component.
+- Preserve the local ARIB HTML5 proxy allowlist and public-IP resolver, the TS/MPEG-4/MMT recording timeline and chase-playback rules, and the deinterlacer sizing correction used after returning from the data-broadcasting browser. Keep the local no-agent-restart permission in `AGENTS.md` while taking the other upstream guidance updates.
+- Preserve `client/dist` byte-for-byte from pre-merge `9ef4c349`; the release workflow owns artifact regeneration. No migration, dependency update, frontend build, user database write, service restart, deployment or push is part of this merge.
+- Client ESLint and TypeScript passed. Server Ruff and Pyright passed with eight existing FastAPI deprecation warnings. No test suite, browser interaction, live-service HTTP, real broadcast playback, Docker build or deployment acceptance was run.
+
 ## Full upstream merge (2026-10-31)
 
 - Merge upstream/master at `1319cf39` into h-dev, preserving fork playback, BS4K, Hybridcast, remote-device integration, capture thumbnail selection, loading-failure recovery and device-local time display.

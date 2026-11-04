@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Literal, TypedDict
 
-from pydantic import BaseModel, Field, RootModel, computed_field
+from pydantic import BaseModel, Field, RootModel, StringConstraints, computed_field
 from tortoise.contrib.pydantic import PydanticModel
 
 from app.utils.TSInformation import TerrestrialRegion
@@ -482,7 +482,8 @@ class SeriesBroadcastPeriod(PydanticModel):
     recorded_programs: list[RecordedProgram]
 
 class CaptureTagRequest(BaseModel):
-    name: Annotated[str, Field(min_length=1, max_length=255, pattern=r'\S')]
+    # 前後の空白を除いてから長さを調べ、「 foo」と「foo」を同じ名前のタグとして扱う
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 class CaptureIDsRequest(BaseModel):
     capture_ids: list[int]

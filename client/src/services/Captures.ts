@@ -3,7 +3,7 @@ import { AxiosError } from 'axios';
 
 import Message from '@/message';
 import APIClient from '@/services/APIClient';
-import Utils, { Semaphore } from '@/utils';
+import Utils, { dayjs, Semaphore } from '@/utils';
 
 
 /** キャプチャの一覧 */
@@ -309,6 +309,9 @@ class Captures {
         }
         if (options.date) {
             params.date = options.date;
+        }
+        // 日付の境目の時刻は、日付の指定 (date) と期間の絞り込み (start_date・end_date) の両方に使われる
+        if (options.date || options.day_start_hour !== undefined) {
             params.day_start_hour = options.day_start_hour ?? 0;
         }
 
@@ -329,7 +332,7 @@ class Captures {
 
     /**
      * 条件に合うキャプチャを、カーソルをたどって最後まで取得する
-     * 番組の中のキャプチャ (多くても数百件) のように、件数が限られる一覧のためのもの
+     * 番組の中のキャプチャ (多くても数百件) のように件数が限られる一覧や、Shift キーで範囲選択した期間のように、すべてのキャプチャが必要なときのためのもの
      * @param options 並び順・日付・絞り込み
      * @returns キャプチャと、それらが参照する番組 (失敗時は null)
      */
@@ -385,7 +388,10 @@ class Captures {
             },
         });
         if (response.type === 'error') {
-            APIClient.showGenericError(response, 'キャプチャの日付ごとの件数を取得できませんでした。');
+            // 削除済みのタグで絞り込んだときは、タグの画面がタグが存在しないことを案内するので、エラーの通知は表示しない
+            if (response.data.detail !== 'Capture tag not found') {
+                APIClient.showGenericError(response, 'キャプチャの日付ごとの件数を取得できませんでした。');
+            }
             return null;
         }
         return response.data;
@@ -429,6 +435,32 @@ class Captures {
      */
     static getImageURL(capture: ICapture): string {
         return `${Utils.api_base_url}/captures/${capture.id}/image?hash=${capture.file_hash}`;
+    }
+
+
+    /**
+     * キャプチャの画像を、保存先にあるファイル名でブラウザにダウンロードさせる
+     * 開発時は API のオリジンが画面と異なり、a 要素の download 属性が効かずに画像を開いてしまうため、Blob として取得してから保存させる
+     * 複数枚を渡したときは、選んだ順に1枚ずつ保存させる
+     * @param captures キャプチャのリスト
+     * @returns すべて保存できたかどうか
+     */
+    static async downloadImages(captures: ICapture[]): Promise<boolean> {
+        for (const capture of captures) {
+            const [detail, image] = await Promise.all([
+                Captures.fetchCapture(capture.id),
+                APIClient.get<Blob>(Captures.getImageURL(capture).replace(Utils.api_base_url, ''), { responseType: 'blob' }),
+            ]);
+            if (image.type === 'error') {
+                APIClient.showGenericError(image, 'キャプチャの画像をダウンロードできませんでした。');
+                return false;
+            }
+            // ファイル名を取得できなかったときは、撮影日時から KonomiTV のキャプチャと同じ形式のファイル名を付ける
+            const extension = image.data.type === 'image/png' ? 'png' : 'jpg';
+            const fileName = detail?.files[0]?.file_name ?? `Capture_${dayjs(capture.captured_at).format('YYYYMMDD-HHmmss')}.${extension}`;
+            Utils.downloadBlobData(image.data, fileName);
+        }
+        return true;
     }
 
 
@@ -599,7 +631,13 @@ class Captures {
      * @returns 削除の結果 (失敗時は null)
      */
     static async deleteCaptures(capture_ids: number[]): Promise<ICaptureDeleteResult | null> {
-        const response = await APIClient.delete<ICaptureDeleteResult>('/captures', { data: { capture_ids } });
+        // サーバーは1回のリクエストで受け取ったキャプチャをすべて削除してから応答し、1回に削除できる枚数に上限はない
+        // ネットワーク上の保存先では1枚の削除に約 50ms かかるので、既定の30秒に、その2倍の 100ms を枚数分だけ加えた時間まで応答を待つ
+        // 数百枚をまとめて削除したときも、サーバーが削除し終えるまで待って、その結果を表示する
+        const response = await APIClient.delete<ICaptureDeleteResult>('/captures', {
+            data: { capture_ids },
+            timeout: 30 * 1000 + capture_ids.length * 100,
+        });
         if (response.type === 'error') {
             APIClient.showGenericError(response, 'キャプチャを削除できませんでした。');
             return null;

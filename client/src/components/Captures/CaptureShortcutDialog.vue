@@ -40,6 +40,8 @@
 </template>
 <script lang="ts" setup>
 
+import { computed, onBeforeUnmount, onMounted } from 'vue';
+
 import Utils from '@/utils';
 
 
@@ -55,13 +57,34 @@ interface IShortcut {
     alternatives: IShortcutKey[][];
 }
 
-defineProps<{
+const props = withDefaults(defineProps<{
     show: boolean;
-}>();
+    // Ctrl (Command) + A キーで選ぶ範囲 (タイムラインでは同じ日付のキャプチャ、番組別の一覧ではその番組のキャプチャすべて)
+    selectAllScope?: 'Day' | 'Program';
+}>(), {
+    selectAllScope: 'Day',
+});
 
 const emit = defineEmits<{
     (event: 'update:show', show: boolean): void;
 }>();
+
+// キャプチャの一覧のどの画面でも、視聴画面と同じく ／(？) キーで一覧を開く
+const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== '/' && event.key !== '?') {
+        return;
+    }
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+    }
+    event.preventDefault();
+    emit('update:show', true);
+};
+onMounted(() => window.addEventListener('keydown', onKeyDown));
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown));
 
 const ARROW_KEYS: IShortcutKey = {name: 'fluent:arrow-move-20-regular', icon: true};
 const LEFT_KEY: IShortcutKey = {name: 'fluent:arrow-left-12-filled', icon: true};
@@ -69,17 +92,23 @@ const RIGHT_KEY: IShortcutKey = {name: 'fluent:arrow-right-12-filled', icon: tru
 // Mac のキーボードには Delete キーがないため、Finder と同じく Command+Backspace でも削除できる
 const DELETE_KEYS: IShortcutKey[][] = [[{name: 'Delete', icon: false}], [{name: 'Cmd', icon: false}, {name: 'Backspace', icon: false}]];
 
-const shortcutGroups: { name: string; icon: string; shortcuts: IShortcut[] }[] = [
+const shortcutGroups = computed<{ name: string; icon: string; shortcuts: IShortcut[] }[]>(() => [
     {
         name: 'キャプチャを選択しているとき',
         icon: 'fluent:checkmark-circle-20-filled',
         shortcuts: [
             { name: '選択を移動する', alternatives: [[ARROW_KEYS]] },
             { name: '選択する範囲を広げる', alternatives: [[{name: 'Shift', icon: false}, ARROW_KEYS]] },
+            { name: '選択を変更せずにカーソルを移動する', alternatives: [[{name: 'Ctrl', icon: false}, ARROW_KEYS]] },
+            { name: 'カーソルの位置のキャプチャを選択する / 外す', alternatives: [[{name: 'Ctrl', icon: false}, {name: 'Space', icon: false}]] },
             { name: '選択しているキャプチャを拡大表示する', alternatives: [[{name: 'Space', icon: false}], [{name: 'Enter', icon: false}]] },
-            { name: '同じ日付のキャプチャをすべて選択する', alternatives: [[{name: Utils.CtrlOrCmd(), icon: false}, {name: 'A', icon: false}]] },
+            {
+                name: props.selectAllScope === 'Program' ? 'この番組のキャプチャをすべて選択する' : '同じ日付のキャプチャをすべて選択する',
+                alternatives: [[{name: Utils.CtrlOrCmd(), icon: false}, {name: 'A', icon: false}]],
+            },
             { name: '選択しているキャプチャをお気に入りに追加する / 外す', alternatives: [[{name: 'F', icon: false}]] },
             { name: '選択しているキャプチャにタグを付ける', alternatives: [[{name: 'T', icon: false}]] },
+            { name: '選択しているキャプチャをダウンロードする (50枚まで)', alternatives: [[{name: 'D', icon: false}]] },
             { name: '選択しているキャプチャを削除する', alternatives: DELETE_KEYS },
             { name: '選択を解除する', alternatives: [[{name: 'Esc', icon: false}]] },
         ],
@@ -92,6 +121,7 @@ const shortcutGroups: { name: string; icon: string; shortcuts: IShortcut[] }[] =
             { name: '次のキャプチャを表示する', alternatives: [[RIGHT_KEY]] },
             { name: 'お気に入りに追加する / 外す', alternatives: [[{name: 'F', icon: false}]] },
             { name: 'タグを付ける', alternatives: [[{name: 'T', icon: false}]] },
+            { name: 'ダウンロードする', alternatives: [[{name: 'D', icon: false}]] },
             { name: '情報の表示を切り替える', alternatives: [[{name: 'I', icon: false}]] },
             { name: 'キャプチャを削除する', alternatives: DELETE_KEYS },
             { name: '拡大表示を閉じる', alternatives: [[{name: 'Space', icon: false}], [{name: 'Esc', icon: false}]] },
@@ -104,7 +134,7 @@ const shortcutGroups: { name: string; icon: string; shortcuts: IShortcut[] }[] =
             { name: 'キーボードショートカットの一覧を表示する', alternatives: [[{name: '／(？)', icon: false}]] },
         ],
     },
-];
+]);
 
 </script>
 <style lang="scss" scoped>
