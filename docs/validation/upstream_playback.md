@@ -1,5 +1,11 @@
 # Selective upstream integration
 
+## DPlayer update (2026-11-06)
+
+- Pin the fork's built DPlayer `1.33.4` at `17df447f`, after merging upstream live-sync and deinterlacing-status changes. Regular MPEG-TS uses upstream `mpegts.js`; MMT/TLV playback and subtitles remain in `tlvdemux`. Remove the obsolete `mmts.js` subtitle-event path.
+- Include the HDR canvas visibility fix when data broadcasting hides the external video plane. DPlayer type checking, 32 existing tests and production bundle build passed. HonomiTV client lint and type checking are the integration checks; browser playback and real broadcast remain separate acceptance.
+- Keep tracked `client/dist` unchanged. The user will push the HonomiTV commit after local integration.
+
 ## Full upstream merge (2026-11-06)
 
 - Merge `upstream/master` at `941d5a24` into `h-dev`. Adopt the upstream server and installer dependency locks, the `follow-redirects` 1.16.2 lock update, and the QSVEncC 8.37 / NVEncC 9.40 / VCEEncC 9.22 build pins.
