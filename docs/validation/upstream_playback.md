@@ -1,5 +1,12 @@
 # Selective upstream integration
 
+## Full upstream merge (2026-11-06)
+
+- Merge `upstream/master` at `941d5a24` into `h-dev`. Adopt the upstream server and installer dependency locks, the `follow-redirects` 1.16.2 lock update, and the QSVEncC 8.37 / NVEncC 9.40 / VCEEncC 9.22 build pins.
+- Preserve this fork's DPlayer commit and its playback, BS4K, Hybridcast, remote-device and device-local-time behavior. The upstream DPlayer 1.33.4 pin does not replace the fork's dependency.
+- Preserve tracked `client/dist` byte-for-byte from pre-merge `5db1df4a`; the release workflow owns artifact regeneration. No migration, frontend build, user database write, service restart, deployment or push is part of this merge.
+- Client ESLint and TypeScript passed. Server Ruff and Pyright passed with eight existing FastAPI deprecation warnings. Both uv locks passed `uv lock --check --offline`; the client dependency graph installed with `yarn install --frozen-lockfile --ignore-scripts`. Live-service, browser, real broadcast, encoder binaries and deployment were not verified.
+
 ## Full upstream merge (2026-11-04)
 
 - Merge `upstream/master` at `4223dff9` into `h-dev`, preserving fork playback, BS4K/Hybridcast, remote-device behavior, device-local time display and CM worker initialization.
