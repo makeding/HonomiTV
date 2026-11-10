@@ -25,6 +25,8 @@ from Utils import (
     IsDockerComposeV2,
     IsDockerInstalled,
     IsGitInstalled,
+    KillProcessesUnderDirectory,
+    RemoveDirectory,
     RemoveEmojiIfLegacyTerminal,
     RunKonomiTVServiceWaiter,
     RunSubprocess,
@@ -178,6 +180,10 @@ def Updater(version: str) -> None:
             )
             return  # 処理中断
 
+        # サービスの停止要求はサーバー本体やエンコーダーの終了を待たずに完了するため、
+        # KonomiTV のフォルダ内のファイルを使うプロセスがすべて終了するまで待つ (残っていれば強制終了する)
+        KillProcessesUnderDirectory(update_path)
+
     # ***** Linux: 起動中の PM2 サービスの終了 *****
 
     elif platform_type == 'Linux':
@@ -266,13 +272,13 @@ def Updater(version: str) -> None:
         ## 事前に config.yaml・venv の仮想環境・ユーザーデータ・ログ以外のファイル/フォルダをすべて削除してから、
         ## ダウンロードした新しいソースコードで上書き更新する
         ## Git でインストールされている場合は、作業ツリーの更新を Git がよしなにやってくれるため不要
-        shutil.rmtree(update_path / '.github/', ignore_errors=True)
-        shutil.rmtree(update_path / '.vscode/', ignore_errors=True)
-        shutil.rmtree(update_path / 'client/', ignore_errors=True)
-        shutil.rmtree(update_path / 'installer/', ignore_errors=True)
-        shutil.rmtree(update_path / 'server/app/', ignore_errors=True)
-        shutil.rmtree(update_path / 'server/misc/', ignore_errors=True)
-        shutil.rmtree(update_path / 'server/static/', ignore_errors=True)
+        RemoveDirectory(update_path / '.github/')
+        RemoveDirectory(update_path / '.vscode/')
+        RemoveDirectory(update_path / 'client/')
+        RemoveDirectory(update_path / 'installer/')
+        RemoveDirectory(update_path / 'server/app/')
+        RemoveDirectory(update_path / 'server/misc/')
+        RemoveDirectory(update_path / 'server/static/')
         Path(update_path / 'server/KonomiTV.py').unlink(missing_ok=True)
         Path(update_path / 'server/KonomiTV-Service.py').unlink(missing_ok=True)
         Path(update_path / 'server/Pipfile').unlink(missing_ok=True)
@@ -395,7 +401,7 @@ def Updater(version: str) -> None:
         with progress:
 
             # 更新前に、前バージョンの古いサードパーティーライブラリを削除
-            shutil.rmtree(update_path / 'server/thirdparty/', ignore_errors=True)
+            RemoveDirectory(update_path / 'server/thirdparty/')
 
             # latest のみ、圧縮ファイルがさらに zip で包まれているので、それを解凍
             thirdparty_compressed_file_path = thirdparty_compressed_file.name
@@ -423,7 +429,7 @@ def Updater(version: str) -> None:
         # ***** 依存パッケージの更新 *****
 
         # すでに仮想環境があると稀に更新がうまく行かないことがあるため、アップデート毎に作り直す
-        shutil.rmtree(update_path / 'server/.venv/', ignore_errors=True)
+        RemoveDirectory(update_path / 'server/.venv/')
 
         # 既存リリースの thirdparty アーカイブに uv がない場合でも、新しい pyproject.toml を同期できるよう固定版 uv を導入する
         result = RunSubprocessDirectLogOutput(

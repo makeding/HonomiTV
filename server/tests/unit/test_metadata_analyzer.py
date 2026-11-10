@@ -1,5 +1,6 @@
 
 import concurrent.futures
+from datetime import datetime
 from typing import Any
 
 from syrupy.assertion import SnapshotAssertion
@@ -67,3 +68,45 @@ def test_analyze_recording_read_within_recording_start_margin() -> None:
     result = AnalyzeRecording('terrestrial-recording-start-margin.ts')
     assert result['title'] == 'あおほし'
     assert result['start_time'] == '2025-06-10T02:00:00+09:00'
+
+
+def test_analyze_bdav_partial_ts_recording(snapshot_json: SnapshotAssertion) -> None:
+    """
+    BD に BDAV 形式で記録された録画データ (192 バイトのパケットのパーシャル TS) でも、SDT・EIT・TOT の代わりに SIT から、
+    チャンネル情報・番組情報 (番組詳細を含む)・録画開始時刻を解析でき、映像・音声の情報も 188 バイトのパケットの TS と同じく取得できる
+    このファイルは、地デジを DR 録画して BD に記録した録画の途中を切り出したもので、PSI/SI は PAT・PMT・SIT だけを含む
+    """
+
+    result = AnalyzeRecording('terrestrial-bdav-partial-ts.m2ts')
+    assert result['channel']['name'] == 'OBS大分放送'
+    assert result['channel']['remocon_id'] == 3
+    assert result['title'] == 'かぼすタイム'
+    assert result['start_time'] == '2011-02-12T09:25:00+09:00'
+    assert result['duration'] == 7200.0
+    assert result['detail'] == {'出演者': '【司会】石川 正史,舘原 美幸'}
+    assert result['recorded_video']['recording_start_time'] is not None
+    assert result['recorded_video']['video_codec'] == 'MPEG-2'
+    assert result == snapshot_json
+
+
+def test_analyze_mp4_recording_with_psi_archive() -> None:
+    """
+    TS をエンコードした MP4 の録画データでも、録画の横に置いた PSI/SI 書庫 (.psc) から、元の TS と同じ番組情報を解析できる
+    このファイルは、terrestrial-tsreplace-h264.ts の映像と音声を MP4 にコピーし、同じ TS から psisiarc で作成した書庫を並べたもの
+    """
+
+    ts_result = AnalyzeRecording('terrestrial-tsreplace-h264.ts')
+    mp4_result = AnalyzeRecording('terrestrial-psc-sidecar.mp4')
+    assert mp4_result['recorded_video']['container_format'] == 'MPEG-4'
+
+    # 番組情報とチャンネル情報は、元の TS から解析したものとすべて一致する
+    for key in ts_result:
+        if key == 'recorded_video':
+            continue
+        assert mp4_result[key] == ts_result[key], key
+
+    # 録画開始・終了時刻は、書庫に記録された TOT の時刻と送出時刻から求めるため、TS の PCR から求めた値との差は1秒未満になる
+    for key in ('recording_start_time', 'recording_end_time'):
+        ts_time = datetime.fromisoformat(ts_result['recorded_video'][key])
+        mp4_time = datetime.fromisoformat(mp4_result['recorded_video'][key])
+        assert abs((mp4_time - ts_time).total_seconds()) < 1, key

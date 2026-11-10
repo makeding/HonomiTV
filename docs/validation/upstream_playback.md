@@ -1,5 +1,12 @@
 # Selective upstream integration
 
+## Full upstream merge (2026-11-10)
+
+- Merge `upstream/master` at `77969e1a` into `h-dev`. Adopt BDAV `.m2ts` partial-TS metadata analysis and playback, the associated recorded-file fixture, installer fixes, 4K cable encoding support, and upstream quality/server-setting UI updates.
+- Keep HonomiTV service selection during reanalysis, the available-channel API, symlink-target TS analysis, MMT/TLV live FFmpeg input, and the fork's playback, BS4K, Hybridcast, remote-device, and device-local-time behavior.
+- Preserve tracked `client/dist` byte-for-byte from pre-merge `697c5482`; the release workflow owns artifact regeneration. No database migration, frontend build, user database write, service restart, deployment, or push is part of this merge.
+- Client ESLint and TypeScript passed. Server Ruff and Pyright passed with eight existing FastAPI deprecation warnings. The upstream BDAV fixture and other test suites were not run. Browser playback, real broadcasts, encoder binaries, live-service behavior, and deployment were not verified.
+
 ## DPlayer update (2026-11-06)
 
 - Pin the fork's built DPlayer `1.33.4` at `17df447f`, after merging upstream live-sync and deinterlacing-status changes. Regular MPEG-TS uses upstream `mpegts.js`; MMT/TLV playback and subtitles remain in `tlvdemux`. Remove the obsolete `mmts.js` subtitle-event path.

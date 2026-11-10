@@ -303,9 +303,20 @@ class Program(TortoiseModel):
 
                         # 見出しと本文
                         head_hankaku = TSInformation.formatString(head).replace('◇', '').strip()  # ◇ を取り除く
-                        if head_hankaku == '':  # 見出しが空の場合、固定で「番組内容」としておく
-                            head_hankaku = '番組内容'
                         text_hankaku = TSInformation.formatString(text).strip()
+                        ## 2つ目以降の項目で見出しが空 (空白だけ) の場合、直前の項目の本文の続きとしてつなげる
+                        ## WOWOW などは長い本文を、見出しが空白だけの別の項目に分けて送出するため、
+                        ## 「番組内容」として扱うと本来の番組内容を上書きしてしまう
+                        ## 分割位置には改行が含まれないため、続きの本文が「【」で始まる見出しのときだけ改行を挟んでつなげる
+                        ## (WOWOW では本文の中の「【」は常に行頭にあり、それ以外の分割位置は語や列挙の途中になっている)
+                        if head_hankaku == '' and len(detail) > 0:
+                            last_head = list(detail.keys())[-1]
+                            separator = '\n' if text_hankaku.startswith('【') else ''
+                            detail[last_head] += separator + text_hankaku
+                            continue
+                        ## 先頭の項目の見出しが空の場合、固定で「番組内容」としておく
+                        if head_hankaku == '':
+                            head_hankaku = '番組内容'
                         detail[head_hankaku] = text_hankaku
 
                         # 番組概要が空の場合、番組詳細の最初の本文を概要として使う
@@ -412,10 +423,14 @@ class Program(TortoiseModel):
                 program.video_codec = None
                 program.video_resolution = None
                 if 'video' in program_info:
-                    # ariblib 未定義の streamContent でも EPG 全体を中断しない。
-                    # 説明だけを Unknown とし、受信したコーデック・解像度はそのまま保持する。
-                    component_types = ariblib.constants.COMPONENT_TYPE.get(program_info['video']['streamContent'], {})
-                    program.video_type = component_types.get(program_info['video']['componentType'], 'Unknown')
+                    # stream_content は Mirakurun が EIT の値をそのまま返すため、H.265 (0x09) や事業者定義の値など
+                    # ariblib の定義にない値も入りうる
+                    # 定義にない値で例外を送出すると全チャンネルの番組情報の更新が止まるため、'Unknown' として扱う
+                    if program_info['video']['streamContent'] is not None:
+                        component_types = ariblib.constants.COMPONENT_TYPE.get(program_info['video']['streamContent'], {})
+                        program.video_type = component_types.get(program_info['video']['componentType'], 'Unknown')
+                    else:
+                        program.video_type = 'Unknown'
                     program.video_codec = program_info['video']['type']
                     program.video_resolution = program_info['video']['resolution']
 
@@ -455,6 +470,7 @@ class Program(TortoiseModel):
                                 program.secondary_audio_language = program.secondary_audio_language + '+副音声'  # 副音声で固定
 
                 ## Mirakurun 3.8 以下向け（フォールバック）
+                ## 音声コンポーネント記述子をまだ受信していない番組には audios も audio も存在しないため、その場合は空のままにする
                 elif 'audio' in program_info:
 
                     ## 主音声
@@ -582,13 +598,23 @@ class Program(TortoiseModel):
                             ## 見出しのみ ariblib 側で意図的に重複防止のためのタブ文字付加が行われる場合があるため、
                             ## strip() では明示的に半角スペースと改行のみを指定している
                             head_hankaku = TSInformation.formatString(head).replace('◇', '').strip(' \r\n')  # ◇ を取り除く
+                            text_hankaku = TSInformation.formatString(text).strip()
+                            ## 2つ目以降の項目で見出しが空 (空白と重複防止のタブ文字だけ) の場合、直前の項目の本文の続きとしてつなげる
+                            ## WOWOW などは長い本文を、見出しが空白だけの別の項目に分けて送出するため、
+                            ## 「番組内容」として扱うと本来の番組内容を上書きしてしまう
+                            ## 分割位置には改行が含まれないため、続きの本文が「【」で始まる見出しのときだけ改行を挟んでつなげる
+                            ## (WOWOW では本文の中の「【」は常に行頭にあり、それ以外の分割位置は語や列挙の途中になっている)
+                            if head_hankaku.strip() == '' and len(detail) > 0:
+                                last_head = list(detail.keys())[-1]
+                                separator = '\n' if text_hankaku.startswith('【') else ''
+                                detail[last_head] += separator + text_hankaku
+                                continue
+                            ## 先頭の項目の見出しが空の場合、固定で「番組内容」としておく
+                            if head_hankaku.strip() == '':
+                                head_hankaku = '番組内容'
                             ## ないとは思うが、万が一この状態で見出しが衝突しうる場合は、見出しの後ろにタブ文字を付加する
                             while head_hankaku in detail.keys():
                                 head_hankaku += '\t'
-                            ## 見出しが空の場合、固定で「番組内容」としておく
-                            if head_hankaku == '':
-                                head_hankaku = '番組内容'
-                            text_hankaku = TSInformation.formatString(text).strip()
                             detail[head_hankaku] = text_hankaku
 
                             # 番組概要が空の場合、番組詳細の最初の本文を概要として使う
