@@ -2,6 +2,7 @@
     <div class="reservation-list" :class="{
         'reservation-list--show-sort': !hideSort,
         'reservation-list--empty': displayTotal === 0 && showEmptyMessage,
+        'reservation-list--with-filter': filterButtonLabel !== undefined,
     }">
         <div class="reservation-list__header" v-if="!hideHeader">
             <h2 class="reservation-list__title">
@@ -9,7 +10,7 @@
                     <Icon icon="fluent:chevron-left-12-filled" width="27px" />
                 </div>
                 <span class="reservation-list__title-text">{{ title }}</span>
-                <div class="reservation-list__title-count" v-if="!showMoreButton">
+                <div class="reservation-list__title-count" v-if="!showMoreButton && !hideCount">
                     <template v-if="isLoading">
                         <Icon icon="line-md:loading-twotone-loop" class="mr-1 spin" width="20px" height="20px" />
                     </template>
@@ -19,26 +20,50 @@
             <div class="reservation-list__actions">
                 <v-btn v-if="filterButtonLabel !== undefined"
                     variant="flat"
+                    rounded="lg"
                     class="reservation-list__filter-button"
                     @click="$emit('filter')">
                     <Icon icon="fluent:filter-20-filled" width="16px" height="16px" class="mr-1" />
                     {{ filterButtonLabel }}
                 </v-btn>
                 <v-select v-if="!hideSort"
-                    v-model="sortOrder"
+                    :model-value="sortOrder"
                     :items="[
-                        { title: '放送が近い順', value: 'asc' },
-                        { title: '放送が遠い順', value: 'desc' },
+                        { title: '放送時間順', value: 'asc' },
+                        { title: '予約数順', value: 'toru' },
                     ]"
+                    aria-label="並び順"
                     item-title="title"
                     item-value="value"
                     class="reservation-list__sort"
                     color="primary"
                     bg-color="background-lighten-1"
                     variant="solo"
+                    rounded="lg"
+                    :flat="filterButtonLabel !== undefined"
                     density="comfortable"
                     hide-details
                     @update:model-value="$emit('update:sortOrder', $event)">
+                </v-select>
+                <v-select v-if="filterSelectItems !== undefined"
+                    :model-value="filterSelectValue"
+                    :items="filterSelectItems"
+                    aria-label="絞り込み"
+                    item-title="title"
+                    item-value="value"
+                    class="reservation-list__sort reservation-list__sort--filter"
+                    color="primary"
+                    bg-color="background-lighten-1"
+                    variant="solo"
+                    rounded="lg"
+                    density="comfortable"
+                    hide-details
+                    @update:model-value="$emit('update:filterSelectValue', $event)">
+                    <!-- 項目のまとまりの境目に区切り線を表示する (この Vuetify のバージョンの v-select は、区切り線の項目に対応していない) -->
+                    <template #item="{ props: itemProps, item }">
+                        <v-divider v-if="item.raw.hasDividerAbove === true" class="my-1"></v-divider>
+                        <v-list-item v-bind="itemProps"></v-list-item>
+                    </template>
                 </v-select>
                 <v-btn v-if="showMoreButton"
                     variant="text"
@@ -66,11 +91,13 @@
                 </div>
             </div>
             <div class="reservation-list__grid-content">
-                <Reservation v-for="reservation in displayReservations"
+                <Reservation v-for="(reservation, index) in displayReservations"
                     :key="reservation.id === -1 ? reservation.program.id : reservation.id"
                     :reservation="reservation"
+                    :rank="showRank ? (currentPage - 1) * itemsPerPage + index + 1 : undefined"
                     :compact-on-tablet-horizontal="compactReservationsOnTabletHorizontal"
                     :is-program-search-result="isProgramSearchResult"
+                    :add-availability="addAvailability"
                     @added="handleReservationAdded"
                     @deleted="handleReservationDeleted"
                     @click="handleReservationClick" />
@@ -81,7 +108,7 @@
                 v-model="currentPage"
                 active-color="primary"
                 density="comfortable"
-                :length="Math.ceil(displayTotal / 30)"
+                :length="Math.ceil(displayTotal / itemsPerPage)"
                 :total-visible="Utils.isSmartphoneVertical() ? 5 : 7"
                 @update:model-value="$emit('update:page', $event)">
             </v-pagination>
@@ -105,7 +132,8 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import Reservation from '@/components/Reservations/Reservation.vue';
 import ReservationDetailDrawer from '@/components/Reservations/ReservationDetailDrawer.vue';
 import { IReservation } from '@/services/Reservations';
-import Utils, { dayjs } from '@/utils';
+import { ProgramSortOrder } from '@/stores/ToruCountStore';
+import Utils, { ReservationAddAvailability, dayjs } from '@/utils';
 
 // Props
 const props = withDefaults(defineProps<{
@@ -113,7 +141,9 @@ const props = withDefaults(defineProps<{
     reservations: IReservation[];
     total: number;
     page?: number;
-    sortOrder?: 'desc' | 'asc';
+    // 1ページに表示する件数 (ページ数と、順位を表示する場合のページをまたいだ順位の計算に使う)
+    itemsPerPage?: number;
+    sortOrder?: ProgramSortOrder;
     hideHeader?: boolean;
     hideSort?: boolean;
     hidePagination?: boolean;
@@ -128,9 +158,20 @@ const props = withDefaults(defineProps<{
     filterButtonLabel?: string;
     compactReservationsOnTabletHorizontal?: boolean;
     isProgramSearchResult?: boolean;
+    // 録画予約のない番組に、録画予約を追加できる状態かどうか
+    addAvailability?: ReservationAddAvailability;
+    // タイトルの右側の件数を非表示にするかどうか
+    hideCount?: boolean;
+    // 各項目の左端に、1ページ目の先頭からの順位を表示するかどうか (予約数ランキング用)
+    showRank?: boolean;
+    // ヘッダーの右側に表示する絞り込みの選択欄の項目と、選択中の値 (項目を指定した場合のみ選択欄を表示する)
+    // hasDividerAbove が true の項目の上には、区切り線を表示する
+    filterSelectItems?: { title: string; value: string; hasDividerAbove?: boolean; }[];
+    filterSelectValue?: string;
 }>(), {
     page: 1,
-    sortOrder: 'desc',
+    itemsPerPage: 30,
+    sortOrder: 'asc',
     hideHeader: false,
     hideSort: false,
     hidePagination: false,
@@ -145,13 +186,15 @@ const props = withDefaults(defineProps<{
     filterButtonLabel: undefined,
     compactReservationsOnTabletHorizontal: false,
     isProgramSearchResult: false,
+    addAvailability: 'Available',
+    hideCount: false,
+    showRank: false,
+    filterSelectItems: undefined,
+    filterSelectValue: undefined,
 });
 
 // 現在のページ番号
 const currentPage = ref(props.page);
-
-// 並び順
-const sortOrder = ref<'desc' | 'asc'>(props.sortOrder);
 
 // 内部で管理する予約リスト
 const displayReservations = ref<IReservation[]>([...props.reservations]);
@@ -169,11 +212,6 @@ watch(() => props.page, (newPage) => {
     currentPage.value = newPage;
 });
 
-// props の sortOrder が変更されたら sortOrder を更新
-watch(() => props.sortOrder, (newOrder) => {
-    sortOrder.value = newOrder;
-});
-
 // props の reservations が変更されたら displayReservations を更新
 watch(() => props.reservations, (newReservations) => {
     displayReservations.value = [...newReservations];
@@ -187,7 +225,8 @@ watch(() => props.total, (newTotal) => {
 // Emits
 const emit = defineEmits<{
     (e: 'update:page', page: number): void;
-    (e: 'update:sortOrder', order: 'desc' | 'asc'): void;
+    (e: 'update:sortOrder', order: ProgramSortOrder): void;
+    (e: 'update:filterSelectValue', value: string): void;
     (e: 'more'): void;
     (e: 'delete', reservation_id: number): void;
     (e: 'added', reservation: IReservation): void;
@@ -277,12 +316,56 @@ const handleReservationSave = (updatedReservation: IReservation) => {
         }
     }
 
+    &--with-filter {
+        .reservation-list__actions {
+            gap: 6px;
+        }
+
+        .reservation-list__sort :deep(.v-field__input) {
+            min-height: 40px !important;
+        }
+
+        @include smartphone-vertical {
+            .reservation-list__header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .reservation-list__title {
+                padding-bottom: 8px;
+            }
+
+            .reservation-list__actions {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 8px;
+                margin-left: 0;
+            }
+
+            .reservation-list__sort {
+                width: 100%;
+                min-width: 0;
+                :deep(.v-field__input) {
+                    padding-left: 12px !important;
+                }
+            }
+
+            .reservation-list__grid {
+                margin-top: 10px;
+            }
+        }
+    }
+
     &__header {
         display: flex;
         align-items: center;
         min-width: 0;  // タイトルと操作ボタンの合計幅が狭い画面で親を押し広げないようにする
         @include smartphone-vertical {
             padding: 0px 8px;
+        }
+        @include smartphone-vertical-short {
+            column-gap: 6px;
+            flex-wrap: wrap;
         }
     }
 
@@ -298,6 +381,9 @@ const handleReservationSave = (updatedReservation: IReservation) => {
         @include smartphone-vertical {
             font-size: 22px;
             padding-bottom: 16px;
+        }
+        @include smartphone-vertical-short {
+            font-size: 20px;
         }
 
         &-text {
@@ -335,6 +421,10 @@ const handleReservationSave = (updatedReservation: IReservation) => {
             font-size: 14px;
             font-weight: 400;
             color: rgb(var(--v-theme-text-darken-1));
+            @include smartphone-vertical-short {
+                margin-left: 6px;
+                font-size: 13px;
+            }
 
             .spin {
                 animation: spin 1.15s linear infinite;
@@ -363,27 +453,41 @@ const handleReservationSave = (updatedReservation: IReservation) => {
             padding-left: 12px !important;
             padding-right: 0px !important;
         }
-
-        .v-select {
-            width: 129px;
-        }
     }
 
     &__sort {
+        width: 129px;
         :deep(.v-field__input) {
             font-size: 14px !important;
             padding-top: 6px !important;
             padding-bottom: 6px !important;
             min-height: unset !important;
         }
+        @include smartphone-vertical-short {
+            width: 112px;
+            :deep(.v-field__input) {
+                padding-left: 6px !important;
+            }
+        }
+    }
+
+    // 絞り込みの選択欄は、「ドキュメンタリー」のような長い項目名も省略せずに表示できる幅にする
+    &__sort--filter {
+        width: 168px;
+        // スマホの縦画面では見出しとの間隔を確保するため、文字を少し小さくして幅を詰める
+        @include smartphone-vertical {
+            width: 146px;
+            :deep(.v-field__input) {
+                padding-left: 6px !important;
+                font-size: 13px !important;
+            }
+        }
     }
 
     &__filter-button {
         min-width: 103px;
-        margin-left: 12px;
         height: 40px;
         padding: 0px 12px;
-        border-radius: 6px;
         color: rgb(var(--v-theme-text));
         background: rgb(var(--v-theme-background-lighten-1));
         font-size: 14px;

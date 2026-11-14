@@ -41,7 +41,7 @@ class LiveStreamTest(unittest.TestCase):
         live_stream.writeStreamData(b'chunk')
 
         self.assertEqual(live_stream._clients, active_clients)
-        self.assertTrue(all(client._queue.empty() is True for client in timed_out_clients))
+        self.assertEqual([client._queue.get_nowait() for client in timed_out_clients], [None, None])
         self.assertEqual([client._queue.get_nowait() for client in active_clients], [b'chunk', b'chunk'])
 
 

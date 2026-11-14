@@ -1,5 +1,12 @@
 # Selective upstream integration
 
+## Full upstream merge (2026-11-14)
+
+- Merge `upstream/master` at `687b904b` into `h-dev`. Adopt torne reservation counts and ranking, reservation pagination and readiness fixes, live-stream startup timeout handling, accessible-folder diagnostics, and the non-interactive Windows installer/service-account flow.
+- Keep merged terrestrial channel cards and viewer counts alongside torne counts, IPTV timetable support, EPGStation reservation controls and unknown recording-size display, and the fork's playback, BS4K, Hybridcast, remote-device and device-local-time behavior. Home channel status reserves two rows for force, viewers and reservation counts, including unavailable values. Preserve the installer's pinned uv bootstrap and direct virtual-environment Python invocation for Windows services.
+- Preserve tracked `client/dist` byte-for-byte from pre-merge `3a9c21cb`. No database migration, frontend build, user database write, service restart, deployment or push is included.
+- Client ESLint/TypeScript and nine focused program/playback regression tests passed. Server Ruff/Pyright passed with nine FastAPI deprecation warnings; 18 live-client, EPGStation HTTP and playback HTTP checks passed. Installer Ruff/Pyright and both uv lock checks passed. Browser, live-service, real broadcast playback, full startup E2E and Windows installer execution remain unverified: no local user-managed API is running and the Akebi executable is absent. No frontend assets were built.
+
 ## Full upstream merge (2026-11-10)
 
 - Merge `upstream/master` at `77969e1a` into `h-dev`. Adopt BDAV `.m2ts` partial-TS metadata analysis and playback, the associated recorded-file fixture, installer fixes, 4K cable encoding support, and upstream quality/server-setting UI updates.

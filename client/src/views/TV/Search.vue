@@ -24,7 +24,7 @@
                             :reservations="displayReservations"
                             :total="totalPrograms"
                             :page="currentPage"
-                            hide-sort
+                            :sort-order="sortOrder"
                             :is-loading="isLoading"
                             :show-empty-message="hasSearched"
                             :filter-button-label="shouldShowFilterDrawerButton ? '絞り込み' : undefined"
@@ -34,9 +34,11 @@
                             keep-deleted-items
                             compact-reservations-on-tablet-horizontal
                             is-program-search-result
+                            :add-availability="addAvailability"
                             @filter="isFilterDrawerOpen = true"
                             @added="updateReservedProgramIds"
                             @delete="updateReservedProgramIds"
+                            @update:sort-order="updateSortOrder"
                             @update:page="updatePage" />
                     </div>
                 </div>
@@ -57,7 +59,7 @@
 </template>
 <script lang="ts" setup>
 
-import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import Breadcrumbs from '@/components/Breadcrumbs.vue';
@@ -66,18 +68,20 @@ import Navigation from '@/components/Navigation.vue';
 import ProgramSearchFilters from '@/components/Programs/ProgramSearchFilters.vue';
 import ReservationList from '@/components/Reservations/ReservationList.vue';
 import SPHeaderBar from '@/components/SPHeaderBar.vue';
-import { IChannel, ILiveChannel } from '@/services/Channels';
+import { ILiveChannel } from '@/services/Channels';
 import Programs, { IProgram, IProgramSearchCondition } from '@/services/Programs';
-import Reservations, { IRecordSettings, IRecordSettingsDefault, IReservation } from '@/services/Reservations';
+import Reservations, { IRecordSettings, IReservation } from '@/services/Reservations';
 import useChannelsStore from '@/stores/ChannelsStore';
 import useServerSettingsStore from '@/stores/ServerSettingsStore';
+import useToruCountStore, { ProgramSortOrder } from '@/stores/ToruCountStore';
 import useUserStore from '@/stores/UserStore';
-import Utils, { dayjs } from '@/utils';
+import Utils, { ReservationAddAvailability, ReservationUtils } from '@/utils';
 
 const route = useRoute();
 const router = useRouter();
 const channelsStore = useChannelsStore();
 const serverSettingsStore = useServerSettingsStore();
+const toruCountStore = useToruCountStore();
 
 // EDCB バックエンドかどうか
 // サーバー設定がまだ取得されていない場合は EDCB と判定しない (デフォルト値が 'EDCB' のため)
@@ -106,19 +110,35 @@ const createDefaultSearchCondition = (): IProgramSearchCondition => {
     };
 };
 
-// 検索条件はフォームと検索 API の両方で共有し、URL にはキーワードとページだけを残す
+// 検索条件はフォームと検索 API の両方で共有し、URL にはキーワードと一覧の表示状態を残す
 const searchCondition = ref<IProgramSearchCondition>(createDefaultSearchCondition());
 
 // API 結果は全件保持し、一覧コンポーネント側で30件ずつ表示する
 const programs = ref<IProgram[]>([]);
 const totalPrograms = ref(0);
 const currentPage = ref(1);
+const sortOrder = computed<ProgramSortOrder>(() => route.query.order === 'toru' ? 'toru' : 'asc');
 const isLoading = ref(false);
 const isSearching = ref(false);
 const hasSearched = ref(false);
 const isFilterDrawerOpen = ref(false);
 const defaultRecordSettings = ref<IRecordSettings | null>(null);
 const reservationMap = ref<Map<string, IReservation>>(new Map());
+// 録画予約の一覧を1回でも取得できたかどうか
+const isReservationsLoaded = ref(false);
+
+// 録画予約のない番組に、録画予約を追加できる状態かどうか
+// 既存の録画予約と録画設定の既定値を取得できるまでは、予約済みの番組への重複した予約や、
+// EDCB の既定値とは異なる設定での予約を防ぐため、追加できない状態にする
+const addAvailability = computed<ReservationAddAvailability>(() => {
+    if (serverSettingsStore.is_loaded === false) {
+        return 'Preparing';
+    }
+    if (isEDCBBackend.value === false) {
+        return 'EDCBOnly';
+    }
+    return isReservationsLoaded.value === true && defaultRecordSettings.value !== null ? 'Available' : 'Preparing';
+});
 const searchedKeyword = ref('');
 const viewportRevision = ref(0);
 
@@ -135,13 +155,9 @@ const channelMap = computed(() => {
     return new Map(allChannels.value.map((channel) => [channel.id, channel]));
 });
 
-const sortedPrograms = computed(() => {
-    // 検索結果画面では、サーバーからの返却順に依存せず、常に放送時刻が近い順に並び替える
-    // サーバーからの返却結果も基本的には時刻順になっているはずだが、念のため
-    return [...programs.value].sort((firstProgram, secondProgram) => {
-        return dayjs(firstProgram.start_time).valueOf() - dayjs(secondProgram.start_time).valueOf();
-    });
-});
+const sortedPrograms = computed(() => toruCountStore.sortPrograms(
+    programs.value, (program) => program, sortOrder.value,
+));
 
 const displayReservations = computed<IReservation[]>(() => {
     const startIndex = (currentPage.value - 1) * 30;
@@ -152,6 +168,7 @@ const displayReservations = computed<IReservation[]>(() => {
 });
 
 const resultTitle = computed(() => {
+    viewportRevision.value;
     if (Utils.isSmartphoneVertical() === true) {
         return '検索結果';
     }
@@ -219,6 +236,7 @@ const executeSearch = async (searchKeyword?: string) => {
             query: {
                 query: searchCondition.value.keyword,
                 page: '1',
+                order: sortOrder.value === 'toru' ? 'toru' : undefined,
             },
         });
     } finally {
@@ -242,6 +260,16 @@ const updatePage = async (page: number) => {
         query: {
             ...route.query,
             page: page.toString(),
+        },
+    });
+};
+
+const updateSortOrder = async (order: ProgramSortOrder) => {
+    await router.replace({
+        query: {
+            ...route.query,
+            order,
+            page: '1',
         },
     });
 };
@@ -277,54 +305,17 @@ const handleViewportResize = () => {
     viewportRevision.value += 1;
 };
 
-const createFallbackChannel = (program: IProgram): IChannel => {
-    return {
-        id: program.channel_id,
-        display_channel_id: program.channel_id,
-        network_id: program.network_id,
-        service_id: program.service_id,
-        transport_stream_id: null,
-        remocon_id: 0,
-        channel_number: '---',
-        type: 'GR',
-        name: program.channel_id,
-        terrestrial_regions: null,
-        jikkyo_force: null,
-        is_subchannel: false,
-        is_radiochannel: false,
-        is_watchable: true,
-        source: 'Broadcast',
-        capabilities: {
-            live_stream: true,
-            live_stream_session: false,
-            data_broadcasting: true,
-            recording: true,
-            remote_playback: true,
-        },
-    };
-};
-
 const createMockReservation = (program: IProgram): IReservation => {
     const reservation = reservationMap.value.get(program.id);
     if (reservation !== undefined) {
         return reservation;
     }
 
-    const recordSettings = defaultRecordSettings.value !== null
-        ? structuredClone(toRaw(defaultRecordSettings.value))
-        : null;
-
-    return {
-        id: -1,
-        channel: channelMap.value.get(program.channel_id) ?? createFallbackChannel(program),
+    return ReservationUtils.createUnreservedReservation(
         program,
-        is_recording_in_progress: false,
-        recording_availability: 'Full',
-        comment: '',
-        scheduled_recording_file_name: '',
-        estimated_recording_file_size: 0,
-        record_settings: recordSettings ?? structuredClone(toRaw(IRecordSettingsDefault)),
-    };
+        channelMap.value.get(program.channel_id) ?? null,
+        defaultRecordSettings.value,
+    );
 };
 
 const updateReservedProgramIds = async () => {
@@ -332,6 +323,7 @@ const updateReservedProgramIds = async () => {
     const reservations = await Reservations.fetchReservations();
     if (reservations !== null) {
         reservationMap.value = new Map(reservations.reservations.map((reservation) => [reservation.program.id, reservation]));
+        isReservationsLoaded.value = true;
     }
 };
 

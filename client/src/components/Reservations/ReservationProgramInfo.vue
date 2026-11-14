@@ -56,6 +56,8 @@
                     <Icon icon="fluent:headphones-sound-wave-20-filled" height="17px" style="margin-left: -2px; margin-right: -1.7px; margin-bottom: -3px;" />
                     <span class="ml-2">副音声: {{displayProgram.secondary_audio_type}} {{displayProgram.secondary_audio_sampling_rate || 'Unknown'}} / {{displayProgram.secondary_audio_language}}</span>
                 </div>
+                <!-- 予約数 (トル数を取得できている番組のみ表示する) -->
+                <ToruCount :program="displayProgram" variant="reservation" class="program-info__toru-count" />
             </div>
         </section>
         <section class="program-detail-container">
@@ -71,6 +73,7 @@
 
 import { defineComponent, PropType } from 'vue';
 
+import ToruCount from '@/components/Programs/ToruCount.vue';
 import { type IChannel } from '@/services/Channels';
 import { type IGGuideCollectionAsset, type IProgram } from '@/services/Programs';
 import { type IReservation } from '@/services/Reservations';
@@ -78,6 +81,7 @@ import Utils, { ProgramUtils } from '@/utils';
 
 export default defineComponent({
     name: 'ReservationProgramInfo',
+    components: { ToruCount },
     props: {
         gguideImage: {
             type: Object as PropType<IGGuideCollectionAsset | null>,
@@ -242,6 +246,26 @@ export default defineComponent({
             line-height: 170%;
             @include smartphone-horizontal {
                 font-size: 11.5px;
+            }
+        }
+
+        // 予約数 (映像・音声情報とは性質の異なる情報のため、間隔を空けて、少し大きい文字で表示する)
+        .program-info__toru-count {
+            display: flex;
+            margin-top: 12px;
+            font-size: 13.5px;
+            @include smartphone-horizontal {
+                font-size: 12.5px;
+            }
+
+            // アイコンの大きさ・左端・数値の開始位置を、上に並ぶ映像・音声情報のアイコンと文字に揃える
+            // 映像・音声情報のアイコンは 17px で左右に -2px・-1.7px の余白、文字との間隔は 8px (ml-2) のため、
+            // 右の余白は、ToruCount の gap (3px) を差し引いた値にする
+            :deep(.toru-count__icon) {
+                width: 17px;
+                height: 17px;
+                margin-left: -2px;
+                margin-right: 3.3px;
             }
         }
     }

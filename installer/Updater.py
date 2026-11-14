@@ -20,8 +20,10 @@ from Utils import (
     CreateDownloadInfiniteProgress,
     CreateDownloadProgress,
     CreateTable,
-    CustomPrompt,
+    EmitJSONProgress,
+    GetLogFileSizes,
     GetNetworkInterfaceInformation,
+    InstallerAnswers,
     IsDockerComposeV2,
     IsDockerInstalled,
     IsGitInstalled,
@@ -33,6 +35,7 @@ from Utils import (
     RunSubprocessDirectLogOutput,
     SaveConfig,
     ShowPanel,
+    ShowStep,
     ShowSubProcessErrorLog,
 )
 
@@ -42,12 +45,17 @@ from Utils import (
 UV_VERSION = '0.12.18'
 
 
-def Updater(version: str) -> None:
+def Updater(version: str, answers: InstallerAnswers) -> bool:
     """
     KonomiTV のアップデーターの実装
+    Windows サービスの実行アカウントは変更せず、インストール時 (または前回の変更時) の設定のまま起動する
 
     Args:
         version (str): KonomiTV をアップデートするバージョン
+        answers (InstallerAnswers): 質問への回答
+
+    Returns:
+        bool: アップデートに成功したかどうか
     """
 
     ShowPanel([
@@ -83,14 +91,14 @@ def Updater(version: str) -> None:
     while True:
 
         # 入力プロンプト (バリデーションに失敗し続ける限り何度でも表示される)
-        update_path = Path(CustomPrompt.ask('アップデート対象の KonomiTV のフォルダのパス'))
+        update_path = Path(answers.ask('update_path', 'アップデート対象の KonomiTV のフォルダのパス'))
 
         # バリデーション
         if update_path.is_absolute() is False:
-            print(Padding('[red]アップデート対象の KonomiTV のフォルダは絶対パスで入力してください。', (0, 2, 0, 2)))
+            answers.showInvalidInput('アップデート対象の KonomiTV のフォルダは絶対パスで入力してください。')
             continue
         if update_path.exists() is False:
-            print(Padding('[red]アップデート対象の KonomiTV のフォルダが存在しません。', (0, 2, 0, 2)))
+            answers.showInvalidInput('アップデート対象の KonomiTV のフォルダが存在しません。')
             continue
 
         # 指定されたフォルダが KonomiTV のフォルダ/ファイル配置と異なる
@@ -108,7 +116,7 @@ def Updater(version: str) -> None:
             (update_path / 'server/static/').exists() and
             (update_path / 'server/thirdparty/').exists()
         ):
-            print(Padding('[red]指定されたフォルダは KonomiTV のフォルダ/ファイル配置と異なります。', (0, 2, 0, 2)))
+            answers.showInvalidInput('指定されたフォルダは KonomiTV のフォルダ/ファイル配置と異なります。')
             continue
 
         # すべてのバリデーションを通過したのでループを抜ける
@@ -126,7 +134,7 @@ def Updater(version: str) -> None:
                 'この KonomiTV は Docker を使ってインストールされていますが、現在 Docker が',
                 'インストールされていないため、アップデートすることができません。',
             ])
-            return  # 処理中断
+            return False  # 処理中断
 
         # プラットフォームタイプを Linux-Docker にセット
         platform_type = 'Linux-Docker'
@@ -161,7 +169,7 @@ def Updater(version: str) -> None:
     if platform_type == 'Windows':
 
         # Windows サービスを終了
-        print(Padding('起動中の Windows サービスを終了しています…', (1, 2, 0, 2)))
+        ShowStep('起動中の Windows サービスを終了しています…')
         progress = CreateBasicInfiniteProgress()
         progress.add_task('', total=None)
         with progress:
@@ -178,7 +186,7 @@ def Updater(version: str) -> None:
                 error_message = '起動中の Windows サービスの終了中に予期しないエラーが発生しました。',
                 error_log = service_stop_result.stdout.strip(),
             )
-            return  # 処理中断
+            return False  # 処理中断
 
         # サービスの停止要求はサーバー本体やエンコーダーの終了を待たずに完了するため、
         # KonomiTV のフォルダ内のファイルを使うプロセスがすべて終了するまで待つ (残っていれば強制終了する)
@@ -197,7 +205,7 @@ def Updater(version: str) -> None:
             error_log_name = 'PM2 のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** Linux-Docker: 起動中の Docker コンテナの終了 *****
 
@@ -212,7 +220,7 @@ def Updater(version: str) -> None:
             error_log_name = 'PM2 のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** ソースコードの更新 *****
 
@@ -232,7 +240,7 @@ def Updater(version: str) -> None:
                 'この KonomiTV は Git を使ってインストールされていますが、現在 Git が',
                 'インストールされていないため、アップデートすることができません。',
             ])
-            return  # 処理中断
+            return False  # 処理中断
 
         # リモートの変更内容とタグを取得
         result = RunSubprocess(
@@ -243,7 +251,7 @@ def Updater(version: str) -> None:
             error_log_name = 'Git のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
         # 新しいバージョンのコードをチェックアウト
         ## latest の場合は master ブランチを、それ以外は指定されたバージョンのタグをチェックアウト
@@ -263,7 +271,7 @@ def Updater(version: str) -> None:
             error_log_name = 'Git のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # Git を使ってインストールされていない場合: zip からソースコードを更新
     else:
@@ -299,7 +307,7 @@ def Updater(version: str) -> None:
 
         # ソースコードを随時ダウンロードし、進捗を表示
         # ref: https://github.com/Textualize/rich/blob/master/examples/downloader.py
-        print(Padding('KonomiTV のソースコードを更新しています…', (1, 2, 0, 2)))
+        ShowStep('KonomiTV のソースコードを更新しています…')
         progress = CreateDownloadInfiniteProgress()
 
         # GitHub からソースコードをダウンロード
@@ -335,7 +343,7 @@ def Updater(version: str) -> None:
     # サーバーのリッスンポート
     server_port: int = 7000
 
-    print(Padding('サーバー設定ファイル (config.yaml) を更新しています…', (1, 2, 0, 2)))
+    ShowStep('サーバー設定ファイル (config.yaml) を更新しています…')
     progress = CreateBasicInfiniteProgress()
     progress.add_task('', total=None)
     with progress:
@@ -367,7 +375,7 @@ def Updater(version: str) -> None:
 
         # サードパーティーライブラリを随時ダウンロードし、進捗を表示
         # ref: https://github.com/Textualize/rich/blob/master/examples/downloader.py
-        print(Padding('サードパーティーライブラリをダウンロードしています…', (1, 2, 0, 2)))
+        ShowStep('サードパーティーライブラリをダウンロードしています…')
         progress = CreateDownloadProgress()
 
         # GitHub からサードパーティーライブラリをダウンロード
@@ -395,7 +403,7 @@ def Updater(version: str) -> None:
         thirdparty_compressed_file.close()  # 解凍する前に close() してすべて書き込ませておくのが重要
 
         # サードパーティーライブラリを解凍して展開
-        print(Padding('サードパーティーライブラリを更新しています… (数秒～数十秒かかります)', (1, 2, 0, 2)))
+        ShowStep('サードパーティーライブラリを更新しています… (数秒～数十秒かかります)')
         progress = CreateBasicInfiniteProgress()
         progress.add_task('', total=None)
         with progress:
@@ -439,7 +447,7 @@ def Updater(version: str) -> None:
             error_message = 'uv のセットアップ中に予期しないエラーが発生しました。',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
         # uv sync を実行
         ## サードパーティーライブラリ内の Python を明示的に指定して、server/.venv/ に仮想環境を作成し、依存パッケージをインストールする
@@ -454,7 +462,7 @@ def Updater(version: str) -> None:
             error_message = '依存パッケージの更新中に予期しないエラーが発生しました。',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # Linux-Docker: Docker イメージを再ビルド
     elif platform_type == 'Linux-Docker':
@@ -492,14 +500,17 @@ def Updater(version: str) -> None:
             error_message = 'Docker イメージの再ビルド中に予期しないエラーが発生しました。',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
+
+    # サービスの起動を待つ処理で今回の起動のログだけを読むため、サービスを起動する前のログファイルのサイズを取得しておく
+    initial_log_sizes = GetLogFileSizes(update_path)
 
     # ***** Windows: Windows サービスの起動 *****
 
     if platform_type == 'Windows':
 
         # Windows サービスを起動
-        print(Padding('Windows サービスを起動しています…', (1, 2, 0, 2)))
+        ShowStep('Windows サービスを起動しています…')
         progress = CreateBasicInfiniteProgress()
         progress.add_task('', total=None)
         with progress:
@@ -515,7 +526,7 @@ def Updater(version: str) -> None:
                 error_message = 'Windows サービスの起動中に予期しないエラーが発生しました。',
                 error_log = service_start_result.stdout.strip(),
             )
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** Linux: PM2 サービスの起動 *****
 
@@ -530,7 +541,7 @@ def Updater(version: str) -> None:
             error_log_name = 'PM2 のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** Linux-Docker: Docker コンテナの起動 *****
 
@@ -545,12 +556,13 @@ def Updater(version: str) -> None:
             error_log_name = 'Docker Compose のエラーログ',
         )
         if result is False:
-            return  # 処理中断
+            return False  # 処理中断
 
     # ***** サービスの起動を待機 *****
 
     # KonomiTV サービスの起動を監視して起動完了を待機する処理はインストーラーと共通
-    RunKonomiTVServiceWaiter(platform_type, update_path)
+    if RunKonomiTVServiceWaiter(platform_type, update_path, initial_log_sizes) is False:
+        return False  # 処理中断
 
     # ***** アップデート完了 *****
 
@@ -574,3 +586,6 @@ def Updater(version: str) -> None:
         table_done.add_row(f'[bright_blue]{url: <{urls_max_length}}[/bright_blue] ({nic_infos[index][1]})')
 
     print(Padding(table_done, (1, 2, 0, 2)))
+    EmitJSONProgress('access_urls', urls=[f'https://my.local.konomi.tv:{server_port}/', *urls])
+
+    return True

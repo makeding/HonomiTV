@@ -58,6 +58,7 @@ from app.utils.EventLoopBlockDetector import (
 from app.utils.FastAPITaskUtil import repeat_every
 from app.utils.HardwareDevice import InitializeVAAPIHardwareDevices
 from app.utils.JellyfinClient import JellyfinClient
+from app.utils.TorneClient import TorneClient
 
 
 # もし Config() の実行時に AssertionError が発生した場合は、LoadConfig() を実行してサーバー設定データをロードする
@@ -329,6 +330,13 @@ async def RenewBangumiTokens():
 @app.on_event('startup')
 async def StartEventLoopBlockDetection():
     StartEventLoopBlockDetector()
+
+# 3時間に1回、トル数 (torne の利用者がその番組を録画予約している数) を更新する
+# トル数は実況勢いほどリアルタイム更新が求められず傾向さえ掴めれば十分であることから、更新間隔を長く取っている
+@app.on_event('startup')
+@repeat_every(seconds=3 * 60 * 60, logger=logging.logger)
+async def UpdateToruCounts():
+    await TorneClient.updateToruCounts()
 
 # サーバーの終了時に実行する
 cleanup = False
