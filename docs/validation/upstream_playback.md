@@ -1,5 +1,11 @@
 # Selective upstream integration
 
+## Full upstream merge (2026-11-18)
+
+- Merge `upstream/master` at `af98b172` into `h-dev`. Adopt the Torne CS ranking baseline and SQL filtering performance changes, reservation-list loading geometry, NX-Jikkyo reconnect-notice handling, and Ruff's explicit UTF-8 `open()` checks.
+- Preserve HonomiTV playback, BS4K, Hybridcast, remote-device and device-local-time behavior. Keep the tracked `client/dist` tree byte-for-byte from pre-merge `56c2ce4f`; the release workflow owns artifact regeneration. No migration, frontend build, user database write, service restart, deployment or push is included.
+- Client ESLint/TypeScript and server Ruff/Pyright are the focused source checks. Browser/live playback, real broadcast, full-suite, Docker/Windows builds and deployment are separate acceptance gates.
+
 ## Full upstream merge (2026-11-14)
 
 - Merge `upstream/master` at `687b904b` into `h-dev`. Adopt torne reservation counts and ranking, reservation pagination and readiness fixes, live-stream startup timeout handling, accessible-folder diagnostics, and the non-interactive Windows installer/service-account flow.
