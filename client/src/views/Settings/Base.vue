@@ -38,7 +38,7 @@
                         <span class="ml-4">ニコニコ実況</span>
                     </v-btn>
                     <v-btn variant="flat" class="settings-navigation__button" to="/settings/bangumi">
-                        <img src="/assets/images/bangumi.svg" alt="" width="26" height="26">
+                        <img src="/assets/images/bangumi.svg" alt="" width="26" height="26" style="filter: brightness(0) invert(1);">
                         <span class="ml-4">Bangumi 連携</span>
                     </v-btn>
                     <v-btn variant="flat" class="settings-navigation__button" to="/settings/twitter">

@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     guard: null as any,
-    settings: {selected_remote_device_id: 'tv' as string | null},
+    settings: {selected_remote_device_id: 'tv' as string | null,
+        watched_history: [] as {video_id: number; last_playback_position: number}[]},
     channels: {} as Record<string, any[]>,
     fetch: vi.fn(), send: vi.fn(), success: vi.fn(), warning: vi.fn(),
 }));
@@ -25,6 +26,7 @@ describe('remote playback navigation', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.settings.selected_remote_device_id = 'tv';
+        mocks.settings.watched_history = [];
         mocks.channels = {IPTV: [channel]};
         mocks.fetch.mockResolvedValue(channel);
         mocks.send.mockResolvedValue(true);
@@ -37,6 +39,20 @@ describe('remote playback navigation', () => {
         expect(next.mock.calls).toEqual([[false]]);
         expect(mocks.success).toHaveBeenCalledWith('テレビへ再生を送信しました。');
         expect(mocks.fetch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        [{}, 123.5],
+        [{t: '45'}, 45],
+        [{t: '0'}, 0],
+    ])('sends the saved recording position unless explicitly overridden: %j', async (query, position) => {
+        mocks.settings.watched_history = [{video_id: 42, last_playback_position: 123.5}];
+        const next = vi.fn();
+        await mocks.guard({name: 'Videos Watch', params: {video_id: '42'}, query}, {path: '/videos/'}, next);
+        expect(mocks.send).toHaveBeenCalledWith('tv', {
+            type: 'OpenRecording', recorded_program_id: 42, position_seconds: position,
+        });
+        expect(next.mock.calls).toEqual([[false]]);
     });
 
     it('fetches an uncached channel before forwarding', async () => {

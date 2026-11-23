@@ -315,7 +315,8 @@ router.beforeResolve(async (to, from, next) => {
             const positionSeconds = requestedSeekSeconds !== null && Number.isFinite(requestedSeekSeconds) &&
                 requestedSeekSeconds >= 0
                 ? requestedSeekSeconds
-                : 0;
+                : useSettingsStore().settings.watched_history.find(history => history.video_id === recordedProgramId)
+                    ?.last_playback_position ?? 0;
             remoteCommand = {
                 type: 'OpenRecording',
                 recorded_program_id: recordedProgramId,
