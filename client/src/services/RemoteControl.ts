@@ -10,6 +10,7 @@ export interface IRemoteDevice {
 }
 
 export type RemoteCommand =
+    | {type: 'SelectSource'; source_id: string;}
     | {type: 'OpenLive'; display_channel_id: string;}
     | {type: 'OpenRecording'; recorded_program_id: number; position_seconds: number;}
     | {type: 'Play' | 'Pause' | 'Stop';}
@@ -36,6 +37,10 @@ export interface IRemoteChapter {
  * サーバーは state を不透明な dict として中継するだけなので、この型がクライアント間の唯一の契約になる。
  */
 export interface IRemotePlaybackState {
+    capabilities?: {commands: string[];};
+    input_sources?: IRemoteInputSource[];
+    source_command_result?: {command_id: string; status: 'Applied' | 'Failed'; error_code?: string;};
+    input_signal?: {source_id: string; status: string; reason?: string;};
     content_type: 'Idle' | 'Live' | 'Recorded';
     title?: string;
     subtitle?: string;
@@ -65,18 +70,34 @@ export interface IRemotePlaybackState {
     } | null;
 }
 
+export interface IRemoteInputSource {
+    id: string;
+    label: string;
+    type: string;
+    connection_state: string;
+    selectable: boolean;
+    selected: boolean;
+    channels: {id: string; label: string;}[];
+}
+
 export type RemoteTemporaryNHKHideSubmission =
     | {type: 'Accepted'; command_id: string;}
     | {type: 'Offline';}
     | {type: 'Failed';};
 
 class RemoteControl {
+    static async selectSource(deviceId: string, sourceId: string): Promise<string | null> {
+        const response = await APIClient.post<{command_id: string;}>(
+            `/remote/devices/${encodeURIComponent(deviceId)}/commands`,
+            {type: 'SelectSource', source_id: sourceId},
+        );
+        return response.type === 'success' ? response.data.command_id : null;
+    }
     static subscribeDevices(
         onDevices: (devices: IRemoteDevice[]) => void,
         onDisconnected: () => void,
     ): () => void {
         const accessToken = Utils.getAccessToken();
-        if (accessToken === null) return () => {};
 
         const websocketURL = new URL(`${Utils.api_base_url}/remote/devices/ws`);
         websocketURL.protocol = websocketURL.protocol === 'https:' ? 'wss:' : 'ws:';

@@ -1,4 +1,6 @@
 import asyncio
+import ipaddress
+import socket
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -10,10 +12,12 @@ from fastapi import (
     HTTPException,
     Path,
     Query,
+    Request,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
+import psutil
 
 from app import logging, schemas
 from app.constants import JST
@@ -45,7 +49,7 @@ class RemoteDeviceConnection:
 # オンライン状態は WebSocket の生存期間だけに対応するため、DB へ保存せずプロセス内で管理する。
 REMOTE_DEVICE_CONNECTIONS: dict[tuple[int, str], RemoteDeviceConnection] = {}
 # ブラウザ側はユーザーごとの部屋へ参加し、同じユーザーの Komorebi の状態変化だけを受信する。
-REMOTE_DEVICE_SUBSCRIBERS: dict[int, set[WebSocket]] = {}
+REMOTE_DEVICE_SUBSCRIBERS: dict[tuple[int | None, bool], set[WebSocket]] = {}
 REMOTE_DEVICE_CONNECTIONS_LOCK = asyncio.Lock()
 REMOTE_WEBSOCKET_SEND_TIMEOUT_SECONDS = 3.0
 
@@ -69,7 +73,40 @@ def GetBearerToken(authorization: str | None) -> str | None:
     return token.strip()
 
 
-def BuildRemoteDeviceList(user_id: int) -> schemas.RemoteDeviceList:
+def IsLocalVisitor(host: str) -> bool:
+    address = ipaddress.ip_address(host)
+    if address.is_loopback:
+        return True
+    for interfaces in psutil.net_if_addrs().values():
+        for interface in interfaces:
+            if interface.family not in (socket.AF_INET, socket.AF_INET6) or interface.netmask is None:
+                continue
+            local = interface.address.split('%')[0]
+            mask = interface.netmask.split('%')[0]
+            prefix = ipaddress.ip_address(mask).packed.hex()
+            prefix_length = sum(byte.bit_count() for byte in bytes.fromhex(prefix))
+            network = ipaddress.ip_network(f'{local}/{prefix_length}', strict=False)
+            if address.version == network.version and address in network:
+                return True
+    return False
+
+
+def VisitorHost(headers: Any, client: Any) -> str:
+    forwarded = headers.get('x-forwarded-for')
+    return forwarded.split(',')[-1].strip() if forwarded else client.host
+
+
+async def RemoteVisitor(request: Request) -> tuple[int | None, bool]:
+    token = GetBearerToken(request.headers.get('Authorization'))
+    local = IsLocalVisitor(VisitorHost(request.headers, request.client))
+    if token is not None:
+        return (await GetCurrentUser(token)).id, local
+    if local:
+        return None, True
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Authentication required')
+
+
+def BuildRemoteDeviceList(user_id: int | None, local: bool = False) -> schemas.RemoteDeviceList:
     """
     指定したユーザーが操作できるオンライン Komorebi の一覧を構築する。
 
@@ -88,7 +125,9 @@ def BuildRemoteDeviceList(user_id: int) -> schemas.RemoteDeviceList:
             state=connection.state,
         )
         for connection in REMOTE_DEVICE_CONNECTIONS.values()
-        if connection.user_id == user_id
+        if (connection.state or {}).get('access_mode', 'ACCOUNT') != 'OFF'
+        and ((user_id is not None and connection.user_id == user_id) or
+             (local and (connection.state or {}).get('access_mode') == 'LAN'))
     ]
     return schemas.RemoteDeviceList(devices=sorted(devices, key=lambda device: device.device_name))
 
@@ -106,11 +145,12 @@ async def BroadcastRemoteDeviceList(user_id: int) -> None:
 
     # WebSocket 送信中に接続一覧の更新を止めないよう、ロック内ではスナップショットだけを作る。
     async with REMOTE_DEVICE_CONNECTIONS_LOCK:
-        subscribers = list(REMOTE_DEVICE_SUBSCRIBERS.get(user_id, set()))
-        device_list = BuildRemoteDeviceList(user_id)
+        rooms = [(key, list(subscribers), BuildRemoteDeviceList(*key)) for key, subscribers in REMOTE_DEVICE_SUBSCRIBERS.items()
+                 if key[0] == user_id or key[1]]
 
     disconnected_subscribers: list[WebSocket] = []
-    for subscriber in subscribers:
+    deliveries = [(subscriber, device_list) for _, subscribers, device_list in rooms for subscriber in subscribers]
+    for subscriber, device_list in deliveries:
         try:
             await asyncio.wait_for(
                 subscriber.send_json(device_list.model_dump(mode='json')),
@@ -123,11 +163,12 @@ async def BroadcastRemoteDeviceList(user_id: int) -> None:
     # 配信中に切断を検出した購読者だけをユーザーの部屋から取り除く。
     if len(disconnected_subscribers) > 0:
         async with REMOTE_DEVICE_CONNECTIONS_LOCK:
-            current_subscribers = REMOTE_DEVICE_SUBSCRIBERS.get(user_id)
-            if current_subscribers is not None:
-                current_subscribers.difference_update(disconnected_subscribers)
-                if len(current_subscribers) == 0:
-                    del REMOTE_DEVICE_SUBSCRIBERS[user_id]
+            for key, _, _ in rooms:
+                current_subscribers = REMOTE_DEVICE_SUBSCRIBERS.get(key)
+                if current_subscribers is not None:
+                    current_subscribers.difference_update(disconnected_subscribers)
+                    if len(current_subscribers) == 0:
+                        del REMOTE_DEVICE_SUBSCRIBERS[key]
 
 
 async def RequestRemoteDeviceStates(user_id: int) -> None:
@@ -272,39 +313,47 @@ async def RemoteDeviceSubscriberAPI(websocket: WebSocket):
         return
 
     token: object = authentication_message.get('token') if authentication_message.get('type') == 'Authenticate' else None
-    if not isinstance(token, str):
+    user_id: int | None = None
+    local = IsLocalVisitor(VisitorHost(websocket.headers, websocket.client))
+    if isinstance(token, str):
+        try:
+            current_user = await GetCurrentUser(token)
+        except HTTPException:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason='Invalid authorization')
+            return
+        user_id = current_user.id
+    elif not local:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason='Authentication required')
-        return
-    try:
-        current_user = await GetCurrentUser(token)
-    except HTTPException:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason='Invalid authorization')
         return
 
     # 認証できた接続だけを同じユーザーの部屋へ追加する。
     async with REMOTE_DEVICE_CONNECTIONS_LOCK:
-        REMOTE_DEVICE_SUBSCRIBERS.setdefault(current_user.id, set()).add(websocket)
+        REMOTE_DEVICE_SUBSCRIBERS.setdefault((user_id, local), set()).add(websocket)
 
     try:
         # 初期配信中に切断・タイムアウトしても finally で部屋から必ず取り除ける状態にしてから送信を始める。
-        await BroadcastRemoteDeviceList(current_user.id)
+        if user_id is None:
+            await websocket.send_json(BuildRemoteDeviceList(None, local).model_dump(mode='json'))
+        else:
+            await BroadcastRemoteDeviceList(user_id)
         # 続けてオンラインの各テレビへ再送を要求し、ブラウザ参加直前の状態変化や古いスナップショットを解消する。
-        await RequestRemoteDeviceStates(current_user.id)
+        if user_id is not None:
+            await RequestRemoteDeviceStates(user_id)
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
         async with REMOTE_DEVICE_CONNECTIONS_LOCK:
-            subscribers = REMOTE_DEVICE_SUBSCRIBERS.get(current_user.id)
+            subscribers = REMOTE_DEVICE_SUBSCRIBERS.get((user_id, local))
             if subscribers is not None:
                 subscribers.discard(websocket)
                 if len(subscribers) == 0:
-                    del REMOTE_DEVICE_SUBSCRIBERS[current_user.id]
+                    del REMOTE_DEVICE_SUBSCRIBERS[(user_id, local)]
 
 
 @router.get('/devices', response_model=schemas.RemoteDeviceList)
-async def RemoteDeviceListAPI(current_user: Annotated[User, Depends(GetCurrentUser)]):
+async def RemoteDeviceListAPI(request: Request):
     """
     現在ログイン中のユーザーが操作できるオンライン Komorebi の一覧を取得する。
 
@@ -315,14 +364,15 @@ async def RemoteDeviceListAPI(current_user: Annotated[User, Depends(GetCurrentUs
         schemas.RemoteDeviceList: 現在の Server プロセスへ接続中のテレビ一覧。
     """
 
+    user_id, local = await RemoteVisitor(request)
     async with REMOTE_DEVICE_CONNECTIONS_LOCK:
-        return BuildRemoteDeviceList(current_user.id)
+        return BuildRemoteDeviceList(user_id, local)
 
 
 @router.post('/devices/{device_id}/commands', response_model=schemas.RemoteCommandAccepted)
 async def RemoteCommandAPI(
     command: schemas.RemoteCommand,
-    current_user: Annotated[User, Depends(GetCurrentUser)],
+    request: Request,
     device_id: Annotated[str, Path(min_length=1, max_length=128)],
 ):
     """
@@ -337,8 +387,11 @@ async def RemoteCommandAPI(
         schemas.RemoteCommandAccepted: 転送したコマンドの一意 ID。
     """
 
+    user_id, local = await RemoteVisitor(request)
     async with REMOTE_DEVICE_CONNECTIONS_LOCK:
-        connection = REMOTE_DEVICE_CONNECTIONS.get((current_user.id, device_id))
+        connection = next((item for item in REMOTE_DEVICE_CONNECTIONS.values() if item.device_id == device_id and
+            ((item.user_id == user_id and (item.state or {}).get('access_mode', 'ACCOUNT') != 'OFF') or
+             (local and (item.state or {}).get('access_mode') == 'LAN'))), None)
     if connection is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Remote device is offline')
 
@@ -355,9 +408,9 @@ async def RemoteCommandAPI(
     except (TimeoutError, RuntimeError, WebSocketDisconnect) as ex:
         # 応答不能な受信機はオンライン扱いを継続せず、同じ接続だけを一覧から取り除く。
         async with REMOTE_DEVICE_CONNECTIONS_LOCK:
-            if REMOTE_DEVICE_CONNECTIONS.get((current_user.id, device_id)) is connection:
-                del REMOTE_DEVICE_CONNECTIONS[(current_user.id, device_id)]
-        await BroadcastRemoteDeviceList(current_user.id)
+            if REMOTE_DEVICE_CONNECTIONS.get((connection.user_id, device_id)) is connection:
+                del REMOTE_DEVICE_CONNECTIONS[(connection.user_id, device_id)]
+        await BroadcastRemoteDeviceList(connection.user_id)
         logging.warning(f'[RemoteControlRouter] Failed to send remote command. [device_id: {device_id}]', exc_info=ex)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Remote device is offline') from ex
     return schemas.RemoteCommandAccepted(command_id=command_id)

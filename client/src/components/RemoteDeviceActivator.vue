@@ -1,5 +1,5 @@
 <template>
-    <v-btn v-if="isLoggedIn" ref="activatorButton" icon variant="text"
+    <v-btn ref="activatorButton" icon variant="text"
         :color="selectedDeviceId === null ? undefined : 'primary'" aria-label="テレビを選択"
         @click="openMenu">
         <Icon icon="material-symbols:cast-rounded" height="26px" />
@@ -17,11 +17,9 @@ import {
     unregisterRemoteDeviceActivator,
 } from '@/services/RemoteControlUI';
 import useSettingsStore from '@/stores/SettingsStore';
-import Utils from '@/utils';
 
 const settingsStore = useSettingsStore();
 const activatorButton = ref<{ $el: HTMLElement } | null>(null);
-const isLoggedIn = computed(() => Utils.getAccessToken() !== null);
 const selectedDeviceId = computed(() => settingsStore.settings.selected_remote_device_id);
 
 function registerIfVisible(): void {

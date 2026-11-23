@@ -570,6 +570,10 @@ class RemoteCommandOpenLive(BaseModel):
     type: Literal['OpenLive']
     display_channel_id: Annotated[str, Field(min_length=1)]
 
+class RemoteCommandSelectSource(BaseModel):
+    type: Literal['SelectSource']
+    source_id: Annotated[str, Field(min_length=1)]
+
 class RemoteCommandOpenRecording(BaseModel):
     type: Literal['OpenRecording']
     recorded_program_id: int
@@ -615,7 +619,7 @@ class RemoteCommandEnableTemporaryNHKHide(BaseModel):
 RemoteCommand = Annotated[
     RemoteCommandOpenLive | RemoteCommandOpenRecording | RemoteCommandPlayback | RemoteCommandSeekRelative |
     RemoteCommandSeekTo | RemoteCommandSkipChapter | RemoteCommandSkipCM | RemoteCommandSetCMSkipMode | RemoteCommandVolume |
-    RemoteCommandEnableTemporaryNHKHide,
+    RemoteCommandEnableTemporaryNHKHide | RemoteCommandSelectSource,
     Field(discriminator='type'),
 ]
 

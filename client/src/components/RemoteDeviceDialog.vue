@@ -1,5 +1,5 @@
 <template>
-    <v-menu v-if="isLoggedIn" v-model="isOpen"
+    <v-menu v-model="isOpen"
         :target="remoteDeviceActivatorElement ?? undefined" location="bottom end" :close-on-content-click="false"
         :persistent="isPinned" no-click-animation
         :offset="8" transition="fade-transition">
@@ -52,6 +52,20 @@
             </v-list-item>
 
             <template v-if="selectedDevice !== null">
+                <template v-if="selectedPlaybackState.capabilities?.commands.includes('SelectSource')">
+                    <v-divider class="my-2" />
+                    <v-list-subheader>入力切替</v-list-subheader>
+                    <template v-for="source in selectedPlaybackState.input_sources" :key="source.id">
+                        <v-list-item :title="source.label" :subtitle="inputConnectionLabel(source.connection_state)"
+                            :active="source.selected" :disabled="!source.selectable || sourcePending"
+                            @click="selectSource(source.id)" />
+                        <v-list-item v-if="selectedPlaybackState.input_signal?.source_id === source.id"
+                            :subtitle="`${selectedPlaybackState.input_signal.status} ${selectedPlaybackState.input_signal.reason ?? ''}`" />
+                        <v-list-item v-for="channel in source.channels" :key="channel.id" class="pl-8"
+                            :title="channel.label" :disabled="sourcePending" @click="selectSource(channel.id)" />
+                    </template>
+                    <v-list-item v-if="sourceFeedback" :subtitle="sourceFeedback" />
+                </template>
                 <v-divider class="my-2" />
                 <div class="remote-device-menu__now-playing">
                     <button class="remote-device-menu__artwork" type="button" aria-label="N〇K除外モードを操作"
@@ -197,7 +211,6 @@ import {
     type TemporaryNHKHideFeedback,
 } from '@/services/RemoteNHKExclusion';
 import useSettingsStore from '@/stores/SettingsStore';
-import Utils from '@/utils';
 
 // 再生位置を補間するための更新間隔。テレビ側の State 送信は 5 秒周期なので、
 // この間隔で基点からの経過時間を足し込んで進捗バーを滑らかに進める
@@ -208,6 +221,15 @@ const PENDING_SEEK_TIMEOUT_MS = 5000;
 // TS のキーフレーム単位でしか着地できないため、完全一致では待ち続けてしまう
 const PENDING_SEEK_SETTLED_TOLERANCE_SECONDS = 5;
 const TEMPORARY_NHK_HIDE_ACKNOWLEDGEMENT_TIMEOUT_MS = 10_000;
+
+function inputConnectionLabel(state: string): string {
+    switch (state) {
+        case 'Connected': return '接続中';
+        case 'Standby': return '待機中';
+        case 'Disconnected': return '未接続';
+        default: return '接続状態不明';
+    }
+}
 
 const CM_SKIP_MODE_LABELS: {mode: RemoteCMSkipMode; label: string;}[] = [
     {mode: 'Off', label: 'オフ'},
@@ -220,13 +242,36 @@ const route = useRoute();
 const router = useRouter();
 const isOpen = ref(false);
 const isLoading = ref(false);
+const sourcePending = ref(false);
+const sourceFeedback = ref('');
+let sourceCommandId: string | null = null;
+let sourceTimeout: ReturnType<typeof setTimeout> | null = null;
+
+async function selectSource(sourceId: string): Promise<void> {
+    if (selectedDeviceId.value === null) return;
+    sourcePending.value = true;
+    sourceFeedback.value = '入力を切り替えています…';
+    sourceCommandId = await RemoteControl.selectSource(selectedDeviceId.value, sourceId);
+    if (sourceCommandId === null) {
+        sourcePending.value = false;
+        sourceFeedback.value = '送信できませんでした。接続を確認して再試行してください。';
+    } else {
+        applySourceResult(selectedPlaybackState.value.source_command_result);
+        if (sourcePending.value) {
+            sourceTimeout = setTimeout(() => {
+                sourceCommandId = null;
+                sourcePending.value = false;
+                sourceFeedback.value = 'テレビから応答がありません。接続を確認して再試行してください。';
+            }, 10000);
+        }
+    }
+}
 const devices = ref<IRemoteDevice[]>([]);
 // テレビ一覧の取得に失敗していることを、0 台と区別するために保持する
 const isDeviceListUnavailable = ref(false);
 // テレビへの移し替え (ハンドオフ) の進行中。項目の無効化と経過の表示に使う
 const isHandoffInProgress = ref(false);
 const handoffInProgressDeviceId = ref<string | null>(null);
-const isLoggedIn = computed(() => Utils.getAccessToken() !== null);
 const selectedDeviceId = computed(() => settingsStore.settings.selected_remote_device_id);
 const isPinned = computed(() => settingsStore.settings.remote_control_menu_pinned);
 const selectedDevice = computed(() => devices.value.find((device) => device.device_id === selectedDeviceId.value) ?? null);
@@ -240,6 +285,16 @@ const selectedPlaybackState = computed<IRemotePlaybackState>(() => {
         nhk_exclusion_command_result: null,
     };
 });
+
+function applySourceResult(result: IRemotePlaybackState['source_command_result']): void {
+    if (result?.command_id !== sourceCommandId || sourceCommandId === null) return;
+    sourcePending.value = false;
+    if (sourceTimeout !== null) clearTimeout(sourceTimeout);
+    sourceTimeout = null;
+    sourceFeedback.value = result.status === 'Applied' ? '' : `入力を切り替えられませんでした (${result.error_code ?? '不明'})。入力を確認して再試行してください。`;
+    sourceCommandId = null;
+}
+watch(() => selectedPlaybackState.value.source_command_result, applySourceResult);
 
 // ***** N〇K 除外モード *****
 
