@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated, Any
 
+import psutil
 from fastapi import (
     APIRouter,
-    Depends,
     HTTPException,
     Path,
     Query,
@@ -17,11 +17,9 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-import psutil
 
 from app import logging, schemas
 from app.constants import JST
-from app.models.User import User
 from app.routers.UsersRouter import GetCurrentUser
 
 
