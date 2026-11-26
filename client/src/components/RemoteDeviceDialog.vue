@@ -4,8 +4,9 @@
         :persistent="isPinned" no-click-animation
         :offset="8" transition="fade-transition">
         <v-list class="remote-device-menu" density="compact" elevation="8" bg-color="background-lighten-1">
-            <v-list-item class="remote-device-menu__header" title="テレビで再生">
-                <template #append>
+            <div class="remote-device-menu__header">
+                <span class="remote-device-menu__title">テレビで再生</span>
+                <div class="remote-device-menu__header-actions">
                     <v-btn icon size="small" variant="text" :color="isPinned ? 'primary' : undefined"
                         :aria-label="isPinned ? 'テレビ操作メニューの固定を解除' : 'テレビ操作メニューを固定'" @click="togglePinned">
                         <Icon :icon="isPinned ? 'fluent:pin-20-filled' : 'fluent:pin-20-regular'" width="20px" />
@@ -13,12 +14,14 @@
                     <v-btn icon size="small" variant="text" aria-label="テレビ一覧を更新" :loading="isLoading" @click="refreshDevices()">
                         <Icon icon="fluent:arrow-clockwise-20-regular" width="21px" />
                     </v-btn>
-                </template>
-            </v-list-item>
+                </div>
+            </div>
 
             <v-progress-linear v-if="isLoading" color="primary" indeterminate />
             <template v-else-if="devices.length > 0">
-                <v-list-item v-for="device in devices" :key="device.device_id" :active="device.device_id === selectedDeviceId"
+                <v-list-item v-for="device in devices" :key="device.device_id"
+                    class="remote-device-menu__device-item" rounded="lg"
+                    :active="device.device_id === selectedDeviceId"
                     color="primary" :disabled="isHandoffInProgress" @click="selectDevice(device)">
                     <template #prepend>
                         <Icon icon="fluent:tv-20-regular" width="23px" class="mr-3" />
@@ -35,7 +38,7 @@
             </template>
             <!-- 取得の失敗と「1台もない」を区別する。失敗のまま0件と同じ文言にすると、テレビが壊れたと誤解される -->
             <template v-else-if="isDeviceListUnavailable">
-                <v-list-item lines="two">
+                <v-list-item lines="two" rounded="lg">
                     <template #prepend>
                         <Icon icon="fluent:cloud-off-20-regular" width="23px" class="mr-3" />
                     </template>
@@ -43,7 +46,7 @@
                     <v-list-item-subtitle>通信状況を確認してから、右上の更新ボタンでもう一度お試しください</v-list-item-subtitle>
                 </v-list-item>
             </template>
-            <v-list-item v-else lines="two">
+            <v-list-item v-else lines="two" rounded="lg">
                 <template #prepend>
                     <Icon icon="fluent:tv-off-20-regular" width="23px" class="mr-3" />
                 </template>
@@ -52,25 +55,12 @@
             </v-list-item>
 
             <template v-if="selectedDevice !== null">
-                <template v-if="selectedPlaybackState.capabilities?.commands.includes('SelectSource')">
-                    <v-divider class="my-2" />
-                    <v-list-subheader>入力切替</v-list-subheader>
-                    <template v-for="source in selectedPlaybackState.input_sources" :key="source.id">
-                        <v-list-item :title="source.label" :subtitle="inputConnectionLabel(source.connection_state)"
-                            :active="source.selected" :disabled="!source.selectable || sourcePending"
-                            @click="selectSource(source.id)" />
-                        <v-list-item v-if="selectedPlaybackState.input_signal?.source_id === source.id"
-                            :subtitle="`${selectedPlaybackState.input_signal.status} ${selectedPlaybackState.input_signal.reason ?? ''}`" />
-                        <v-list-item v-for="channel in source.channels" :key="channel.id" class="pl-8"
-                            :title="channel.label" :disabled="sourcePending" @click="selectSource(channel.id)" />
-                    </template>
-                    <v-list-item v-if="sourceFeedback" :subtitle="sourceFeedback" />
-                </template>
-                <v-divider class="my-2" />
+                <v-divider class="remote-device-menu__divider" />
                 <div class="remote-device-menu__now-playing">
                     <button class="remote-device-menu__artwork" type="button" aria-label="N〇K除外モードを操作"
                         :disabled="temporaryNHKHideFeedback === 'Waiting'" @click="onArtworkClick">
                         <img v-if="selectedPlaybackState.artwork_url" :src="selectedPlaybackState.artwork_url" alt="" />
+                        <Icon v-else icon="fluent:tv-20-regular" width="22px" class="remote-device-menu__artwork-placeholder" />
                     </button>
                     <div class="remote-device-menu__media-info">
                         <div class="remote-device-menu__section-title">
@@ -154,32 +144,105 @@
             </template>
 
             <template v-if="selectedDevice !== null">
-                <v-divider class="my-2" />
+                <v-divider class="remote-device-menu__divider" />
                 <div class="remote-device-menu__volume">
-                    <div class="remote-device-menu__section-title">音量</div>
-                    <div class="remote-device-menu__controls">
-                        <v-btn icon size="small" variant="text" :disabled="selectedPlaybackState.can_adjust_volume === false" aria-label="音量を下げる"
-                            @click="sendControl({type: 'VolumeDown'})">
-                            <Icon icon="fluent:speaker-1-20-filled" width="22px" />
-                        </v-btn>
-                        <v-btn icon size="small" variant="text" :disabled="selectedPlaybackState.can_adjust_volume === false" aria-label="ミュートを切り替える"
-                            @click="sendControl({type: 'VolumeMute'})">
-                            <Icon icon="fluent:speaker-mute-20-filled" width="22px" />
-                        </v-btn>
-                        <v-btn icon size="small" variant="text" :disabled="selectedPlaybackState.can_adjust_volume === false" aria-label="音量を上げる"
-                            @click="sendControl({type: 'VolumeUp'})">
-                            <Icon icon="fluent:speaker-2-20-filled" width="22px" />
-                        </v-btn>
+                    <div class="remote-device-menu__volume-row">
+                        <span class="remote-device-menu__volume-label">音量</span>
+                        <div class="remote-device-menu__volume-controls">
+                            <v-btn icon size="small" density="comfortable" variant="text"
+                                :disabled="selectedPlaybackState.can_adjust_volume === false" aria-label="音量を下げる"
+                                @click="sendControl({type: 'VolumeDown'})">
+                                <Icon icon="fluent:speaker-1-20-filled" width="20px" />
+                            </v-btn>
+                            <v-btn icon size="small" density="comfortable" variant="text"
+                                :disabled="selectedPlaybackState.can_adjust_volume === false" aria-label="ミュートを切り替える"
+                                @click="sendControl({type: 'VolumeMute'})">
+                                <Icon icon="fluent:speaker-mute-20-filled" width="20px" />
+                            </v-btn>
+                            <v-btn icon size="small" density="comfortable" variant="text"
+                                :disabled="selectedPlaybackState.can_adjust_volume === false" aria-label="音量を上げる"
+                                @click="sendControl({type: 'VolumeUp'})">
+                                <Icon icon="fluent:speaker-2-20-filled" width="20px" />
+                            </v-btn>
+                        </div>
                     </div>
                     <div v-if="selectedPlaybackState.can_adjust_volume === false" class="remote-device-menu__volume-unavailable">
                         テレビが固定音量として報告しています。テレビまたはオーディオ機器側で音量を操作してください。
                     </div>
                 </div>
+
+                <template v-if="canSelectSource">
+                    <v-divider class="remote-device-menu__divider" />
+                    <div class="remote-device-menu__sources">
+                        <button type="button" class="remote-device-menu__sources-toggle"
+                            :aria-expanded="isInputSourcesExpanded"
+                            @click="isInputSourcesExpanded = !isInputSourcesExpanded">
+                            <span class="remote-device-menu__sources-toggle-left">
+                                <Icon icon="fluent:arrow-swap-20-regular" width="18px" />
+                                <span>入力切替</span>
+                            </span>
+                            <span class="remote-device-menu__sources-toggle-right">
+                                <Icon v-if="sourcePending" icon="line-md:loading-twotone-loop" width="16px"
+                                    class="remote-device-menu__sources-spinner" />
+                                <span v-else-if="selectedInputSource !== null" class="remote-device-menu__sources-current">
+                                    {{ selectedInputSource.label }}
+                                </span>
+                                <Icon icon="fluent:chevron-down-20-regular" width="18px"
+                                    class="remote-device-menu__sources-chevron"
+                                    :class="{'remote-device-menu__sources-chevron--expanded': isInputSourcesExpanded}" />
+                            </span>
+                        </button>
+                        <v-expand-transition>
+                            <div v-show="isInputSourcesExpanded" class="remote-device-menu__sources-panel">
+                                <div class="remote-device-menu__sources-grid">
+                                    <template v-for="source in inputSources" :key="source.id">
+                                        <button type="button" class="remote-device-menu__source-tile"
+                                            :class="{
+                                                'remote-device-menu__source-tile--selected': source.selected,
+                                                'remote-device-menu__source-tile--connected': source.connection_state === 'Connected',
+                                                'remote-device-menu__source-tile--disconnected': source.connection_state === 'Disconnected',
+                                            }"
+                                            :disabled="!source.selectable || sourcePending"
+                                            :aria-pressed="source.selected"
+                                            @click="selectSource(source.id)">
+                                            <div class="remote-device-menu__source-tile-header">
+                                                <span class="remote-device-menu__source-tile-label">{{ source.label }}</span>
+                                                <Icon v-if="source.selected" icon="fluent:checkmark-16-filled" width="14px"
+                                                    class="remote-device-menu__source-tile-check" />
+                                                <span v-else class="remote-device-menu__source-tile-dot" aria-hidden="true" />
+                                            </div>
+                                            <div class="remote-device-menu__source-tile-state">
+                                                {{ inputConnectionLabel(source.connection_state) }}
+                                            </div>
+                                        </button>
+                                        <div v-if="selectedPlaybackState.input_signal?.source_id === source.id"
+                                            class="remote-device-menu__source-signal">
+                                            {{ source.label }}: {{ selectedPlaybackState.input_signal.status }}{{ selectedPlaybackState.input_signal.reason ? ` (${selectedPlaybackState.input_signal.reason})` : '' }}
+                                        </div>
+                                        <div v-if="source.channels.length > 0" class="remote-device-menu__source-channels">
+                                            <button v-for="channel in source.channels" :key="channel.id" type="button"
+                                                class="remote-device-menu__source-channel-chip"
+                                                :disabled="sourcePending"
+                                                @click="selectSource(channel.id)">
+                                                {{ channel.label }}
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </v-expand-transition>
+                        <div v-if="sourceFeedback" class="remote-device-menu__source-feedback"
+                            :class="{'remote-device-menu__source-feedback--error': sourceFeedbackIsError}"
+                            aria-live="polite">
+                            {{ sourceFeedback }}
+                        </div>
+                    </div>
+                </template>
             </template>
 
             <template v-if="selectedDeviceId !== null">
-                <v-divider class="my-2" />
-                <v-list-item title="接続を解除" @click="disconnect">
+                <v-divider class="remote-device-menu__divider" />
+                <v-list-item class="remote-device-menu__disconnect" rounded="lg" title="接続を解除" @click="disconnect">
                     <template #prepend>
                         <Icon icon="fluent:link-dismiss-20-regular" width="22px" class="mr-3" />
                     </template>
@@ -242,30 +305,13 @@ const route = useRoute();
 const router = useRouter();
 const isOpen = ref(false);
 const isLoading = ref(false);
+const isInputSourcesExpanded = ref(false);
 const sourcePending = ref(false);
 const sourceFeedback = ref('');
+const sourceFeedbackIsError = ref(false);
 let sourceCommandId: string | null = null;
-let sourceTimeout: ReturnType<typeof setTimeout> | null = null;
+let sourceTimeout: number | null = null;
 
-async function selectSource(sourceId: string): Promise<void> {
-    if (selectedDeviceId.value === null) return;
-    sourcePending.value = true;
-    sourceFeedback.value = '入力を切り替えています…';
-    sourceCommandId = await RemoteControl.selectSource(selectedDeviceId.value, sourceId);
-    if (sourceCommandId === null) {
-        sourcePending.value = false;
-        sourceFeedback.value = '送信できませんでした。接続を確認して再試行してください。';
-    } else {
-        applySourceResult(selectedPlaybackState.value.source_command_result);
-        if (sourcePending.value) {
-            sourceTimeout = setTimeout(() => {
-                sourceCommandId = null;
-                sourcePending.value = false;
-                sourceFeedback.value = 'テレビから応答がありません。接続を確認して再試行してください。';
-            }, 10000);
-        }
-    }
-}
 const devices = ref<IRemoteDevice[]>([]);
 // テレビ一覧の取得に失敗していることを、0 台と区別するために保持する
 const isDeviceListUnavailable = ref(false);
@@ -286,12 +332,65 @@ const selectedPlaybackState = computed<IRemotePlaybackState>(() => {
     };
 });
 
+const inputSources = computed(() => selectedPlaybackState.value.input_sources ?? []);
+const canSelectSource = computed(() =>
+    selectedPlaybackState.value.capabilities?.commands.includes('SelectSource') === true &&
+    inputSources.value.length > 0,
+);
+const selectedInputSource = computed(() => inputSources.value.find((source) => source.selected) ?? null);
+
+function resetSourceSelection(): void {
+    if (sourceTimeout !== null) {
+        window.clearTimeout(sourceTimeout);
+        sourceTimeout = null;
+    }
+    sourceCommandId = null;
+    sourcePending.value = false;
+    sourceFeedback.value = '';
+    sourceFeedbackIsError.value = false;
+    isInputSourcesExpanded.value = false;
+}
+
+async function selectSource(sourceId: string): Promise<void> {
+    if (selectedDeviceId.value === null || sourcePending.value === true) return;
+    if (sourceTimeout !== null) {
+        window.clearTimeout(sourceTimeout);
+        sourceTimeout = null;
+    }
+    const deviceId = selectedDeviceId.value;
+    sourcePending.value = true;
+    sourceFeedback.value = '入力を切り替えています…';
+    sourceFeedbackIsError.value = false;
+    const commandId = await RemoteControl.selectSource(deviceId, sourceId);
+    if (selectedDeviceId.value !== deviceId || isOpen.value === false) return;
+    sourceCommandId = commandId;
+    if (sourceCommandId === null) {
+        sourcePending.value = false;
+        sourceFeedbackIsError.value = true;
+        sourceFeedback.value = '送信できませんでした。接続を確認して再試行してください。';
+    } else {
+        applySourceResult(selectedPlaybackState.value.source_command_result);
+        if (sourcePending.value) {
+            sourceTimeout = window.setTimeout(() => {
+                sourceCommandId = null;
+                sourcePending.value = false;
+                sourceFeedbackIsError.value = true;
+                sourceFeedback.value = 'テレビから応答がありません。接続を確認して再試行してください。';
+                sourceTimeout = null;
+            }, 10_000);
+        }
+    }
+}
+
 function applySourceResult(result: IRemotePlaybackState['source_command_result']): void {
     if (result?.command_id !== sourceCommandId || sourceCommandId === null) return;
     sourcePending.value = false;
-    if (sourceTimeout !== null) clearTimeout(sourceTimeout);
+    if (sourceTimeout !== null) window.clearTimeout(sourceTimeout);
     sourceTimeout = null;
-    sourceFeedback.value = result.status === 'Applied' ? '' : `入力を切り替えられませんでした (${result.error_code ?? '不明'})。入力を確認して再試行してください。`;
+    sourceFeedbackIsError.value = result.status !== 'Applied';
+    sourceFeedback.value = result.status === 'Applied'
+        ? ''
+        : `入力を切り替えられませんでした (${result.error_code ?? '不明'})。入力を確認して再試行してください。`;
     sourceCommandId = null;
 }
 watch(() => selectedPlaybackState.value.source_command_result, applySourceResult);
@@ -675,9 +774,10 @@ watch(selectedPlaybackState, (state) => {
     }
 }, {deep: true});
 
-// 選択中のテレビを切り替えたときは、前のテレビの再生位置を引きずらないように基点を捨てる。
+// 選択中のテレビを切り替えたときは、前のテレビの再生位置や入力切替状態を引きずらないようにリセットする。
 watch(selectedDeviceId, () => {
     resetTemporaryNHKHide();
+    resetSourceSelection();
     playbackPositionAnchor.value = null;
     pendingSeek.value = null;
     isScrubbing.value = false;
@@ -685,6 +785,7 @@ watch(selectedDeviceId, () => {
 
 onBeforeUnmount(() => {
     resetTemporaryNHKHide();
+    resetSourceSelection();
     disconnectDeviceSubscription();
     stopPlaybackPositionInterpolation();
 });
@@ -703,6 +804,7 @@ watch(isOpen, (visible) => {
         startPlaybackPositionInterpolation();
     } else {
         resetTemporaryNHKHide();
+        resetSourceSelection();
         disconnectDeviceSubscription();
         stopPlaybackPositionInterpolation();
     }
@@ -716,10 +818,44 @@ watch(remoteDeviceMenuOpenRequest, () => {
 <style scoped lang="scss">
 .remote-device-menu {
     width: min(320px, calc(100vw - 24px));
+    max-height: min(calc(100dvh - 88px), 620px);
+    overflow-y: auto;
     padding: 8px;
+    border-radius: 10px !important;
+    border: 1px solid rgb(var(--v-theme-background-lighten-2));
+
+    :deep(.v-list-item) {
+        padding-inline: 10px;
+    }
 
     &__header {
-        min-height: 46px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 40px;
+        padding: 2px 4px 6px 10px;
+    }
+
+    &__title {
+        color: rgb(var(--v-theme-text));
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    &__header-actions {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+    }
+
+    &__device-item {
+        margin-bottom: 2px;
+    }
+
+    &__divider {
+        margin: 6px 4px;
+        border-color: rgb(var(--v-theme-background-lighten-2));
+        opacity: 1;
     }
 
     &__section-title {
@@ -732,17 +868,20 @@ watch(remoteDeviceMenuOpenRequest, () => {
         display: flex;
         gap: 12px;
         align-items: center;
-        padding: 4px 12px 10px;
+        padding: 4px 10px 8px;
     }
 
     &__artwork {
-        width: 96px;
-        height: 54px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 80px;
+        height: 45px;
         padding: 0;
         overflow: hidden;
         flex: 0 0 auto;
-        border: 0;
-        border-radius: 4px;
+        border: 1px solid rgb(var(--v-theme-background-lighten-2));
+        border-radius: 6px;
         background: rgb(var(--v-theme-background));
         cursor: pointer;
         touch-action: manipulation;
@@ -763,6 +902,10 @@ watch(remoteDeviceMenuOpenRequest, () => {
         }
     }
 
+    &__artwork-placeholder {
+        color: rgb(var(--v-theme-text-darken-2));
+    }
+
     &__media-info {
         min-width: 0;
     }
@@ -773,7 +916,7 @@ watch(remoteDeviceMenuOpenRequest, () => {
         align-items: center;
         // Idle では余白を見えなくし、結果を出すときは 1 行ぶんの高さだけ確保して跳ねにくくする
         min-height: 0;
-        padding: 0 12px;
+        padding: 0 10px;
         color: rgb(var(--v-theme-text-darken-1));
         font-size: 12px;
         &--filled {
@@ -801,7 +944,7 @@ watch(remoteDeviceMenuOpenRequest, () => {
     }
 
     &__seek-bar {
-        padding: 0 16px;
+        padding: 0 10px;
 
         // CM 区間はトラック上に重ねた擬似要素へ linear-gradient で描く。
         // v-slider のトラックは分割できず、再生済みを塗る __fill が __background を覆ってしまうため、
@@ -832,11 +975,11 @@ watch(remoteDeviceMenuOpenRequest, () => {
         display: flex;
         align-items: center;
         justify-content: space-evenly;
-        padding: 0 12px 6px;
+        padding: 0 10px 6px;
     }
 
     &__cm-skip {
-        padding: 2px 12px 8px;
+        padding: 2px 10px 8px;
     }
 
     &__cm-skip-row {
@@ -857,18 +1000,255 @@ watch(remoteDeviceMenuOpenRequest, () => {
         // 操作ボタンや CM スキップの行の直後に置くこともある
         &--embedded {
             margin-top: 0;
-            padding: 0 12px 6px;
+            padding: 0 10px 6px;
         }
     }
 
     &__volume {
-        padding-top: 4px;
+        padding: 2px 0;
+    }
+
+    &__volume-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 2px 10px;
+    }
+
+    &__volume-label {
+        color: rgb(var(--v-theme-text-darken-1));
+        font-size: 13px;
+        font-weight: 500;
+    }
+
+    &__volume-controls {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 8px;
+        background: rgb(var(--v-theme-background));
     }
 
     &__volume-unavailable {
-        padding: 0 12px 8px;
+        padding: 4px 10px 4px;
         color: rgb(var(--v-theme-text-darken-1));
         font-size: 12px;
+        line-height: 1.45;
+    }
+
+    &__sources {
+        padding: 2px 0;
+    }
+
+    &__sources-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        width: 100%;
+        min-height: 36px;
+        padding: 6px 10px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: rgb(var(--v-theme-text));
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+
+        &:hover {
+            background: rgba(var(--v-theme-text), 0.06);
+        }
+
+        &:focus-visible {
+            outline: 2px solid rgb(var(--v-theme-primary));
+            outline-offset: -2px;
+        }
+    }
+
+    &__sources-toggle-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: rgb(var(--v-theme-text-darken-1));
+    }
+
+    &__sources-toggle-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    &__sources-current {
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgb(var(--v-theme-background-lighten-2));
+        color: rgb(var(--v-theme-text));
+        font-size: 11px;
+        font-weight: 500;
+    }
+
+    &__sources-spinner {
+        color: rgb(var(--v-theme-primary));
+    }
+
+    &__sources-chevron {
+        color: rgb(var(--v-theme-text-darken-2));
+        transition: transform 0.2s ease;
+
+        &--expanded {
+            transform: rotate(180deg);
+        }
+    }
+
+    &__sources-panel {
+        padding: 6px 10px 4px;
+    }
+
+    &__sources-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+    }
+
+    &__source-tile {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 3px;
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: rgb(var(--v-theme-background-lighten-2));
+        color: rgb(var(--v-theme-text));
+        text-align: left;
+        cursor: pointer;
+        transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+
+        &:hover:not(:disabled) {
+            background: rgb(var(--v-theme-background-lighten-3));
+        }
+
+        &:focus-visible {
+            outline: 2px solid rgb(var(--v-theme-primary));
+            outline-offset: 1px;
+        }
+
+        &:disabled {
+            cursor: default;
+            opacity: 0.48;
+        }
+
+        &--disconnected {
+            opacity: 0.58;
+        }
+
+        &--selected {
+            background: rgba(var(--v-theme-primary), 0.18);
+            border-color: rgba(var(--v-theme-primary), 0.7);
+
+            &:hover:not(:disabled) {
+                background: rgba(var(--v-theme-primary), 0.24);
+            }
+        }
+    }
+
+    &__source-tile-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        width: 100%;
+    }
+
+    &__source-tile-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    &__source-tile-check {
+        flex-shrink: 0;
+        color: rgb(var(--v-theme-primary));
+    }
+
+    &__source-tile-dot {
+        flex-shrink: 0;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: rgb(var(--v-theme-text-darken-2));
+
+        .remote-device-menu__source-tile--connected & {
+            background: rgb(var(--v-theme-success));
+        }
+    }
+
+    &__source-tile-state {
+        color: rgb(var(--v-theme-text-darken-1));
+        font-size: 11px;
+        line-height: 1.2;
+    }
+
+    &__source-signal {
+        grid-column: 1 / -1;
+        padding: 2px 4px;
+        color: rgb(var(--v-theme-text-darken-1));
+        font-size: 11px;
+    }
+
+    &__source-channels {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 2px 0 4px;
+    }
+
+    &__source-channel-chip {
+        padding: 4px 8px;
+        border: 1px solid rgb(var(--v-theme-background-lighten-3));
+        border-radius: 6px;
+        background: rgb(var(--v-theme-background));
+        color: rgb(var(--v-theme-text));
+        font-size: 11px;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+
+        &:hover:not(:disabled) {
+            background: rgb(var(--v-theme-background-lighten-2));
+        }
+
+        &:disabled {
+            cursor: default;
+            opacity: 0.5;
+        }
+    }
+
+    &__source-feedback {
+        padding: 4px 10px 2px;
+        color: rgb(var(--v-theme-text-darken-1));
+        font-size: 11px;
+        line-height: 1.4;
+
+        &--error {
+            color: rgb(var(--v-theme-error-lighten-1));
+        }
+    }
+
+    &__disconnect {
+        color: rgb(var(--v-theme-text-darken-1));
     }
 }
 </style>

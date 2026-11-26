@@ -24,6 +24,30 @@ from app.routers.UsersRouter import GenerateAccessToken
 
 
 class RemoteControlRouterTest(unittest.TestCase):
+    def test_lan_visitor_lists_and_controls_lan_devices(self) -> None:
+        app = FastAPI()
+        app.include_router(router)
+        websocket = AsyncMock()
+        REMOTE_DEVICE_CONNECTIONS[(1, 'tv')] = RemoteDeviceConnection(
+            device_id='tv', device_name='TV', user_id=1, websocket=websocket,
+            state={'type': 'State', 'access_mode': 'LAN'},
+        )
+        try:
+            with TestClient(app, client=('192.168.1.2', 50000)) as client, \
+                    patch('app.routers.RemoteControlRouter.IsLocalVisitor', return_value=True):
+                self.assertEqual(client.get('/api/remote/devices').json()['devices'][0]['device_id'], 'tv')
+                response = client.post('/api/remote/devices/tv/commands', json={'type': 'SelectSource', 'source_id': 'hdmi'})
+                self.assertEqual(response.status_code, 200)
+                websocket.send_json.assert_awaited_once_with({
+                    'type': 'Command', 'command_id': response.json()['command_id'],
+                    'command': {'type': 'SelectSource', 'source_id': 'hdmi'},
+                })
+                REMOTE_DEVICE_CONNECTIONS[(1, 'tv')].state = {'type': 'State', 'access_mode': 'ACCOUNT'}
+                self.assertEqual(client.get('/api/remote/devices').json()['devices'], [])
+                self.assertEqual(client.post('/api/remote/devices/tv/commands', json={'type': 'VolumeUp'}).status_code, 409)
+        finally:
+            REMOTE_DEVICE_CONNECTIONS.clear()
+
     def test_jellyfin_open_live_http_authentication_and_device_ownership(self) -> None:
         """実際の Bearer 認証を通し、Jellyfin ID と所有者境界を HTTP で検証する。"""
 
@@ -35,7 +59,7 @@ class RemoteControlRouterTest(unittest.TestCase):
         )
         payload = {'type': 'OpenLive', 'display_channel_id': 'jellyfin-upstream-channel'}
         try:
-            with TestClient(app) as client, patch('app.routers.UsersRouter.User.filter') as users:
+            with TestClient(app, client=('203.0.113.1', 50000)) as client, patch('app.routers.UsersRouter.User.filter') as users:
                 users.return_value.get_or_none = AsyncMock(return_value=MagicMock(id=1))
                 response = client.post('/api/remote/devices/living-room/commands', json=payload,
                     headers={'Authorization': f'Bearer {GenerateAccessToken(1)}'})
@@ -234,12 +258,12 @@ class RemoteControlRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
 
         websocket = AsyncMock()
         websocket.send_json.side_effect = BlockSend
-        REMOTE_DEVICE_SUBSCRIBERS[1] = {websocket}
+        REMOTE_DEVICE_SUBSCRIBERS[(1, False)] = {websocket}
 
         with patch('app.routers.RemoteControlRouter.REMOTE_WEBSOCKET_SEND_TIMEOUT_SECONDS', 0.01):
             await BroadcastRemoteDeviceList(1)
 
-        self.assertNotIn(1, REMOTE_DEVICE_SUBSCRIBERS)
+        self.assertNotIn((1, False), REMOTE_DEVICE_SUBSCRIBERS)
 
     async def test_volume_command_is_forwarded_to_authenticated_users_device(self) -> None:
         """認証済みユーザーのテレビだけへ音量操作コマンドを転送する。"""
@@ -253,7 +277,8 @@ class RemoteControlRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         )
         command = TypeAdapter(schemas.RemoteCommand).validate_python({'type': 'VolumeUp'})
 
-        response = await RemoteCommandAPI(command, MagicMock(id=1), 'living-room')
+        with patch('app.routers.RemoteControlRouter.RemoteVisitor', AsyncMock(return_value=(1, False))):
+            response = await RemoteCommandAPI(command, MagicMock(), 'living-room')
 
         self.assertNotEqual(response.command_id, '')
         websocket.send_json.assert_awaited_once_with({
@@ -277,7 +302,8 @@ class RemoteControlRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
             'duration_seconds': 1800,
         })
 
-        response = await RemoteCommandAPI(command, MagicMock(id=1), 'living-room')
+        with patch('app.routers.RemoteControlRouter.RemoteVisitor', AsyncMock(return_value=(1, False))):
+            response = await RemoteCommandAPI(command, MagicMock(), 'living-room')
 
         websocket.send_json.assert_awaited_once_with({
             'type': 'Command',
@@ -297,7 +323,8 @@ class RemoteControlRouterAsyncTest(unittest.IsolatedAsyncioTestCase):
         )
         command = TypeAdapter(schemas.RemoteCommand).validate_python({'type': 'SeekTo', 'position_seconds': 930.5})
 
-        response = await RemoteCommandAPI(command, MagicMock(id=1), 'living-room')
+        with patch('app.routers.RemoteControlRouter.RemoteVisitor', AsyncMock(return_value=(1, False))):
+            response = await RemoteCommandAPI(command, MagicMock(), 'living-room')
 
         websocket.send_json.assert_awaited_once_with({
             'type': 'Command',
